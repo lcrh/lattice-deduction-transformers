@@ -21,6 +21,7 @@ _RUN_PARAMS: tuple[tuple[str, object], ...] = (
     ("steps",                    4000),
     ("batch_size",               512),
     ("n_eval_puzzles",           200),
+    ("n_train_puzzles",          None),
     ("seed",                     0),
     ("bce_pos_mult",             4.0),
     ("bce_neg_mult",             0.5),
@@ -102,6 +103,7 @@ def run(
     steps: int = 4000,
     batch_size: int = 512,
     n_eval_puzzles: int = 200,
+    n_train_puzzles: int | None = None,
     seed: int = 0,
     bce_pos_mult: float = 4.0,
     bce_neg_mult: float = 0.5,
@@ -169,6 +171,7 @@ def run(
         model=model_cfg,
         data=SudokuExtremeConfig(
             cache_dir=DATA_MOUNT, batch_size=batch_size, seed=42,
+            n_puzzles=n_train_puzzles,
             augment_digit_perm=data_augment_digit_perm,
             augment_dihedral=data_augment_dihedral,
         ),
@@ -364,6 +367,7 @@ def entrypoint(
     steps: int = 4000,
     batch_size: int = 512,
     n_eval_puzzles: int = 200,
+    n_train_puzzles: int | None = None,
     seed: int = 0,
     bce_pos_mult: float = 4.0,
     bce_neg_mult: float = 0.5,
@@ -393,7 +397,7 @@ def entrypoint(
 ):
     result = run.remote(
         steps=steps, batch_size=batch_size,
-        n_eval_puzzles=n_eval_puzzles, seed=seed,
+        n_eval_puzzles=n_eval_puzzles, n_train_puzzles=n_train_puzzles, seed=seed,
         bce_pos_mult=bce_pos_mult, bce_neg_mult=bce_neg_mult,
         softmax_loss_weight=softmax_loss_weight,
         conflict_loss_weight=conflict_loss_weight,

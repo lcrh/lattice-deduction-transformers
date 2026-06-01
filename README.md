@@ -69,15 +69,15 @@ the saved checkpoint with the eval-only script.
 ```bash
 # LDT, 4K train steps (headline: 100 / 100)
 uv run modal run --detach experiments/sudoku/run.py \
-    --steps 4000 --n-eval-puzzles 1000
+    --steps 4000 --n-train-puzzles 1000 --n-eval-puzzles 1000
 
 # LDT, 1K and 2K train steps (Table 1 mid-rows)
-uv run modal run --detach experiments/sudoku/run.py --steps 1000 --n-eval-puzzles 1000
-uv run modal run --detach experiments/sudoku/run.py --steps 2000 --n-eval-puzzles 1000
+uv run modal run --detach experiments/sudoku/run.py --steps 1000 --n-train-puzzles 1000 --n-eval-puzzles 1000
+uv run modal run --detach experiments/sudoku/run.py --steps 2000 --n-train-puzzles 1000 --n-eval-puzzles 1000
 
 # No-augmentation variant (last row)
 uv run modal run --detach experiments/sudoku/run.py \
-    --steps 4000 --n-eval-puzzles 1000 \
+    --steps 4000 --n-train-puzzles 1000 --n-eval-puzzles 1000 \
     --no-augment --no-data-augment-digit-perm --no-data-augment-dihedral
 ```
 
