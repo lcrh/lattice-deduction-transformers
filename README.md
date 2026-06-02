@@ -25,12 +25,9 @@ B200 GPUs. There is no local-GPU codepath.
 > codebase used for the paper's experiments — the original development
 > tree carried many exploratory branches, sweeps, and dead ends; this
 > repo is the minimal subset needed to reproduce the reported numbers.
-> We have validated equivalence end-to-end on the smaller runs
-> (Sudoku-Extreme 2K-step, Snowflake 2K-step, Maze 15×15 K=1 2K-step:
-> matching the original codebase within run-to-run noise, with
-> Snowflake bit-identical). Equivalence on the headline 30×30
-> Maze-Hard (K=1, K=512, 20K-step) run is still being verified — we
-> will update this note once that confirmation lands.
+> We are currently in the process of validating the results end-to-end
+> against the original runs, and will update this note as that work
+> completes.
 
 ---
 
@@ -61,23 +58,31 @@ on the `lattice-diffusion-checkpoints` Modal volume.
 ### Sudoku-Extreme (Table 1)
 
 The four LDT rows of Table 1 are the same `run.py` at four configurations.
-All quoted accuracies are measured on the full 1{,}000-puzzle test split:
-the `run.py` default `--n-eval-puzzles 200` is the inline quick-check;
-pass `--n-eval-puzzles 1000` to reproduce the headline number, or re-eval
-the saved checkpoint with the eval-only script.
+The `run.py` default `--n-eval-puzzles 200` is the inline quick-check; pass
+`--n-eval-puzzles 4000` to evaluate on a larger test sample, or re-eval a
+saved checkpoint on the full test split with the parallel `eval_only.py`
+script.
+
+> **Note.** As reported, these runs match the Sudoku-Extreme solve rate in
+> Table 1 (100%). We have since realized, however, that the reported figure
+> came from an evaluation that inadvertently skipped a full pass over the
+> test set. On a complete evaluation the true solve rate is ~99.96%, and we
+> are in the process of correcting the paper. See
+> [this thread](https://x.com/biosemiote/status/2061848053741687016) for
+> context.
 
 ```bash
-# LDT, 4K train steps (headline: 100 / 100)
+# LDT, 4K train steps (Table 1 top row)
 uv run modal run --detach experiments/sudoku/run.py \
-    --steps 4000 --n-train-puzzles 1000 --n-eval-puzzles 1000
+    --steps 4000 --n-train-puzzles 1000 --n-eval-puzzles 4000
 
 # LDT, 1K and 2K train steps (Table 1 mid-rows)
-uv run modal run --detach experiments/sudoku/run.py --steps 1000 --n-train-puzzles 1000 --n-eval-puzzles 1000
-uv run modal run --detach experiments/sudoku/run.py --steps 2000 --n-train-puzzles 1000 --n-eval-puzzles 1000
+uv run modal run --detach experiments/sudoku/run.py --steps 1000 --n-train-puzzles 1000 --n-eval-puzzles 4000
+uv run modal run --detach experiments/sudoku/run.py --steps 2000 --n-train-puzzles 1000 --n-eval-puzzles 4000
 
 # No-augmentation variant (last row)
 uv run modal run --detach experiments/sudoku/run.py \
-    --steps 4000 --n-train-puzzles 1000 --n-eval-puzzles 1000 \
+    --steps 4000 --n-train-puzzles 1000 --n-eval-puzzles 4000 \
     --no-augment --no-data-augment-digit-perm --no-data-augment-dihedral
 ```
 
