@@ -115,9 +115,9 @@ calibrated on a held-out set (vs.\ the `0.6` used elsewhere).
 
 The 30×30 training command leaves the in-train final eval at the
 default 200-puzzle quick-check (eval at the training batch size of 192
-runs comfortably here; pushing it to the full 1{,}000 puzzles inline at
+runs comfortably here; pushing it to the full 1,000 puzzles inline at
 this grid + model size has been observed to OOM). The headline
-1{,}000-puzzle number comes from the parallel `eval_only.py` call below.
+1,000-puzzle number comes from the parallel `eval_only.py` call below.
 
 ```bash
 # K=1 (head-to-head with TRM)
@@ -143,7 +143,7 @@ uv run modal run --detach experiments/maze/pregen.py \
     --dataset maze_hard --k-solutions 512
 ```
 
-Then run the full 1{,}000-puzzle eval via the parallel `eval_only.py`
+Then run the full 1,000-puzzle eval via the parallel `eval_only.py`
 (fans across N B200 workers at a smaller per-worker batch so the
 30×30 dim=192 model stays well under the GPU memory ceiling;
 checkpoints land at `/checkpoints/maze/maze_hard_30x30_seed<N>_<...>.pt`):
