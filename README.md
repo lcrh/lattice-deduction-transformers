@@ -82,7 +82,7 @@ uv run modal run --detach experiments/sudoku/run.py \
 ```
 
 For the train-vs-test-compute figure (Figure 2a), repeat the above at
-multiple step counts and across 3 seeds (`--seed 0`, `1`, `2`).
+multiple step counts and across 3 seeds.
 
 ### Snowflake Sudoku (Table 2)
 
