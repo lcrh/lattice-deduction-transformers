@@ -1,0 +1,326 @@
+[
+  {
+    "step": 2604,
+    "n": 1000,
+    "exact": 0,
+    "lenient": 0
+  },
+  {
+    "step": 5208,
+    "n": 1000,
+    "exact": 0,
+    "lenient": 0
+  },
+  {
+    "step": 7812,
+    "n": 1000,
+    "exact": 51,
+    "lenient": 119
+  },
+  {
+    "step": 10416,
+    "n": 1000,
+    "exact": 3,
+    "lenient": 9
+  },
+  {
+    "step": 13020,
+    "n": 1000,
+    "exact": 1,
+    "lenient": 25
+  },
+  {
+    "step": 15624,
+    "n": 1000,
+    "exact": 0,
+    "lenient": 208
+  },
+  {
+    "step": 18228,
+    "n": 1000,
+    "exact": 117,
+    "lenient": 156
+  },
+  {
+    "step": 20832,
+    "n": 1000,
+    "exact": 6,
+    "lenient": 71
+  },
+  {
+    "step": 23436,
+    "n": 1000,
+    "exact": 89,
+    "lenient": 223
+  },
+  {
+    "step": 26040,
+    "n": 1000,
+    "exact": 71,
+    "lenient": 339
+  },
+  {
+    "step": 28644,
+    "n": 1000,
+    "exact": 101,
+    "lenient": 552
+  },
+  {
+    "step": 31248,
+    "n": 1000,
+    "exact": 67,
+    "lenient": 593
+  },
+  {
+    "step": 33852,
+    "n": 1000,
+    "exact": 121,
+    "lenient": 707
+  },
+  {
+    "step": 36456,
+    "n": 1000,
+    "exact": 63,
+    "lenient": 615
+  },
+  {
+    "step": 39060,
+    "n": 1000,
+    "exact": 84,
+    "lenient": 697
+  },
+  {
+    "step": 41664,
+    "n": 1000,
+    "exact": 159,
+    "lenient": 680
+  },
+  {
+    "step": 44268,
+    "n": 1000,
+    "exact": 110,
+    "lenient": 548
+  },
+  {
+    "step": 46872,
+    "n": 1000,
+    "exact": 101,
+    "lenient": 620
+  },
+  {
+    "step": 49476,
+    "n": 1000,
+    "exact": 210,
+    "lenient": 741
+  },
+  {
+    "step": 52080,
+    "n": 1000,
+    "exact": 65,
+    "lenient": 549
+  },
+  {
+    "step": 54684,
+    "n": 1000,
+    "exact": 133,
+    "lenient": 631
+  },
+  {
+    "step": 57288,
+    "n": 1000,
+    "exact": 169,
+    "lenient": 655
+  },
+  {
+    "step": 59892,
+    "n": 1000,
+    "exact": 119,
+    "lenient": 620
+  },
+  {
+    "step": 62496,
+    "n": 1000,
+    "exact": 181,
+    "lenient": 798
+  },
+  {
+    "step": 65100,
+    "n": 1000,
+    "exact": 32,
+    "lenient": 573
+  },
+  {
+    "step": 67704,
+    "n": 1000,
+    "exact": 140,
+    "lenient": 593
+  },
+  {
+    "step": 70308,
+    "n": 1000,
+    "exact": 78,
+    "lenient": 677
+  },
+  {
+    "step": 72912,
+    "n": 1000,
+    "exact": 90,
+    "lenient": 755
+  },
+  {
+    "step": 75516,
+    "n": 1000,
+    "exact": 108,
+    "lenient": 694
+  },
+  {
+    "step": 78120,
+    "n": 1000,
+    "exact": 157,
+    "lenient": 685
+  },
+  {
+    "step": 80724,
+    "n": 1000,
+    "exact": 150,
+    "lenient": 622
+  },
+  {
+    "step": 83328,
+    "n": 1000,
+    "exact": 213,
+    "lenient": 775
+  },
+  {
+    "step": 85932,
+    "n": 1000,
+    "exact": 112,
+    "lenient": 701
+  },
+  {
+    "step": 88536,
+    "n": 1000,
+    "exact": 236,
+    "lenient": 772
+  },
+  {
+    "step": 91140,
+    "n": 1000,
+    "exact": 127,
+    "lenient": 721
+  },
+  {
+    "step": 93744,
+    "n": 1000,
+    "exact": 132,
+    "lenient": 672
+  },
+  {
+    "step": 96348,
+    "n": 1000,
+    "exact": 168,
+    "lenient": 753
+  },
+  {
+    "step": 98952,
+    "n": 1000,
+    "exact": 203,
+    "lenient": 596
+  },
+  {
+    "step": 101556,
+    "n": 1000,
+    "exact": 197,
+    "lenient": 755
+  },
+  {
+    "step": 104160,
+    "n": 1000,
+    "exact": 202,
+    "lenient": 769
+  },
+  {
+    "step": 106764,
+    "n": 1000,
+    "exact": 131,
+    "lenient": 681
+  },
+  {
+    "step": 109368,
+    "n": 1000,
+    "exact": 158,
+    "lenient": 701
+  },
+  {
+    "step": 111972,
+    "n": 1000,
+    "exact": 131,
+    "lenient": 598
+  },
+  {
+    "step": 114576,
+    "n": 1000,
+    "exact": 211,
+    "lenient": 763
+  },
+  {
+    "step": 117180,
+    "n": 1000,
+    "exact": 118,
+    "lenient": 665
+  },
+  {
+    "step": 119784,
+    "n": 1000,
+    "exact": 59,
+    "lenient": 663
+  },
+  {
+    "step": 122388,
+    "n": 1000,
+    "exact": 167,
+    "lenient": 846
+  },
+  {
+    "step": 124992,
+    "n": 1000,
+    "exact": 120,
+    "lenient": 710
+  },
+  {
+    "step": 127596,
+    "n": 1000,
+    "exact": 190,
+    "lenient": 761
+  },
+  {
+    "step": 130200,
+    "n": 1000,
+    "exact": 195,
+    "lenient": 703
+  },
+  {
+    "step": 132804,
+    "n": 1000,
+    "exact": 48,
+    "lenient": 319
+  },
+  {
+    "step": 135408,
+    "n": 1000,
+    "exact": 144,
+    "lenient": 693
+  },
+  {
+    "step": 138012,
+    "n": 1000,
+    "exact": 129,
+    "lenient": 635
+  },
+  {
+    "step": 140616,
+    "n": 1000,
+    "exact": 92,
+    "lenient": 748
+  }
+]
