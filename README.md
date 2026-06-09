@@ -119,6 +119,17 @@ runs comfortably here; pushing it to the full 1,000 puzzles inline at
 this grid + model size has been observed to OOM). The headline
 1,000-puzzle number comes from the parallel `eval_only.py` call below.
 
+> **Note.** The HRM and TRM baselines we compare against on Maze-Hard run
+> ~7pp higher than the figures in their original papers. This is an
+> evaluation-criteria mismatch: the HRM/TRM papers report *exact match*
+> against the single shortest path emitted by their (deterministic) A\*
+> solver, whereas a 30×30 maze admits many equally-optimal paths, and a
+> *lenient* "any valid optimal path" criterion scores ~7pp higher. We are
+> reconciling this and will update the paper. See
+> [`repro/README.md`](repro/README.md) for the full independent HRM/TRM
+> reproduction — the lenient metric, released-checkpoint evals, and a
+> with/without-augmentation training study.
+
 ```bash
 # K=1 (head-to-head with TRM)
 uv run modal run --detach experiments/maze/run.py \
