@@ -53,20 +53,6 @@ def cell_to_grid_idx(q: int, r: int, direction: str) -> int:
     return row * GRID_COLS + col
 
 
-# ORDER-INDEPENDENCE (verified for E4 order-transfer OOD): the covering-grid
-# embedding above is a pure function of the per-cell (q, r, direction) hex
-# coordinates and the FIXED grid extents (Q_MIN/Q_MAX/R_MIN/R_MAX, i.e.
-# GRID_ROWS=15, GRID_COLS=10). There is NO dependency on the puzzle order `n`:
-# `cell_to_grid_idx` never reads `n`, and `puzzle_to_state` derives every slot
-# purely from `puzzle_rec["topology"]["cell_positions"]` (the concrete cells of
-# the given puzzle) — no per-order normalization, rescaling, or recentering.
-# A cell at coordinate (q, r, dir) lands at the same grid slot regardless of the
-# order of the puzzle it belongs to. This is exactly what makes training on
-# small orders and evaluating on larger orders well-posed: a shared, order-
-# agnostic slot layout. (The only order-dependence is WHICH slots are occupied,
-# which is the positional confound that translation aug / RoPE address.)
-
-
 def puzzle_to_state(puzzle_rec: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Convert a snowflake puzzle record into covering-grid tensors.
 
