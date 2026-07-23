@@ -23,6 +23,7 @@ refers to the *original* puzzle's givens, not the current state's
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -61,6 +62,12 @@ class TrainConfig:
     softmax_loss_weight: float = 0.2
     conflict_loss_weight: float = 1.0
 
+    # Deep-supervision mode. "all" (default) accumulates the per-iteration
+    # loss over every loop iteration; "final" only supervises the last
+    # iteration (index n_loops-1). Both keep the same 1/n_loops normalization
+    # so loss magnitudes stay comparable across modes.
+    supervise: str = "all"
+
     # Augment toggle lives at `step.augment` (StepConfig). Both the
     # grad-tracked forward (`aug_forward`) and the no-grad
     # `dpll_step` read from there.
@@ -88,6 +95,12 @@ class TrainConfig:
 
     out_dir: str = "checkpoints/sudoku"
     name: str = ""
+    # When True, the checkpoint path is deterministic (`{name}.pt`, no
+    # wallclock timestamp) and `train()` refuses to overwrite an existing
+    # file unless `overwrite=True`. Default False preserves the legacy
+    # timestamped `{name}_{ts}.pt` behavior.
+    no_timestamp: bool = False
+    overwrite: bool = False
 
     model: LoopedTransformerConfig = field(default_factory=LoopedTransformerConfig)
     data: SudokuExtremeConfig = field(default_factory=SudokuExtremeConfig)
@@ -165,7 +178,8 @@ def _given_mask(orig_x: torch.Tensor) -> torch.Tensor:
 
 
 def _losses(out, state, orig_y, given_mask, is_sat, gt_conflict_target,
-            bce_pos_mult, bce_neg_mult, softmax_w, conflict_w):
+            bce_pos_mult, bce_neg_mult, softmax_w, conflict_w,
+            supervise="all"):
     B, S, C = state.shape
     device = state.device
     bce_target = state * orig_y
@@ -180,8 +194,19 @@ def _losses(out, state, orig_y, given_mask, is_sat, gt_conflict_target,
     multi_alive_target = orig_y.sum(dim=-1) > 1                          # [B, S]
 
     n_loops = len(out["bce"])
+    # Deep supervision: "all" sums the loss over every iteration; "final"
+    # only accumulates the last iteration's loss. We normalize by the number
+    # of *supervised* iterations (not n_loops) so the per-iteration loss
+    # magnitude — and hence the effective gradient scale — is the same in
+    # both modes. Dividing "final" by n_loops instead would train it at
+    # ~1/n_loops the gradient scale, turning the D2 ablation into a hidden
+    # learning-rate cut.
+    if supervise == "final":
+        iter_indices = (n_loops - 1,)
+    else:
+        iter_indices = range(n_loops)
     total = torch.zeros((), device=device)
-    for i in range(n_loops):
+    for i in iter_indices:
         total = total + weighted_bce_with_logits(out["bce"][i], bce_target, pos_w, neg_w)
 
         # Softmax CE on non-given, single-alive-target cells of SAT puzzles only.
@@ -198,7 +223,7 @@ def _losses(out, state, orig_y, given_mask, is_sat, gt_conflict_target,
             total = total + conflict_w * F.binary_cross_entropy_with_logits(
                 c_logits, gt_conflict_target.float(),
             )
-    return total / n_loops
+    return total / len(iter_indices)
 
 
 def train(cfg: TrainConfig):
@@ -206,8 +231,29 @@ def train(cfg: TrainConfig):
     torch.set_float32_matmul_precision("high")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     out_dir = Path(cfg.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    ckpt_path = out_dir / f"{cfg.name}_{ts}.pt"
+    if cfg.no_timestamp:
+        # Deterministic path used by the followup launchers so downstream
+        # experiments can find checkpoints at a fixed location.
+        ckpt_path = out_dir / f"{cfg.name}.pt"
+        if ckpt_path.exists() and not cfg.overwrite:
+            raise RuntimeError(
+                f"Refusing to overwrite existing checkpoint {ckpt_path}; "
+                f"pass overwrite=True to replace it."
+            )
+    else:
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        ckpt_path = out_dir / f"{cfg.name}_{ts}.pt"
+    # In-train mini-solve curve, one JSON object per eval point, written
+    # incrementally next to the checkpoint. Truncated fresh at train start so
+    # a killed run still leaves partial (but valid) curve data. Only emitted
+    # for followup runs (deterministic `no_timestamp` path, where collect.py
+    # reads it) — plain benchmark runs keep their original side-effect-free
+    # output. `None` disables the incremental writes below.
+    if cfg.no_timestamp and cfg.eval_every > 0:
+        curve_path = ckpt_path.with_suffix(".train_curve.jsonl")
+        curve_path.write_text("")
+    else:
+        curve_path = None
 
     model = PowersetModel(cfg.model).to(device)
     n_params = sum(p.numel() for p in model.parameters())
@@ -360,6 +406,7 @@ def train(cfg: TrainConfig):
             is_sat_pre, gt_conflict_pre,
             cfg.bce_pos_mult, cfg.bce_neg_mult,
             cfg.softmax_loss_weight, cfg.conflict_loss_weight,
+            supervise=cfg.supervise,
         )
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
@@ -466,6 +513,20 @@ def train(cfg: TrainConfig):
                 f"cls:P={cls_p_e:.2f}/R={cls_r_e:.2f}",
                 flush=True,
             )
+            # Append this eval point to the structured train curve. Written
+            # incrementally so a killed run keeps partial curve data. Skipped
+            # on plain benchmark runs (curve_path is None; see train start).
+            if curve_path is not None:
+                with curve_path.open("a") as _cf:
+                    _cf.write(json.dumps({
+                        "step": step,
+                        "correct": n_cor_e,
+                        "wrong": n_wr_e,
+                        "calls": eval_res.model_calls,
+                        "unsound_rate": unsound_rate_e,
+                        "cls_p": cls_p_e,
+                        "cls_r": cls_r_e,
+                    }) + "\n")
             if device.type == "cuda":
                 torch.cuda.synchronize()
             intrain_eval_secs += time.perf_counter() - _eval_t0

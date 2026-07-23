@@ -99,6 +99,12 @@ class TrainConfig:
 
     out_dir: str = "checkpoints/snowflake"
     name: str = ""
+    # When True, the checkpoint path is deterministic (`{name}.pt`, no
+    # wallclock timestamp) and `train()` refuses to overwrite an existing
+    # file unless `overwrite=True`. Default False preserves the legacy
+    # timestamped `{name}_{ts}.pt` behavior.
+    no_timestamp: bool = False
+    overwrite: bool = False
 
     model: LoopedTransformerConfig = field(default_factory=_default_model_cfg)
     data: SnowflakeConfig = field(default_factory=SnowflakeConfig)
@@ -244,8 +250,18 @@ def train(cfg: TrainConfig):
     torch.set_float32_matmul_precision("high")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     out_dir = Path(cfg.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    ckpt_path = out_dir / f"{cfg.name}_{ts}.pt"
+    if cfg.no_timestamp:
+        # Deterministic path used by the followup launchers so downstream
+        # experiments can find checkpoints at a fixed location.
+        ckpt_path = out_dir / f"{cfg.name}.pt"
+        if ckpt_path.exists() and not cfg.overwrite:
+            raise RuntimeError(
+                f"Refusing to overwrite existing checkpoint {ckpt_path}; "
+                f"pass overwrite=True to replace it."
+            )
+    else:
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        ckpt_path = out_dir / f"{cfg.name}_{ts}.pt"
 
     model = PowersetModel(cfg.model).to(device)
     n_params = sum(p.numel() for p in model.parameters())
