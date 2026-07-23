@@ -9,6 +9,7 @@ import dataclasses
 import json
 import time
 from dataclasses import asdict
+from pathlib import Path
 
 import modal
 import torch
@@ -44,6 +45,10 @@ _RUN_PARAMS: tuple[tuple[str, object], ...] = (
     ("seq_drain_max_rounds",     200),
     ("eval_dropout_p",           0.05),
     ("n_train_puzzles",          None),
+    ("train_orders",             ""),
+    ("eval_orders",              ""),
+    ("translate_aug",            False),
+    ("use_rope",                 False),
 )
 
 
@@ -125,6 +130,14 @@ def run(
     seq_drain_max_rounds: int = 200,
     eval_dropout_p: float = 0.05,
     n_train_puzzles: int | None = None,
+    train_orders: str = "",
+    eval_orders: str = "",
+    translate_aug: bool = False,
+    use_rope: bool = False,
+    ckpt_name: str = "",
+    ckpt_subdir: str = "",
+    overwrite: bool = False,
+    skip_if_done: bool = False,
 ):
     # Snapshot the call-site arg values BEFORE any local mutation, then dump
     # the config table. (Snapshot locals() outside the comprehension —
@@ -134,8 +147,52 @@ def run(
     _arg_values = {name: _loc_snapshot[name] for name, _ in _RUN_PARAMS}
     _print_run_config(_arg_values)
 
+    def _parse_orders(s: str) -> list[int] | None:
+        """Comma-separated order list -> list[int], or None (empty = no filter)."""
+        s = (s or "").strip()
+        if not s:
+            return None
+        return [int(tok) for tok in s.split(",") if tok.strip() != ""]
+
+    train_orders_list = _parse_orders(train_orders)
+    eval_orders_list = _parse_orders(eval_orders)
+
     ts = time.strftime("%Y%m%d_%H%M%S")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Checkpoint path routing. When `ckpt_name` is set, a followup launcher
+    # requests a deterministic (timestamp-free) path at
+    # `{CHECKPOINT_MOUNT}/{ckpt_subdir}/{ckpt_name}.pt` (e.g.
+    # /checkpoints/followups/e4/<config>_seed<N>.pt). When empty, everything
+    # falls back to the legacy `{CHECKPOINT_MOUNT}/snowflake` + timestamped
+    # name.
+    if ckpt_name:
+        train_out_dir = f"{CHECKPOINT_MOUNT}/{ckpt_subdir}" if ckpt_subdir else CHECKPOINT_MOUNT
+        train_name = ckpt_name
+        train_no_timestamp = True
+    else:
+        train_out_dir = f"{CHECKPOINT_MOUNT}/snowflake"
+        train_name = f"seed{seed}_{steps}s_bs{batch_size}_aug{int(augment)}_{ts}"
+        train_no_timestamp = False
+
+    # Idempotent re-runs. When `--skip-if-done` is set on a deterministic-path
+    # run (`ckpt_name` set), and the eval.json artifact already landed on the
+    # volume, skip training+eval entirely and return a no-op result. This lets
+    # a whole sweep be re-launched to fill only the missing (config, seed)
+    # pairs. Distinct from `--overwrite` (which errors on an existing ckpt).
+    # Only meaningful for deterministic paths; a legacy timestamped run always
+    # produces a fresh path, so the check is skipped when `ckpt_name` is empty.
+    if skip_if_done and ckpt_name:
+        done_ckpt_path = Path(train_out_dir) / f"{train_name}.pt"
+        done_eval_json_path = Path(train_out_dir) / f"{train_name}.eval.json"
+        checkpoint_volume.reload()
+        if done_eval_json_path.exists():
+            print("=" * 60, flush=True)
+            print(f"SKIP: {done_eval_json_path} already exists on the volume; "
+                  f"--skip-if-done set, returning without retraining/re-eval.",
+                  flush=True)
+            print("=" * 60, flush=True)
+            return {"skipped": True, "checkpoint": str(done_ckpt_path)}
 
     step_cfg = StepConfig(
         threshold=threshold,
@@ -149,6 +206,7 @@ def run(
         n_channels=N_CHANNELS, seq_len=SEQ_LEN,
         grid_rows=GRID_ROWS, grid_cols=GRID_COLS,
         cls_token=conflict_loss_weight > 0,
+        use_rope=use_rope,
     )
     ckpt_path = train(TrainConfig(
         steps=steps,
@@ -170,14 +228,19 @@ def run(
             data_path=f"{DATA_MOUNT}/snowflake_train.parquet",
             batch_size=batch_size, seed=42,
             n_puzzles=n_train_puzzles,
+            orders=train_orders_list,          # E4: restrict train to these orders
+            translate_aug=translate_aug,       # E4: positional-confound mitigation (train only)
         ),
         eval_data=SnowflakeConfig(
             data_path=f"{DATA_MOUNT}/snowflake_test.parquet",
             n_puzzles=200, batch_size=200, seed=200,
             zero_hint_weight=1.0, correct_hint_weight=0.0, error_hint_weight=0.0,
+            orders=eval_orders_list,           # E4: restrict in-train eval to these orders
         ),
-        out_dir=f"{CHECKPOINT_MOUNT}/snowflake",
-        name=f"seed{seed}_{steps}s_bs{batch_size}_aug{int(augment)}_{ts}",
+        out_dir=train_out_dir,
+        name=train_name,
+        no_timestamp=train_no_timestamp,
+        overwrite=overwrite,
     ))
     checkpoint_volume.commit()
 
@@ -211,16 +274,24 @@ def run(
               f"model in train() mode", flush=True)
 
     # Eval data: snowflake test split, all SAT (zero_hint_weight=1.0).
+    # return_orders=True so we can carry each surviving puzzle's order `n`
+    # through the sat_mask and build the per-order breakdown below. The eval
+    # dataset uses a single full batch (batch_size = n_eval_puzzles, one
+    # next_batch() call) so the returned rows align 1:1 with the solve results.
     eval_ds = SnowflakeDataset(SnowflakeConfig(
         data_path=f"{DATA_MOUNT}/snowflake_test.parquet",
         n_puzzles=n_eval_puzzles, batch_size=n_eval_puzzles, seed=200,
         zero_hint_weight=1.0, correct_hint_weight=0.0, error_hint_weight=0.0,
+        orders=eval_orders_list,           # E4: restrict eval to these orders
+        return_orders=True,
     ))
-    x, y, mask, sat = eval_ds.next_batch(); eval_ds.close()
+    x, y, mask, sat, orders_t = eval_ds.next_batch(); eval_ds.close()
     sat_mask = sat.bool()
     x = x[sat_mask].to(device).float()
     y = y[sat_mask].to(device).float()
     in_puzzle_mask = mask[sat_mask].to(device).bool()
+    # Per-puzzle order for the surviving (SAT) eval rows, aligned to solve order.
+    eval_orders_per_puzzle = orders_t[sat_mask].tolist()
     state = _build_state(x, in_puzzle_mask)
     given_mask = _given_mask(x)
     n_sat = x.shape[0]
@@ -272,10 +343,42 @@ def run(
           flush=True)
     print(f"{'='*60}", flush=True)
 
+    # ---- E4 per-order breakdown ----
+    # Group per-puzzle solve outcomes by the puzzle's order `n`. `res` fields
+    # (correct/wrong/timeouts/puzzle_calls) are indexed by puzzle position i,
+    # which aligns 1:1 with `eval_orders_per_puzzle[i]` (both derived from the
+    # same sat_mask-filtered single eval batch, in the same row order).
+    per_order: dict[str, dict] = {}
+    for i in range(n):
+        o = int(eval_orders_per_puzzle[i])
+        key = str(o)
+        bucket = per_order.setdefault(
+            key, {"correct": 0, "wrong": 0, "timeout": 0, "calls": 0, "n": 0}
+        )
+        bucket["n"] += 1
+        if bool(res.correct[i].item()):
+            bucket["correct"] += 1
+        if bool(res.wrong[i].item()):
+            bucket["wrong"] += 1
+        if bool(res.timeouts[i].item()):
+            bucket["timeout"] += 1
+        pc = int(res.puzzle_calls[i].item())
+        if pc > 0:
+            bucket["calls"] += pc
+    # Print the per-order table.
+    print(f"\n{'='*60}\nPER-ORDER BREAKDOWN\n{'='*60}", flush=True)
+    for key in sorted(per_order, key=lambda k: int(k)):
+        b = per_order[key]
+        print(f"  order {key}: correct={b['correct']}/{b['n']}  "
+              f"wrong={b['wrong']}  timeout={b['timeout']}  calls={b['calls']}",
+              flush=True)
+    print(f"{'='*60}", flush=True)
+
     eval_json_path = ckpt_path.with_suffix(".eval.json")
     eval_json_path.write_text(json.dumps({
         "checkpoint": str(ckpt_path),
         "n_eval_puzzles": n,
+        "per_order": per_order,
         "n_chains": res.n_chains,
         "correct": n_correct, "wrong": n_wrong, "timeouts": n_timeout,
         "model_calls_total": res.model_calls,
@@ -334,11 +437,13 @@ def run(
             fh.write(json.dumps({
                 "kind": "puzzle",
                 "puzzle_idx": i,
+                "order": int(eval_orders_per_puzzle[i]),
                 "correct": is_correct,
                 "wrong": is_wrong,
                 "timeout": is_timeout,
                 "round_solved": rs,
                 "n_resets": int(res.n_resets[i].item()),
+                "puzzle_calls": int(res.puzzle_calls[i].item()),
                 "forwards_unbatched": forwards_unbatched,
             }) + "\n")
     checkpoint_volume.commit()
@@ -379,6 +484,14 @@ def entrypoint(
     seq_drain_max_rounds: int = 200,
     eval_dropout_p: float = 0.05,
     n_train_puzzles: int | None = None,
+    train_orders: str = "",
+    eval_orders: str = "",
+    translate_aug: bool = False,
+    use_rope: bool = False,
+    ckpt_name: str = "",
+    ckpt_subdir: str = "",
+    overwrite: bool = False,
+    skip_if_done: bool = False,
 ):
     result = run.remote(
         steps=steps, batch_size=batch_size,
@@ -404,5 +517,13 @@ def entrypoint(
         seq_drain_max_rounds=seq_drain_max_rounds,
         eval_dropout_p=eval_dropout_p,
         n_train_puzzles=n_train_puzzles,
+        train_orders=train_orders,
+        eval_orders=eval_orders,
+        translate_aug=translate_aug,
+        use_rope=use_rope,
+        ckpt_name=ckpt_name,
+        ckpt_subdir=ckpt_subdir,
+        overwrite=overwrite,
+        skip_if_done=skip_if_done,
     )
     print(f"\nFinal: {result}", flush=True)

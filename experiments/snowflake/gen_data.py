@@ -21,6 +21,10 @@ Schema (per row):
 Usage:
     uv run modal run --detach experiments/snowflake/gen_data.py
     uv run modal run --detach experiments/snowflake/gen_data.py --n-shards 100 --count-per-shard 10
+    # E4 order-transfer OOD: extend the generated range up to order 10.
+    uv run modal run --detach experiments/snowflake/gen_data.py --n-max 10
+    # (or generate ONLY the new orders 9-10 into a separate suffixed split)
+    uv run modal run --detach experiments/snowflake/gen_data.py --n-min 9 --n-max 10 --out-suffix _ext
 """
 
 from __future__ import annotations
@@ -171,7 +175,14 @@ def gen_shard(
         chars = string.ascii_uppercase + string.digits
         return "".join(rng.choice(chars) for _ in range(3))
 
-    # Pre-cache topology per n.
+    # Pre-cache topology per n. HEX_COORDS_BY_N supports orders up to 19 (the
+    # covering grid embeds all of them), so E4's orders 9-10 are in range;
+    # fail loudly if a requested order is unsupported by the topology module.
+    max_supported = max(HEX_COORDS_BY_N.keys())
+    if n_max > max_supported:
+        raise ValueError(
+            f"n_max={n_max} exceeds HEX_COORDS_BY_N max order {max_supported}"
+        )
     topo = {}
     for n in range(n_min, n_max + 1):
         constraints, n_cells = build_snowflake(n)

@@ -47,7 +47,11 @@ _RUN_PARAMS: tuple[tuple[str, object], ...] = (
     ("seq_drain_max_rounds",     200),
     ("eval_dropout_p",           0.05),
     ("n_loops",                  16),
+    ("num_layers",               4),
+    ("dim",                      128),
     ("pre_norm",                 True),
+    ("supervise",                "all"),
+    ("eval_every",               100),
 )
 
 
@@ -129,7 +133,15 @@ def run(
     seq_drain_max_rounds: int = 200,
     eval_dropout_p: float = 0.05,
     n_loops: int = 16,
+    num_layers: int = 4,
+    dim: int = 128,
     pre_norm: bool = True,
+    supervise: str = "all",
+    eval_every: int = 100,
+    ckpt_name: str = "",
+    ckpt_subdir: str = "",
+    overwrite: bool = False,
+    skip_if_done: bool = False,
 ):
     # Snapshot the call-site arg values BEFORE any local mutation, then dump
     # the config table. (Snapshot locals() outside the comprehension —
@@ -138,6 +150,22 @@ def run(
     _loc_snapshot = dict(locals())
     _arg_values = {name: _loc_snapshot[name] for name, _ in _RUN_PARAMS}
     _print_run_config(_arg_values)
+
+    # Stateful / idempotent guard. When --skip-if-done is set AND we are using
+    # a deterministic checkpoint path (--ckpt-name given), a run whose eval.json
+    # already landed on the volume is a graceful no-op — we neither retrain nor
+    # re-evaluate. This is distinct from --overwrite (which errors on an existing
+    # checkpoint); --skip-if-done lets a whole-sweep re-launch execute only the
+    # missing (config, seed) pairs. Default-off: plain runs are unaffected.
+    if skip_if_done and ckpt_name:
+        from pathlib import Path as _Path
+        _done_dir = f"{CHECKPOINT_MOUNT}/{ckpt_subdir}" if ckpt_subdir else CHECKPOINT_MOUNT
+        _done_eval = _Path(_done_dir) / f"{ckpt_name}.eval.json"
+        checkpoint_volume.reload()
+        if _done_eval.exists():
+            print(f"\n[skip-if-done] {_done_eval} already exists — "
+                  f"skipping train + eval (no-op).", flush=True)
+            return {"skipped": True, "checkpoint": str(_done_eval.with_suffix("").with_suffix(".pt"))}
 
     ts = time.strftime("%Y%m%d_%H%M%S")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -151,8 +179,25 @@ def run(
     model_cfg = LoopedTransformerConfig(
         cls_token=conflict_loss_weight > 0,
         n_loops=n_loops,
+        num_layers=num_layers,
+        dim=dim,
         pre_norm=pre_norm,
     )
+
+    # Checkpoint path routing. When `ckpt_name` is set, a followup launcher
+    # requests a deterministic (timestamp-free) path at
+    # `{CHECKPOINT_MOUNT}/{ckpt_subdir}/{ckpt_name}.pt` (e.g.
+    # /checkpoints/followups/e1/<config>_seed<N>.pt). When empty, everything
+    # falls back to the legacy `{CHECKPOINT_MOUNT}/sudoku` + timestamped name.
+    if ckpt_name:
+        train_out_dir = f"{CHECKPOINT_MOUNT}/{ckpt_subdir}" if ckpt_subdir else CHECKPOINT_MOUNT
+        train_name = ckpt_name
+        train_no_timestamp = True
+    else:
+        train_out_dir = f"{CHECKPOINT_MOUNT}/sudoku"
+        train_name = f"seed{seed}_{steps}s_bs{batch_size}_aug{int(augment)}_{ts}"
+        train_no_timestamp = False
+
     ckpt_path = train(TrainConfig(
         steps=steps,
         batch_size=batch_size,
@@ -168,6 +213,8 @@ def run(
         max_age=max_age,
         use_ema=use_ema,
         ema_decay=ema_decay,
+        supervise=supervise,
+        eval_every=eval_every,
         model=model_cfg,
         data=SudokuExtremeConfig(
             cache_dir=DATA_MOUNT, batch_size=batch_size, seed=42,
@@ -175,8 +222,10 @@ def run(
             augment_digit_perm=data_augment_digit_perm,
             augment_dihedral=data_augment_dihedral,
         ),
-        out_dir=f"{CHECKPOINT_MOUNT}/sudoku",
-        name=f"seed{seed}_{steps}s_bs{batch_size}_aug{int(augment)}_{ts}",
+        out_dir=train_out_dir,
+        name=train_name,
+        no_timestamp=train_no_timestamp,
+        overwrite=overwrite,
     ))
     checkpoint_volume.commit()
 
@@ -393,7 +442,15 @@ def entrypoint(
     seq_drain_max_rounds: int = 200,
     eval_dropout_p: float = 0.05,
     n_loops: int = 16,
+    num_layers: int = 4,
+    dim: int = 128,
     pre_norm: bool = True,
+    supervise: str = "all",
+    eval_every: int = 100,
+    ckpt_name: str = "",
+    ckpt_subdir: str = "",
+    overwrite: bool = False,
+    skip_if_done: bool = False,
 ):
     result = run.remote(
         steps=steps, batch_size=batch_size,
@@ -421,6 +478,14 @@ def entrypoint(
         seq_drain_max_rounds=seq_drain_max_rounds,
         eval_dropout_p=eval_dropout_p,
         n_loops=n_loops,
+        num_layers=num_layers,
+        dim=dim,
         pre_norm=pre_norm,
+        supervise=supervise,
+        eval_every=eval_every,
+        ckpt_name=ckpt_name,
+        ckpt_subdir=ckpt_subdir,
+        overwrite=overwrite,
+        skip_if_done=skip_if_done,
     )
     print(f"\nFinal: {result}", flush=True)
