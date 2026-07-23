@@ -12,7 +12,7 @@ retraining. How much deduction is the model actually capable of per
 forward, and can extra inference compute (more loops, iterated deduction)
 substitute for training compute?
 
-**Testbed.** Entirely **eval-only**. Primary checkpoint: E1 baseline (4K
+**Testbed.** Entirely **eval-only**. Primary checkpoint: E1 baseline (2K
 steps). The loop-transfer matrix additionally consumes E1's D1-C1 sweep
 (`L_train ∈ {1,2,4,8,16,32}`) and the `d2_final_only` checkpoint; the
 θ-sweep on symmetric BCE consumes E1's `d4_sym`. **Blocked on E1's

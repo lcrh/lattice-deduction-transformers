@@ -32,7 +32,8 @@ deliberate non-goal here (it would require keeping graphs alive across
 pool iterations); it's the escalation to consider only if this cheap
 version shows headroom.
 
-Variants (Sudoku-Extreme, baseline 4K-step config, 3 seeds):
+Variants (Sudoku-Extreme, the E1 baseline 2K-step config — below ceiling,
+so a carried latent has visible headroom to improve into; 3 seeds):
 
 | config | carried across steps | notes |
 |---|---|---|
@@ -59,8 +60,8 @@ helps most here — counterfactual memory of what was tried).
 **Deliverable.** One table + learning-curve figure; a paragraph answering
 "is the lattice a sufficient outer-loop state?" either way.
 
-**Cost.** 3 configs (+2 aug-regime baselines) × 3 seeds × ~15 B200-min
-≈ 4 B200-h. The most invasive experiment in this set — schedule last.
+**Cost.** 3 configs (+2 aug-regime baselines) × 3 seeds × ~7 B200-min
+≈ 2 B200-h. The most invasive experiment in this set — schedule last.
 
 ## TODO(worker)
 

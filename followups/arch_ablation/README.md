@@ -18,9 +18,15 @@ Three specific claims/choices this experiment puts numbers on:
   mechanism behind the empirical-soundness claim; ablating them should
   show wrong answers reappearing.
 
-**Testbed.** Sudoku-Extreme, 1K-puzzle train split, the Table-1 4K-step
-config as baseline (800K params, ~15 min on 1× B200). Every ablation is a
-one-factor deviation from this baseline — no factorial crossing.
+**Testbed.** Sudoku-Extreme, 1K-puzzle train split. Baseline = the
+standard config trained for **2,000 steps** (800K params, ~7 min on 1×
+B200). Deliberately *not* the 4K-step headline budget: at 4K the model
+sits at the ~100% ceiling where ablation deltas vanish; at 2K it is just
+below ceiling (~99% accuracy, still zero wrong answers), so degradations
+are visible — and every run halves in cost. Re-check any contested or
+surprising row at 4K before drawing conclusions about the headline
+setting. Every ablation is a one-factor deviation from this baseline —
+no factorial crossing.
 
 **Deliverable.** The main ablation table (`results/summary.csv`, one row
 per config × seed with mean/range roll-ups) plus three figures, described
@@ -36,7 +42,7 @@ experiment's checkpoints.
 
 ```bash
 uv run modal run --detach experiments/sudoku/run.py \
-    --steps 4000 --n-train-puzzles 1000 --n-eval-puzzles 1000 --seed 0
+    --steps 2000 --n-train-puzzles 1000 --n-eval-puzzles 1000 --seed 0
 ```
 
 Baseline hyperparameters (from `experiments/sudoku/run.py` defaults):
@@ -76,9 +82,9 @@ below is built to surface it: every comparison names what it holds fixed.
 
 **C1 — Tied loop sweep (params fixed at 800K; primary).** `L = n_loops ∈
 {1, 2, 4, 8, 16, 32}` at the fixed 4-layer, dim-128 backbone, all at
-`steps = 4000` (identical optimizer steps, pool dynamics, and data —
+`steps = 2000` (identical optimizer steps, pool dynamics, and data —
 per-forward compute is the only thing that varies; train wallclock scales
-≈ 15 min × L/16). `L = 1` is the non-recurrent null hypothesis: a plain
+≈ 7 min × L/16). `L = 1` is the non-recurrent null hypothesis: a plain
 4-layer transformer doing one-shot lattice elimination inside the same
 outer search.
 
@@ -91,10 +97,10 @@ Test it as a ladder on `L = 1` (plus one `L = 2` parity point):
 
 | config | n_loops | steps | train puzzles | training FLOPs vs baseline |
 |---|---|---|---|---|
-| `d1_L2_cm` | 2 | 32,000 | 1K | 1× (parity) |
-| `d1_L1_cm` | 1 | 64,000 | 1K | 1× (parity) |
-| `d1_L1_cm4x` | 1 | 256,000 | 1K | 4× |
-| `d1_L1_bigdata` | 1 | 256,000 | full split (`--n-train-puzzles` unset) | 4×, data bottleneck removed |
+| `d1_L2_cm` | 2 | 16,000 | 1K | 1× (parity) |
+| `d1_L1_cm` | 1 | 32,000 | 1K | 1× (parity) |
+| `d1_L1_cm4x` | 1 | 128,000 | 1K | 4× |
+| `d1_L1_bigdata` | 1 | 128,000 | full split (`--n-train-puzzles` unset) | 4×, data bottleneck removed |
 
 (Warmup/cosine schedule are step-fractions so they rescale automatically;
 `max_age` stays 100 pool steps.) The decisive evidence is the
@@ -102,7 +108,7 @@ Test it as a ladder on `L = 1` (plus one `L = 2` parity point):
 **plateaued** below baseline at 4× compute with unrestricted data is a
 capability gap; a curve **still climbing** means budget could eventually
 close it and the claim must be stated as a compute-efficiency gap
-instead. The 4× rungs cost ~1 B200-h each — run them at 2 seeds.
+instead. The 4× rungs cost ~30 B200-min each — run them at 2 seeds.
 
 **C3 — Depth without tying (per-forward compute matched, params grow).**
 Non-recurrent (`L = 1`) with more *untied* layers, compared against the
@@ -125,7 +131,7 @@ This completes a triangle at roughly equal params and forward FLOPs:
 `d1_untied16` (deep) vs `d1_wide` (wide) vs tied `d1_L4` (iterated, at
 4× fewer params) — separating iteration, depth, and capacity.
 
-All configs at `steps = 4000` except C2. ~12 configs + baseline; 3 seeds
+All configs at `steps = 2000` except C2. ~12 configs + baseline; 3 seeds
 except the C2 4× rungs (2 seeds).
 
 **Figure D1** (`plots/d1_loops.pdf`): solve rate (second panel:
@@ -176,8 +182,8 @@ faster. Measure it with learning curves:
 | `d3_ce1` (optional) | 1.0 |
 
 **Figure D3** (`plots/d3_ce_curves.pdf`): in-train solve count vs step +
-final accuracy/soundness at 1K/2K/4K steps (read intermediate points off
-the curve rather than training three separate models).
+accuracy/soundness at 500/1K/2K steps (read intermediate points off
+the curve rather than training separate models).
 
 Note `L_CE` also feeds the decide step (the softmax head is what the
 branching policy samples digits from), so a `ce0` model may fail through
@@ -213,9 +219,9 @@ search-effort impact.
 
 ## Run budget
 
-~18 training configs + baseline ≈ **55 runs**, most ≤15 B200-min
-(low-`L` C1 runs are much cheaper; `d1_L32` is ~30 min; the two C2 4×
-rungs are ~1 B200-h each) ≈ **14 B200-hours** total. If budget-pressed:
+~18 training configs + baseline ≈ **55 runs**, most ≤7 B200-min
+(low-`L` C1 runs are much cheaper; `d1_L32` is ~15 min; the two C2 4×
+rungs are ~30 min each) ≈ **7 B200-hours** total. If budget-pressed:
 drop to 2 seeds for C3/C4 and `d3_ce1`, drop `d1_L1_cm4x` (keep
 `d1_L1_bigdata` — it's the strongest version of the claim), never trim
 D4.
@@ -225,7 +231,7 @@ D4.
 ```bash
 # 1. Sanity gate: baseline must reproduce before anything else launches.
 uv run modal run --detach experiments/sudoku/run.py \
-    --steps 4000 --n-train-puzzles 1000 --n-eval-puzzles 1000 --seed 0
+    --steps 2000 --n-train-puzzles 1000 --n-eval-puzzles 1000 --seed 0
 
 # 2. Enumerate the sweep (prints one `modal run --detach` command per run;
 #    launch them individually, not in a shell loop).

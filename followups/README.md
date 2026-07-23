@@ -18,12 +18,12 @@ The benchmark code these experiments build on lives in
 
 | ID | Directory | Question | Domain | Est. cost |
 |----|-----------|----------|--------|-----------|
-| E1 | [`arch_ablation/`](arch_ablation/) | Which architectural / loss choices carry the result? (recursion & loop count incl. a data/compute escalation ladder, deep supervision, L_CE, soundness pressure) | Sudoku-Extreme | ~55 runs ≈ 14 B200-h |
+| E1 | [`arch_ablation/`](arch_ablation/) | Which architectural / loss choices carry the result? (recursion & loop count incl. a data/compute escalation ladder, deep supervision, L_CE, soundness pressure) | Sudoku-Extreme | ~55 runs ≈ 7 B200-h |
 | E2 | [`search_process/`](search_process/) | Search-process ablations: decision-selection heuristics (uniform vs. MRV vs. entropy-based vs. greedy) and backtracking policies (reset-to-root vs. partial/stochastic backjumping), matched between training and inference | Sudoku-Extreme | mostly eval-only + ~4 training configs |
 | E3 | [`deduction_operator/`](deduction_operator/) | Ablating the deduction operator at inference: extra internal loops, deduce-to-fixpoint before branching, per-iteration elimination profiles, θ_elim sensitivity | Sudoku-Extreme | eval-only, reuses E1 checkpoints |
 | E4 | [`ood_snowflake/`](ood_snowflake/) | Does LDT generalize to *unseen puzzle sizes*? Train on small Snowflake orders, test on larger ones | Snowflake | ~9 runs × ~5 B200-min |
 | E5 | [`llm_baseline/`](llm_baseline/) | Does a *fine-tuned* LLM (Qwen3) close the gap, or is the architecture + lattice doing the work? | Sudoku-Extreme | a few GPU-hours (LoRA SFT) |
-| E6 | [`latent_carry/`](latent_carry/) | Does carrying a TRM-style latent across solve steps help, or is the lattice a sufficient state? | Sudoku-Extreme | ~6 runs × ≤15 B200-min |
+| E6 | [`latent_carry/`](latent_carry/) | Does carrying a TRM-style latent across solve steps help, or is the lattice a sufficient state? | Sudoku-Extreme | ~15 runs ≈ 2 B200-h |
 | E7 | [`maze_soundness/`](maze_soundness/) | Why does Maze-Hard emit valid-but-suboptimal paths instead of abstaining, and does a verification step restore soundness? | Maze-Hard | mostly eval/analysis |
 | E8 | [`cost_accounting/`](cost_accounting/) | Normalized training-cost comparison (GPU-hours / FLOPs) + offline α-operator cost | all | bookkeeping + small benchmarks |
 
@@ -106,5 +106,7 @@ says otherwise:
   collected `eval.json` summaries (small JSON/CSV committed to the repo) and
   a `plots/` output of its figure scripts, mirroring `repro/results/`.
 - **Sanity gate**: before launching a sweep, re-run the baseline config once
-  and check it reproduces the known number (Sudoku 4K-step: ~99.9–100% on the
-  eval subsample). If it doesn't, stop and debug — don't burn the sweep.
+  and check it reproduces the known number (Sudoku 2K-step ablation
+  baseline: ~99% accuracy with zero wrong answers on the eval subsample;
+  4K-step headline config: ~99.9–100%). If it doesn't, stop and debug —
+  don't burn the sweep.
