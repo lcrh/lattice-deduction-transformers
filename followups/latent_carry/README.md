@@ -20,13 +20,24 @@ optional carried hidden `h_carry` and blend it at loop entry (e.g.
 `h = h0 + W h_carry`, zero-init `W` so training starts at baseline
 behavior); return the final `h` alongside the heads.
 
+**Gradient scope — the latent is pool data, not a gradient path.** The
+carried `h` is written to the pool from the no-grad `dpll_step` forward
+that advances the state, so it is detached by construction; no gradient
+ever crosses solve steps (unchanged from the paper: "we do not currently
+propagate gradients across solve steps"). Within a step, gradient flows
+through the read path (`W·h_carry`), so the model learns to *use* the
+latent — but nothing gets direct credit for *writing* a latent that helps
+a later step. TRM-style truncated BPTT through the carried latent is a
+deliberate non-goal here (it would require keeping graphs alive across
+pool iterations); it's the escalation to consider only if this cheap
+version shows headroom.
+
 Variants (Sudoku-Extreme, baseline 4K-step config, 3 seeds):
 
 | config | carried across steps | notes |
 |---|---|---|
 | `baseline` | nothing | current behavior |
 | `e6_carry` | final-loop hidden `h` | pool stores `h` per entry; reset to zeros on backfill/conflict-reset |
-| `e6_carry_detach` | same, gradient-detached | isolates "extra features" from "gradient path across steps" (we don't backprop across steps anyway — this documents that explicitly) |
 | `e6_shuffle` (control) | another puzzle's `h` | if this matches `e6_carry`, the latent is noise, not information |
 
 Bookkeeping that must be right for the comparison to mean anything:
@@ -48,8 +59,8 @@ helps most here — counterfactual memory of what was tried).
 **Deliverable.** One table + learning-curve figure; a paragraph answering
 "is the lattice a sufficient outer-loop state?" either way.
 
-**Cost.** 4 configs (+2 aug-regime baselines) × 3 seeds × ~15 B200-min
-≈ 4.5 B200-h. The most invasive experiment in this set — schedule last.
+**Cost.** 3 configs (+2 aug-regime baselines) × 3 seeds × ~15 B200-min
+≈ 4 B200-h. The most invasive experiment in this set — schedule last.
 
 ## TODO(worker)
 
@@ -59,8 +70,9 @@ helps most here — counterfactual memory of what was tried).
       `h_carry=None`).
 - [ ] `train.py`: pool gains an `h` buffer ([P, S, dim] — check memory at
       batch 512, dim 128: ~21 MB fp32, fine); zero on backfill; store the
-      *post-step* `h` from the no-grad `dpll_step` forward (decide which
-      forward's `h` is canonical — grad or no-grad — and document it).
+      *post-step* `h` from the no-grad `dpll_step` forward (the canonical
+      writer — it's the forward that produced the state transition, and it
+      keeps the latent detached by construction).
 - [ ] `dpll.py` / `solve.py`: thread `h_carry` per row; reset policy on
       conflict-reset; aug-frame handling per the note above (add
       `StepConfig.aug_per_chain` fixed-aug mode).
