@@ -1,0 +1,10 @@
+# E8 normalized cost table
+
+All GPU-hours are B200-equivalent. `measured` = same-silicon B200 measurement; `reported` = author's number on their own hardware (NOT converted); `TBD-measure` = job not yet run (never fabricated).
+
+| model | task | train_gpu_h_b200 | train_pflops | offline_cpu_h | inference_cost_per_puzzle | source |
+| --- | --- | --- | --- | --- | --- | --- |
+| LDT | sudoku-extreme | TBD-measure | 14.03 | 0.0 | TBD-measure | flops=analytic | train_gpu_h=TBD-measure |
+| TRM | maze-30x30-hard | 26.402 | 20498.02 | TBD-measure | TBD-measure | flops=analytic | train_gpu_h=measured (B200, 1.46 s/step x 65100 steps) |
+| HRM | maze-30x30-hard | 4.412 | 4685.26 | TBD-measure | TBD-measure | flops=analytic | train_gpu_h=measured (B200, 0.61 s/step x 26040 steps) |
+| Sotaku | sudoku | TBD-measure | 13.85 (TBD arch) | 0.0 | TBD-measure | flops=TBD-arch | train_gpu_h=reported: reported (Sotaku paper) — hardware/steps not in repo; B200-equiv TBD-measure |

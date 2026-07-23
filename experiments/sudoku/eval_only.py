@@ -53,8 +53,47 @@ def run(
     out_suffix: str = ".eval.fixed.json",
     split: str = "test",
     compile: bool = False,
-    eval_max_timeouts: int = 50,
+eval_max_timeouts: int = 50,
+    # ---- E3 additions (all default-off / no-op at defaults) ----
+    eval_n_loops: int = 0,        # 0 = checkpoint's native n_loops (E3-O1)
+    deduce_passes: int = 1,       # 1 = legacy single pass (E3-O3)
+    deduce_pass_cap: int = 16,    # safety cap for deduce_passes=0 fixpoint mode
+    # ---- E2 additions (all default-off / no-op at defaults) ----
+    cell_policy: str = "uniform",   # E2-S1 cell selection: uniform|mrv|min_entropy|max_entropy
+    digit_policy: str = "softmax",  # E2-S1 digit selection: softmax|argmax|rank_k
+    backtrack: str = "root",        # E2-S3 backtracking: root|last|geometric|uniform_depth|last+negate
+    geometric_p: float = 0.5,       # p for backtrack=geometric
+    learn_negation: bool = False,   # force negation on (implied by backtrack=last+negate)
+    snapshot_max_depth: int = 64,   # per-chain decision snapshot stack depth
+    ckpt_name: str = "",          # deterministic output routing (mirrors run.py)
+    ckpt_subdir: str = "",        # -> {CHECKPOINT_MOUNT}/{ckpt_subdir}/{ckpt_name}.eval.json
+    skip_if_done: bool = False,   # idempotent skip if the eval.json already landed
 ):
+    # Deterministic output routing (mirrors run.py). When `ckpt_name` is set,
+    # eval artifacts land at `{CHECKPOINT_MOUNT}/{ckpt_subdir}/{ckpt_name}.eval.json`
+    # (E3's `<evalconfig>__on__<input>_seed<N>` naming under followups/e3) —
+    # decoupled from the (read-only, shared E1) input checkpoint path. When
+    # empty, artifacts fall back next to the input checkpoint (legacy default).
+    from pathlib import Path as _Path
+    if ckpt_name:
+        _out_dir = f"{CHECKPOINT_MOUNT}/{ckpt_subdir}" if ckpt_subdir else CHECKPOINT_MOUNT
+        _out_base = f"{_out_dir}/{ckpt_name}"
+        eval_path = f"{_out_base}{out_suffix}"
+        eval_jsonl_path = f"{_out_base}{out_suffix.replace('.json', '.jsonl')}"
+    else:
+        eval_path = checkpoint.replace(".pt", out_suffix)
+        eval_jsonl_path = checkpoint.replace(".pt", out_suffix.replace(".json", ".jsonl"))
+
+    # Idempotent skip (mirrors run.py --skip-if-done). Default-off: only fires
+    # when both --skip-if-done and --ckpt-name are given and the eval.json is
+    # already on the volume, so whole-sweep re-launches touch only missing runs.
+    if skip_if_done and ckpt_name:
+        checkpoint_volume.reload()
+        if _Path(eval_path).exists():
+            print(f"\n[skip-if-done] {eval_path} already exists — "
+                  f"skipping eval (no-op).", flush=True)
+            return {"skipped": True, "eval_path": eval_path}
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.set_float32_matmul_precision("high")
     print("RUN CONFIG  (eval_only)", flush=True)
@@ -64,7 +103,20 @@ def run(
           flush=True)
     print(f"Loading: {checkpoint}", flush=True)
     ckpt = load_checkpoint(checkpoint)
-    cfg = LoopedTransformerConfig(**ckpt["model_cfg"])
+    # Eval-time loop override (E3-O1). The backbone is a weight-tied loop, so a
+    # checkpoint trained at any L_train evals at any L_eval by rebuilding the
+    # config with a different n_loops BEFORE load_state_dict — the state dict
+    # shape is loop-invariant. Default 0 = keep the checkpoint's native
+    # n_loops, making the rebuilt config byte-identical to the saved one
+    # (sanity gate: --eval-n-loops <native> reproduces the no-flag result).
+    saved_cfg = dict(ckpt["model_cfg"])
+    native_loops = saved_cfg.get("n_loops")
+    if eval_n_loops and eval_n_loops > 0:
+        saved_cfg["n_loops"] = eval_n_loops
+        print(f"  [eval-n-loops] overriding n_loops {native_loops} -> "
+              f"{eval_n_loops} (weight-tied loop; state dict unchanged)",
+              flush=True)
+    cfg = LoopedTransformerConfig(**saved_cfg)
     model = PowersetModel(cfg)
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device).eval()
@@ -110,6 +162,10 @@ def run(
         temp_decide=temp_decide,
         cls_threshold=cls_threshold,
         augment=augment,
+        deduce_passes=deduce_passes,
+        deduce_pass_cap=deduce_pass_cap,
+        cell_policy=cell_policy,
+        digit_policy=digit_policy,
     )
     _max_to = eval_max_timeouts if eval_max_timeouts > 0 else None
     solve_cfg = SolveConfig(
@@ -118,7 +174,11 @@ def run(
         estimate_sequential=estimate_sequential,
         seq_drain_max_rounds=seq_drain_max_rounds,
         log_per_round_fill=log_per_round_fill,
-        eval_max_timeouts=_max_to,
+eval_max_timeouts=_max_to,
+        backtrack=backtrack,
+        geometric_p=geometric_p,
+        learn_negation=learn_negation,
+        snapshot_max_depth=snapshot_max_depth,
     )
     print(f"Solving {n} puzzles | n_chains={n_chains} batch_size={batch_size} "
           f"(M={batch_size//n_chains} puzzles/forward) max_rounds={max_rounds} "
@@ -176,6 +236,14 @@ def run(
           f"[tp={res.diag_conflict_tp} fp={res.diag_conflict_fp} "
           f"fn={res.diag_conflict_fn} tn={res.diag_conflict_tn}] "
           f"over {res.diag_active_chain_rounds} active chain-rounds", flush=True)
+    if backtrack != "root":
+        un_rate = res.n_unsound_negations / max(res.n_negations, 1)
+        cd_mean = (sum(res.conflict_depths) / len(res.conflict_depths)
+                   if res.conflict_depths else 0.0)
+        print(f"  Backtrack={backtrack}: {len(res.conflict_depths)} conflicts "
+              f"(mean depth {cd_mean:.1f})  "
+              f"negations={res.n_negations} unsound={res.n_unsound_negations} "
+              f"(rate={un_rate:.4%})", flush=True)
     print(f"  wall: {elapsed:.0f}s", flush=True)
 
     out = {
@@ -192,7 +260,20 @@ def run(
             "n_chains": n_chains, "batch_size": batch_size,
             "max_rounds": max_rounds,
             "augment": augment,
-            "eval_max_timeouts": eval_max_timeouts,
+"eval_max_timeouts": eval_max_timeouts,
+            # E3 knobs recorded for downstream collect/plot.
+            "eval_n_loops": eval_n_loops,
+            "native_n_loops": native_loops,
+            "effective_n_loops": (eval_n_loops if eval_n_loops and eval_n_loops > 0
+                                  else native_loops),
+            "deduce_passes": deduce_passes,
+            "deduce_pass_cap": deduce_pass_cap,
+            # E2 search-process knobs recorded for downstream collect/plot.
+            "cell_policy": cell_policy,
+            "digit_policy": digit_policy,
+            "backtrack": backtrack,
+            "geometric_p": geometric_p,
+            "learn_negation": learn_negation,
         },
         "correct": n_correct, "wrong": n_wrong, "timeouts": n_timeout,
         "summary": {
@@ -200,6 +281,10 @@ def run(
             "total_calls": res.model_calls,
             "avg_calls_per_correct": avg_calls,
             "avg_resets": float(res.n_resets.float().mean().item()),
+            # E2 sequential-cost + puzzle-calls summary (README key-cost metric).
+            "avg_puzzle_calls": float(
+                res.puzzle_calls[res.puzzle_calls >= 0].float().mean().item()
+                if int((res.puzzle_calls >= 0).sum().item()) > 0 else -1.0),
         },
         "diag": {
             "total_deduced": res.diag_total_deduced,
@@ -212,14 +297,44 @@ def run(
             "conflict_precision": cls_p,
             "conflict_recall": cls_r,
             "active_chain_rounds": res.diag_active_chain_rounds,
+            # E2 backtracking diagnostics.
+            "backtrack_policy": res.backtrack_policy,
+            "n_negations": res.n_negations,
+            "n_unsound_negations": res.n_unsound_negations,
+            "unsound_negation_rate": (
+                res.n_unsound_negations / max(res.n_negations, 1)),
+            "n_conflicts_recorded": len(res.conflict_depths),
+            # Histograms (per-conflict lists) — capped in the jsonl, summarized here.
+            "conflict_depth_mean": (
+                sum(res.conflict_depths) / len(res.conflict_depths)
+                if res.conflict_depths else 0.0),
+            "backtrack_target_mean": (
+                sum(res.backtrack_targets) / len(res.backtrack_targets)
+                if res.backtrack_targets else 0.0),
         },
+        # Full per-conflict histograms (decision-depth-at-conflict + target).
+        # Only nonempty for non-root backtrack policies; safe to store (a few
+        # thousand small ints at most).
+        "conflict_depths": res.conflict_depths,
+        "backtrack_targets": res.backtrack_targets,
     }
-    eval_path = checkpoint.replace(".pt", out_suffix)
+    # eval_path / eval_jsonl_path were resolved up-front (deterministic output
+    # routing under --ckpt-name, else next to the input checkpoint).
+    _Path(eval_path).parent.mkdir(parents=True, exist_ok=True)
     with open(eval_path, "w") as f:
         json.dump(out, f, indent=2)
 
-    # Per-puzzle JSONL alongside the summary JSON — clean prefix only.
-    eval_jsonl_path = checkpoint.replace(".pt", out_suffix.replace(".json", ".jsonl"))
+# Per-puzzle JSONL alongside the summary JSON — clean prefix only.
+    # `forwards_unbatched` = "model forwards this puzzle would cost if we
+    # ran sequentially with no slot-batching and no chain-batching" =
+    # K * (round_solved + 1) for solved (0-round-solve = 1 forward; ×K
+    # because all K chains run, each as its own forward in sequential mode).
+    # Wrongs and timeouts are charged the full K * max_rounds — a wrong
+    # confident answer is no more useful than a timeout.
+    # NB: with deduce_passes != 1 each round costs >1 forward, so this
+    # rounds-based estimate under-counts; `total_calls` (model_calls) is the
+    # honest per-forward cost. forwards_unbatched stays rounds-based for
+    # continuity with the single-pass reports.
     with open(eval_jsonl_path, "w") as fh:
         fh.write(json.dumps({"kind": "header", **out}) + "\n")
         for i in prefix_idxs:
@@ -281,7 +396,19 @@ def entrypoint(
     out_suffix: str = ".eval.fixed.json",
     split: str = "test",
     compile: bool = False,
-    eval_max_timeouts: int = 50,
+eval_max_timeouts: int = 50,
+    eval_n_loops: int = 0,
+    deduce_passes: int = 1,
+    deduce_pass_cap: int = 16,
+    cell_policy: str = "uniform",
+    digit_policy: str = "softmax",
+    backtrack: str = "root",
+    geometric_p: float = 0.5,
+    learn_negation: bool = False,
+    snapshot_max_depth: int = 64,
+    ckpt_name: str = "",
+    ckpt_subdir: str = "",
+    skip_if_done: bool = False,
 ):
     result = run.remote(
         checkpoint=checkpoint, n_eval=n_eval,
@@ -297,5 +424,17 @@ def entrypoint(
         out_suffix=out_suffix,
         split=split,
         compile=compile,
+        eval_n_loops=eval_n_loops,
+        deduce_passes=deduce_passes,
+        deduce_pass_cap=deduce_pass_cap,
+        cell_policy=cell_policy,
+        digit_policy=digit_policy,
+        backtrack=backtrack,
+        geometric_p=geometric_p,
+        learn_negation=learn_negation,
+        snapshot_max_depth=snapshot_max_depth,
+        ckpt_name=ckpt_name,
+        ckpt_subdir=ckpt_subdir,
+        skip_if_done=skip_if_done,
     )
     print(f"\nFinal: {result}", flush=True)

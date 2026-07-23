@@ -34,7 +34,7 @@ The toggle lives at `cfg.step.augment` (StepConfig.augment).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -106,9 +106,41 @@ class SolveConfig:
     # so existing eval pipelines are unchanged.
     log_per_round_fill: bool = False
 
+    # ----- E2 backtracking policy (search-process ablation) --------------
+    # On a chain conflict, which state to reset it to. Default "root" is
+    # behaviorally identical to the legacy reset-to-original-puzzle path (and
+    # is implemented WITHOUT allocating the snapshot stack at all — see solve()).
+    #   "root"          — reset to the original puzzle (baseline).
+    #   "last"          — snapshot taken before the most recent decision.
+    #   "geometric"     — snapshot j decisions up, j ~ Geometric(geometric_p);
+    #                     j >= current depth -> root.
+    #   "uniform_depth" — snapshot at a uniformly-random earlier decision.
+    #   "last+negate"   — like "last" but additionally kill the pinned candidate
+    #                     in the restored state (depth-1 clause learning). If the
+    #                     restored cell goes empty, escalate to root.
+    backtrack: str = "root"
+    geometric_p: float = 0.5          # p for backtrack="geometric"
+    # Kept as an explicit flag for symmetry with the README; the "last+negate"
+    # policy already implies negation, but callers may set backtrack="last" and
+    # learn_negation=True to the same effect. When backtrack=="last+negate" the
+    # negation is on regardless.
+    learn_negation: bool = False
+    # Max per-chain decision depth the snapshot stack records. Overflow (a chain
+    # branching deeper than this) falls back to root on the next conflict. 64 is
+    # ample for Sudoku-Extreme (empirically ~<40 decisions per chain).
+    snapshot_max_depth: int = 64
+
     def __post_init__(self):
         if self.step is None:
             self.step = StepConfig()
+
+    def uses_snapshots(self) -> bool:
+        """True iff the backtrack policy needs the per-chain snapshot stack.
+
+        `root` (default) never touches the stack, so the default solve path is
+        allocation-free and byte-identical to the pre-E2 reset-to-root code.
+        """
+        return self.backtrack != "root"
 
 
 @dataclass
@@ -150,7 +182,7 @@ class SolveResult:
                                  # the streaming-queue solver. -1 if puzzle
                                  # was never filled (only possible if P > Q
                                  # and we exit before all queued).
-    # ----- Early-abort bookkeeping -----
+# ----- Early-abort bookkeeping -----
     aborted: bool = False        # True if eval_max_timeouts was hit and we
                                  # stopped filling new puzzles.
     dispatched_hi: int = -1      # highest puzzle index ever filled into a slot.
@@ -161,6 +193,21 @@ class SolveResult:
                                  # unbiased prefix, not a fast-puzzle subsample.
     n_evaluated: int = 0         # # puzzles with a real outcome this run
                                  # (excludes already_done and never-filled).
+    # ----- E2 backtracking diagnostics (aggregated over all conflicts). -----
+    # `backtrack` policy string echoed for the report. The two histogram lists
+    # collect one entry PER CONFLICT event (across every chain-round), so a
+    # downstream plot can bin them directly:
+    #   conflict_depths     — the chain's decision depth at the moment it hit
+    #                         the conflict (0 == conflict before any decision).
+    #   backtrack_targets   — the depth the chain was reset TO (0 == root).
+    # `n_negations` / `n_unsound_negations` are only nonzero under the
+    # negate-style policies; unsound = negated candidate == GT digit (measured
+    # the same way the unsound-deduction diagnostic uses GT).
+    backtrack_policy: str = "root"
+    conflict_depths: list[int] = field(default_factory=list)
+    backtrack_targets: list[int] = field(default_factory=list)
+    n_negations: int = 0
+    n_unsound_negations: int = 0
 
 
 def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
@@ -187,6 +234,24 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
 
     Augmentation is handled inside `dpll_step` via `cfg.step.augment`;
     callers see only canonical-frame inputs/outputs here.
+
+    Backtracking (E2, `cfg.backtrack`): default "root" resets a conflicting
+    chain to the original puzzle — behaviorally identical to the pre-E2 path,
+    and implemented WITHOUT allocating the snapshot stack (see
+    `cfg.uses_snapshots()`). Non-root policies maintain a per-chain decision
+    snapshot stack (`snap_state [B, D_max, S, C]` uint8 + `snap_cell`/
+    `snap_digit [B, D_max]` + `depth [B]`) and reset to an earlier snapshot on
+    conflict; see `SolveConfig.backtrack`.
+
+    `estimate_sequential` semantics under partial backtracking: an "attempt" is
+    a maximal run of rounds a chain spends WITHOUT a reset-to-root. A partial
+    backjump (last / geometric / uniform_depth / last+negate that lands above
+    root) does NOT end the attempt — it extends the same attempt, reusing the
+    prefix work. Only a reset that lands at root (depth 0) ends the attempt and
+    starts a new one with a fresh attempt index. This keeps the K=1 sequential
+    cost estimate honest: it charges the full round span of each root-to-root
+    attempt, so partial-backtracking's amortized prefix reuse is reflected as
+    longer (fewer) attempts rather than being double-counted.
     """
     P, S, C = puzzle.shape
     K = cfg.n_chains
@@ -284,6 +349,38 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
     slot_calls_start = torch.zeros(M, dtype=torch.long, device=device)
     puzzle_calls_out = torch.full((P,), -1, dtype=torch.long, device=device)
 
+    # ----- E2 backtracking: per-chain decision snapshot stack. -----
+    # Only allocated for non-root policies; the default "root" path never
+    # touches this and stays byte-identical + allocation-free.
+    use_snap = cfg.uses_snapshots()
+    negate_on = (cfg.backtrack == "last+negate") or cfg.learn_negation
+    D_max = cfg.snapshot_max_depth
+    if use_snap:
+        # snap_state[b, d] = the post-deduce state of chain b right BEFORE its
+        # (d+1)-th decision was pinned. snap_cell/digit record what got pinned
+        # at that decision (needed for negation). chain_depth[b] = # decisions
+        # currently on the stack for chain b (also the chain's decision depth).
+        snap_state = torch.zeros(B, D_max, S, C, dtype=torch.uint8, device=device)
+        snap_cell = torch.zeros(B, D_max, dtype=torch.long, device=device)
+        snap_digit = torch.zeros(B, D_max, dtype=torch.long, device=device)
+        chain_depth = torch.zeros(B, dtype=torch.long, device=device)
+    else:
+        snap_state = snap_cell = snap_digit = chain_depth = None
+
+    # decide_rank (row % K) is passed to dpll_step for digit_policy="rank_k";
+    # None (and inert) for every other digit policy. Constant per chain over its
+    # life. Allocated whenever rank_k is active, independent of backtracking.
+    if cfg.step.digit_policy == "rank_k":
+        decide_rank = (torch.arange(B, device=device) % K)
+    else:
+        decide_rank = None
+
+    # E2 backtracking diagnostics (per-conflict histograms + negation counts).
+    conflict_depths: list[int] = []
+    backtrack_targets: list[int] = []
+    n_negations = 0
+    n_unsound_negations = 0
+
     # Diagnostic accumulators (counted only over active chain-rows).
     diag_total_deduced = 0
     diag_total_unsound_deductions = 0
@@ -329,6 +426,9 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         if in_puzzle_mask_b is not None:
             in_puzzle_mask_b[rows] = in_puzzle_mask[p].unsqueeze(0).expand(K, -1)
         chain_done[rows] = False
+        if use_snap:
+            # Fresh puzzle in this slot -> empty every chain's decision stack.
+            chain_depth[rows] = 0
         if log_fill:
             # Reset this slot's per-round buffers — we re-use buffers across
             # puzzle generations and indexing is by slot_round which restarts.
@@ -383,8 +483,13 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         new_state, conflict, just_solved_chain, _, info = dpll_step(
             model, state, given_mask_b, cfg.step,
             in_puzzle_mask=in_puzzle_mask_b, want_stats=False,
+            decide_rank=decide_rank,
         )
-        total_calls += 1
+        # One `dpll_step` performs `info["n_passes"]` model forwards this
+        # round (E3-O3 iterated deduction; == 1 at the default single pass, so
+        # accounting stays byte-identical). Charge every forward to the cost
+        # so `model_calls` / `puzzle_calls` remain honest forwards-per-solve.
+        total_calls += int(info["n_passes"])
 
         # ----- Diagnostics on this round (active rows only) -----
         active_rows = ~chain_done                                              # [B]
@@ -470,6 +575,46 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                 deduce_bits_buf[idx_b, idx_r] = row_deduce_bits[active]
                 decision_bits_buf[idx_b, idx_r] = row_decision_bits[active]
 
+        # ----- E2 snapshot push (non-root policies only) -----
+        # A chain "made a decision" this round iff it neither conflicted nor
+        # solved AND some multi-alive cell became a singleton via the decide
+        # step. We reconstruct (cell, digit) by diffing the post-deduce state
+        # against new_state: exactly one cell drops from multi-alive to a
+        # singleton (dpll_step pins one cell/round). The snapshot we store is
+        # the POST-DEDUCE, PRE-PIN state so a later negation can kill the pinned
+        # digit soundly. Restricted to active chains with stack headroom.
+        if use_snap:
+            deduce_mask_s = info["deduce_mask"]                      # [B, S, C] canonical
+            state_post_deduce = state.masked_fill(deduce_mask_s, 0.0)
+            pre_alive = (state_post_deduce[..., :vd] > 0.5).sum(dim=-1)   # [B, S]
+            post_alive = (new_state[..., :vd] > 0.5).sum(dim=-1)          # [B, S]
+            # Decided cell: went multi-alive (>1) -> singleton (==1).
+            decided_cell_mask = (pre_alive > 1) & (post_alive == 1)      # [B, S]
+            made_decision = (
+                decided_cell_mask.any(dim=-1) & ~conflict
+                & ~just_solved_chain & ~chain_done
+            )                                                            # [B]
+            has_room = chain_depth < D_max
+            push_rows = (made_decision & has_room).nonzero(as_tuple=True)[0]
+            if push_rows.numel() > 0:
+                # cell = the (single) decided cell; digit = its surviving bit
+                # in new_state. argmax over the mask / vocab gives both.
+                cell_of = decided_cell_mask[push_rows].float().argmax(dim=-1)  # [n]
+                depth_of = chain_depth[push_rows]
+                # Snapshot the post-deduce, pre-pin state (uint8).
+                snap_state[push_rows, depth_of] = (
+                    state_post_deduce[push_rows] > 0.5
+                ).to(torch.uint8)
+                snap_cell[push_rows, depth_of] = cell_of
+                digit_of = new_state[push_rows, cell_of, :vd].argmax(dim=-1)
+                snap_digit[push_rows, depth_of] = digit_of
+                chain_depth[push_rows] = depth_of + 1
+            # Chains that decided but overflowed the stack: bump depth anyway so
+            # the depth-at-conflict diagnostic stays honest and overflow -> root.
+            overflow_rows = (made_decision & ~has_room)
+            if overflow_rows.any():
+                chain_depth[overflow_rows] = chain_depth[overflow_rows] + 1
+
         # Freeze wrong-singleton-frozen and empty-slot rows: don't let their
         # state mutate.
         new_state = torch.where(chain_done.view(-1, 1, 1), state, new_state)
@@ -547,21 +692,106 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                     _record_attempts(slot_solved.nonzero(as_tuple=True)[0])
                     chain_done[lo:hi] = chain_done[lo:hi] | slot_solved
 
-            # Reset conflict chains in this slot to its puzzle's original.
+            # Reset conflict chains in this slot per the backtrack policy.
             still_conflict = slot_conflict & ~chain_done[lo:hi]
             if still_conflict.any():
                 local_reset = still_conflict.nonzero(as_tuple=True)[0]
                 idx = local_reset + lo
-                new_state[idx] = original[idx]
                 slot_resets[slot] += int(still_conflict.sum().item())
+
+                if not use_snap:
+                    # ===== LEGACY ROOT PATH — byte-identical to pre-E2. =====
+                    new_state[idx] = original[idx]
+                    root_reset_local = local_reset  # all resets are root resets
+                else:
+                    # ===== E2 partial / negating backtrack. =====
+                    # For each conflicting chain, `keep` = how many of its
+                    # decisions to retain (restore state to just before decision
+                    # `keep+1`). keep in [0, depth-1]; keep==depth (only when
+                    # depth==0, i.e. conflict before any decision) or overflow
+                    # -> root (original). The restored snapshot is snap_state
+                    # [keep]; negation kills the digit pinned at decision keep+1
+                    # (= snap_digit[keep]). A chain lands at ROOT (attempt ends)
+                    # only when depth==0 or negation empties the restored cell.
+                    n_conf = int(local_reset.numel())
+                    depth_at_conf = chain_depth[idx]                    # [n_conf]
+                    if cfg.backtrack in ("last", "last+negate"):
+                        # Undo just the most recent decision.
+                        keep = (depth_at_conf - 1).clamp(min=0)
+                    elif cfg.backtrack == "geometric":
+                        # Undo j decisions, j ~ Geometric(p), j>=1. j>=depth ->
+                        # undo everything (keep 0). geometric_ returns
+                        # #failures-before-first-success in {1,2,...} for torch.
+                        j = torch.empty(n_conf, device=device).geometric_(
+                            cfg.geometric_p).long().clamp(min=1)
+                        keep = (depth_at_conf - j).clamp(min=0)
+                    elif cfg.backtrack == "uniform_depth":
+                        # Keep a uniformly-random # of decisions in [0, depth-1].
+                        r = torch.rand(n_conf, device=device)
+                        keep = (r * depth_at_conf.float()).floor().long().clamp(min=0)
+                    else:
+                        raise ValueError(f"unknown backtrack {cfg.backtrack!r}")
+
+                    # No snapshot exists when depth==0 (never decided) or the
+                    # chain overflowed the stack -> those force root.
+                    overflowed = depth_at_conf > D_max
+                    no_decision = depth_at_conf <= 0
+                    force_root = overflowed | no_decision
+
+                    is_root = torch.zeros(n_conf, dtype=torch.bool, device=device)
+                    for jj in range(n_conf):
+                        b = int(idx[jj].item())
+                        d_conf = int(depth_at_conf[jj].item())
+                        if bool(force_root[jj].item()):
+                            new_state[b] = original[b]
+                            chain_depth[b] = 0
+                            is_root[jj] = True
+                            conflict_depths.append(d_conf)
+                            backtrack_targets.append(0)
+                            continue
+                        k = int(keep[jj].item())
+                        # Restore the pre-pin snapshot before decision k+1.
+                        new_state[b] = snap_state[b, k].float()
+                        # A plain (non-negating) restore to keep==0 discards the
+                        # whole prefix -> counts as a root reset (attempt ends).
+                        # A negating restore adds a real constraint (kills a
+                        # candidate) so it EXTENDS the attempt even at k==0,
+                        # UNLESS the cell empties and we escalate to true root.
+                        landed_root = (k == 0) and not negate_on
+                        if negate_on:
+                            # Kill the candidate pinned at decision k+1.
+                            nc = int(snap_cell[b, k].item())
+                            nd = int(snap_digit[b, k].item())
+                            gt_here = int(slot_gt_idx[slot, nc].item())
+                            n_negations += 1
+                            if nd == gt_here:
+                                n_unsound_negations += 1
+                            new_state[b, nc, nd] = 0.0
+                            if float(new_state[b, nc, :vd].sum().item()) < 0.5:
+                                # Restored cell empty -> escalate to root.
+                                new_state[b] = original[b]
+                                k = 0
+                                landed_root = True
+                        chain_depth[b] = k
+                        is_root[jj] = landed_root
+                        conflict_depths.append(d_conf)
+                        backtrack_targets.append(k)
+                    root_reset_local = local_reset[is_root.cpu()]
+
                 if seq:
-                    _record_attempts(local_reset)
-                    n_new = int(local_reset.numel())
-                    chain_attempt_idx[idx] = (
-                        slot_next_attempt_idx[slot] + torch.arange(n_new, device=device)
-                    )
-                    chain_attempt_start[idx] = slot_round[slot] + 1
-                    slot_next_attempt_idx[slot] += n_new
+                    # Only ROOT resets end an attempt; partial backjumps extend
+                    # the current attempt (its prefix work is reused). See the
+                    # solve() docstring on estimate_sequential semantics.
+                    root_idx = root_reset_local + lo
+                    _record_attempts(root_reset_local)
+                    n_new = int(root_reset_local.numel())
+                    if n_new > 0:
+                        chain_attempt_idx[root_idx] = (
+                            slot_next_attempt_idx[slot]
+                            + torch.arange(n_new, device=device)
+                        )
+                        chain_attempt_start[root_idx] = slot_round[slot] + 1
+                        slot_next_attempt_idx[slot] += n_new
 
             slot_round[slot] += 1
 
@@ -678,7 +908,12 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         decision_bitflips_per_round=decision_bitflips_out,
         n_givens=n_givens_out,
         puzzle_calls=puzzle_calls_out,
-        aborted=aborted,
+aborted=aborted,
         dispatched_hi=dispatched_hi,
         n_evaluated=n_evaluated,
+        backtrack_policy=cfg.backtrack,
+        conflict_depths=conflict_depths,
+        backtrack_targets=backtrack_targets,
+        n_negations=n_negations,
+        n_unsound_negations=n_unsound_negations,
     )
