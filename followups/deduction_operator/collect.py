@@ -11,6 +11,9 @@ volume under `/checkpoints/followups/e3/`. Also stages the profiler CSV
 Writes:
   results/summary.csv       one row per (config, seed) + mean/range roll-ups.
   results/o3_table.csv       the O3 passes-per-round comparison table.
+  results/o3_per_pass.csv    the O3 per-pass-index unsound compounding table
+                             (one row per (config, pass_index); empty for
+                             single-pass / older evals).
   results/profile_iters.csv  staged copy of the O2 profiler output (if present).
 
 Missing files are skipped with a warning (a config may not have run yet). If
@@ -32,6 +35,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(HERE, "results")
 SUMMARY_CSV = os.path.join(RESULTS_DIR, "summary.csv")
 O3_TABLE_CSV = os.path.join(RESULTS_DIR, "o3_table.csv")
+O3_PER_PASS_CSV = os.path.join(RESULTS_DIR, "o3_per_pass.csv")
 PROFILE_CSV = os.path.join(RESULTS_DIR, "profile_iters.csv")
 
 VOLUME_NAME = C.VOLUME_NAME
@@ -86,6 +90,11 @@ def _row_from_eval(config: str, seed: int, ev: dict) -> dict:
         "unsound_rate": diag.get("unsound_rate", ""),
         "conflict_precision": diag.get("conflict_precision", ""),
         "conflict_recall": diag.get("conflict_recall", ""),
+        # E3-O3 per-pass compounding (carried on the row for the per-pass
+        # table; not a summary.csv column, so extrasaction="ignore" drops it
+        # there). Degrades gracefully to empty for older/single-pass evals.
+        "_per_pass_deduced": (diag.get("per_pass") or {}).get("deduced", []),
+        "_per_pass_unsound": (diag.get("per_pass") or {}).get("unsound", []),
     }
 
 
@@ -146,6 +155,42 @@ def _write_o3_table(by_config: dict[str, list[dict]]) -> None:
                 "unsound_rate": _mean("unsound_rate"),
             })
     print(f"Wrote {O3_TABLE_CSV}", flush=True)
+
+
+def _write_o3_per_pass_table(by_config: dict[str, list[dict]]) -> None:
+    """E3-O3 per-pass-index unsound compounding.
+
+    One row per (config, pass_index) for the multi-pass O3 configs. Columns:
+    deduced / unsound / unsound_rate at that pass index, summed over seeds
+    (element-wise; configs run 1 seed each so this is just the value).
+    Degrades gracefully: configs with no per-pass data (single-pass or older
+    evals) are simply absent from the table.
+    """
+    cols = ["config", "passes_label", "pass_index",
+            "deduced", "unsound", "unsound_rate"]
+    with open(O3_PER_PASS_CSV, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        for cfg_name, label in O3_ROWS:
+            rows = by_config.get(cfg_name, [])
+            # Element-wise sum of the per-pass lists across seeds (ragged-safe).
+            ded_sum: list[int] = []
+            uns_sum: list[int] = []
+            for r in rows:
+                for i, v in enumerate(r.get("_per_pass_deduced", []) or []):
+                    if i >= len(ded_sum):
+                        ded_sum.append(0); uns_sum.append(0)
+                    ded_sum[i] += int(v)
+                for i, v in enumerate(r.get("_per_pass_unsound", []) or []):
+                    if i < len(uns_sum):
+                        uns_sum[i] += int(v)
+            for i, (d, u) in enumerate(zip(ded_sum, uns_sum)):
+                w.writerow({
+                    "config": cfg_name, "passes_label": label,
+                    "pass_index": i, "deduced": d, "unsound": u,
+                    "unsound_rate": (u / d) if d else "",
+                })
+    print(f"Wrote {O3_PER_PASS_CSV}", flush=True)
 
 
 def main() -> None:
@@ -216,6 +261,7 @@ def main() -> None:
           flush=True)
 
     _write_o3_table(by_config)
+    _write_o3_per_pass_table(by_config)
 
 
 if __name__ == "__main__":

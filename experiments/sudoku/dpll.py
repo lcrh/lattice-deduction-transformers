@@ -179,6 +179,15 @@ def dpll_step(
         (train path). Empty list when GT is unavailable. This is the
         per-pass compounding signal for O3. Gated behind `want_stats` like
         the other counts to avoid per-pass sync overhead when off.
+    Additionally, whenever multi-pass is active (`cfg.deduce_passes != 1`),
+    `info["per_pass_deduce_masks"]` is a list (len n_passes) of the per-pass
+    CANONICAL deduce masks (each [B, S, C], same frame/semantics as
+    `info["deduce_mask"]`). Unlike the counts above these are TENSORS (no
+    `.item()` sync), so they are populated regardless of `want_stats` — this
+    lets the eval-time `solve()` (which runs `want_stats=False`) compute the
+    per-pass-index unsound rate itself against its own ground_truth, exactly
+    as it already does for the round-level `deduce_mask`. Empty at the default
+    single pass.
     At the default `deduce_passes==1` the loop runs exactly once and every
     tensor / count is byte-identical to the pre-multi-pass code path.
 
@@ -257,6 +266,13 @@ def dpll_step(
     cur_state = state  # canonical state carried across passes
     per_pass_deduced: list[int] = []
     per_pass_unsound: list[int] = []
+    # Per-pass CANONICAL deduce masks (each [B, S, C], same frame/semantics as
+    # info["deduce_mask"]) — the per-pass-index compounding signal for E3-O3.
+    # Collected whenever multi-pass is active, INDEPENDENT of want_stats: each
+    # entry is a tensor (no .item() sync), so solve() can do the GT comparison
+    # itself even on the want_stats=False eval hot path. Empty at the default
+    # single pass.
+    per_pass_deduce_masks: list[torch.Tensor] = []
     n_passes = 0
 
     # These hold the FINAL pass's aug-frame artifacts; the decide + invert run
@@ -334,6 +350,12 @@ def dpll_step(
                 deduce_mask_canonical_union = pass_deduce_canon.clone()
             else:
                 deduce_mask_canonical_union = deduce_mask_canonical_union | pass_deduce_canon
+
+            # Record this pass's canonical deduce mask for the per-pass-index
+            # compounding signal (E3-O3). Tensor-only (no sync) so it is
+            # collected regardless of want_stats — solve() reads it to do the
+            # GT comparison itself on the eval hot path.
+            per_pass_deduce_masks.append(pass_deduce_canon)
 
             if want_stats:
                 per_pass_deduced.append(int(pass_deduce_canon.sum().item()))
@@ -518,13 +540,23 @@ def dpll_step(
                 else [int(deduce_mask.sum().item())]
             ),
             "per_pass_unsound": per_pass_unsound,
+            # Per-pass CANONICAL deduce masks (list of [B, S, C]) — tensors,
+            # no sync. Present only for multi-pass (E3-O3); empty at default.
+            "per_pass_deduce_masks": per_pass_deduce_masks,
         }
     else:
         # Skip the .item() calls entirely. `deduce_mask` is a tensor and
         # free to include; `solve()` reads it for soundness diagnostics.
         # `n_passes` is a cheap python int (no sync), kept so callers can
         # account forwards/round without a want_stats round.
-        info = {"deduce_mask": deduce_mask, "n_passes": n_passes}
+        # `per_pass_deduce_masks` is tensor-only (no sync) and lets solve()
+        # compute per-pass unsound rate on the eval hot path (empty at the
+        # default single pass, so byte-identical there).
+        info = {
+            "deduce_mask": deduce_mask,
+            "n_passes": n_passes,
+            "per_pass_deduce_masks": per_pass_deduce_masks,
+        }
     # Always expose aug params and aug-frame inputs alongside info — the
     # trainer's grad forward typically uses `aug_forward()` directly to
     # get its own aug, but exposing the no-grad aug here keeps the

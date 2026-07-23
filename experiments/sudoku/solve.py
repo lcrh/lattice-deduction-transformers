@@ -162,6 +162,15 @@ class SolveResult:
     diag_conflict_fn: int              # ~detected_conflict & (GT-killed)
     diag_conflict_tn: int              # ~detected_conflict & ~(GT-killed)
     diag_active_chain_rounds: int      # denominator: total active chain-rounds processed
+    # ----- E3-O3 per-pass-index compounding (multi-pass deduce only). -----
+    # Indexed by deduce pass number (0..max_passes-1 seen across all rounds).
+    # `per_pass_deduced_total[i]` = # bits eliminated on pass i, summed over
+    # every active chain-round; `per_pass_unsound_total[i]` = of those, how
+    # many killed a GT-alive bit (same GT criterion as the round-level unsound
+    # diagnostic). Empty lists at the default single-pass eval (deduce_passes
+    # == 1), so single-pass reports are unchanged.
+    per_pass_deduced_total: list[int]
+    per_pass_unsound_total: list[int]
     # ----- Optional per-puzzle "if K=1 sequential" cost (only filled if
     # cfg.estimate_sequential=True; -1 elsewhere). -----
     forwards_seq: torch.Tensor         # [P] long — (W+1) * avg_attempt_duration, or -1
@@ -390,6 +399,13 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
     diag_conflict_tn = 0
     diag_active_chain_rounds = 0
 
+    # E3-O3 per-pass-index accumulators. Grown lazily to the max pass count
+    # seen (multi-pass only; stays empty at deduce_passes==1). Each entry
+    # aggregates over active chain-rounds, mirroring the round-level unsound
+    # diagnostic but split by deduce pass index.
+    per_pass_deduced_total: list[int] = []
+    per_pass_unsound_total: list[int] = []
+
     # Per-puzzle label resolver: compares predicted solution to GT and
     # returns (is_correct: bool, label_str: str). Default: argmax-eq match
     # → "CORRECT" / "WRONG". Maze passes a custom label_fn (see solve()
@@ -511,6 +527,25 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
             row_unsound = unsound_per_bit.sum(dim=(1, 2))                      # [B]
             diag_total_deduced += int((row_deduced * active_rows).sum().item())
             diag_total_unsound_deductions += int((row_unsound * active_rows).sum().item())
+
+            # ----- E3-O3 per-pass-index compounding (multi-pass only) -----
+            # dpll_step returns one canonical deduce mask per pass (tensor,
+            # no sync). For each, count active-row deduced/unsound bits the
+            # SAME way as the round-level aggregate above (unsound bit =
+            # deduced bit that was a GT-alive bit). Empty list at the default
+            # single pass -> this whole block is skipped, keeping the
+            # deduce_passes==1 path byte-identical.
+            per_pass_masks = info.get("per_pass_deduce_masks") or []
+            for pass_i, pass_mask in enumerate(per_pass_masks):
+                pass_deduced = pass_mask.sum(dim=(1, 2))                    # [B]
+                pass_unsound = (pass_mask & bit_was_gt_alive).sum(dim=(1, 2))  # [B]
+                d = int((pass_deduced * active_rows).sum().item())
+                u = int((pass_unsound * active_rows).sum().item())
+                if pass_i >= len(per_pass_deduced_total):
+                    per_pass_deduced_total.append(0)
+                    per_pass_unsound_total.append(0)
+                per_pass_deduced_total[pass_i] += d
+                per_pass_unsound_total[pass_i] += u
 
             # GT-conflict label: any GT bit dead in the post-deduce state
             # (i.e., it was alive pre-deduce but is no longer alive). The
@@ -899,6 +934,8 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         diag_conflict_fn=diag_conflict_fn,
         diag_conflict_tn=diag_conflict_tn,
         diag_active_chain_rounds=diag_active_chain_rounds,
+        per_pass_deduced_total=per_pass_deduced_total,
+        per_pass_unsound_total=per_pass_unsound_total,
         forwards_seq=forwards_seq_out,
         seq_winning_idx=seq_winning_idx_out,
         seq_attempts_done=seq_attempts_done_out,

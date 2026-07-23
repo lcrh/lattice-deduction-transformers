@@ -53,7 +53,7 @@ MFU = (per-step FLOPs) / (s_per_step * B200_PEAK_FLOPS). A correct dense
 transformer formula on a well-utilized GPU lands ~20-60% MFU. LDT is TINY
 (dim=128, ~800K params, seq_len 82) so its per-step FLOPs are minuscule and it
 will be heavily KERNEL-LAUNCH / MEMORY-BANDWIDTH bound, NOT matmul bound -> we
-expect its measured MFU to be FAR below 20% (single-digit %), which is the
+expect its measured MFU to be FAR below 20% (typically well under 1%), which is the
 correct, expected physics for a tiny model, not a formula bug. We document that
 loudly: the 20-60% band is the diagnostic for a LARGE compute-bound model; for
 LDT the check confirms the formula is not ABOVE peak (which would be the real
@@ -183,6 +183,13 @@ def trm_maze_arch() -> Arch:
     dominant term; the tiny puzzle-embedding matmul is ignored.)
     params ~7M (repro README).
     steps: 50000 epochs * 1.302 ~= 65100 (repro README formula).
+
+    Convention (matches hrm_maze_arch): we fold the layer count into
+    grad/nograd loops and set num_layers=1, so `backbone_fwd_flops` counts one
+    layer and the loop fields carry the total LAYER-passes. grad = 1 block ×
+    2 layers = 2 grad layer-passes (×3 fwd+bwd); nograd = 11 blocks × 2 layers
+    = 22 layer-passes (×1). Total weighted layer-passes = 2·3 + 22 = 28.
+    (Setting num_layers=2 AND layer-count loops would double-count the layers.)
     """
     L_layers = 2
     H_cycles, L_cycles = 3, 4
@@ -192,11 +199,13 @@ def trm_maze_arch() -> Arch:
         task="maze-30x30-hard",
         dim=512,
         seq_len=900,             # 30x30 grid
-        num_layers=L_layers,     # 2-layer block, run once per recurrent step
+        num_layers=1,            # layer count folded into grad/nograd loops
         ffn_mult=4.0,
-        # 1-step gradient: last recurrent step tracked, rest no_grad.
-        grad_loops=L_layers,                       # final block on the grad graph
-        nograd_loops=L_layers * (total_recur - 1),  # 11 blocks forward-only
+        # 1-step gradient: last recurrent step tracked, rest no_grad. Loops are
+        # LAYER-passes (num_layers=1 above): 1 grad block = 2 layers; 11 nograd
+        # blocks = 22 layers.
+        grad_loops=L_layers,                       # final block = 2 grad layer-passes
+        nograd_loops=L_layers * (total_recur - 1),  # 11 blocks = 22 layer-passes
         batch=768,
         steps=65_100,            # 50000 epochs * 1.302 (repro README)
         params=7_000_000,
@@ -307,7 +316,7 @@ def mfu_check(s_per_step: float, arch: Arch | None = None,
 
     MFU = per-step matmul FLOPs / (s_per_step * peak_flops).
     Returns the raw MFU plus a verdict string. See module docstring: for a TINY
-    model like LDT the physically-correct MFU is single-digit % (kernel-launch /
+    model like LDT the physically-correct MFU is well under 1% (kernel-launch /
     bandwidth bound), so the 20-60% "healthy compute-bound" band is NOT the pass
     condition for LDT — the REAL failure mode to catch is MFU > 100% (formula
     over-counts / faster than the GPU can physically go).
@@ -385,7 +394,7 @@ def main() -> None:
         print("  the repo. The check is a function (mfu_check) that MUST be run")
         print("  once a measured LDT steady-state s/step lands, e.g.:")
         print("      python followups/cost_accounting/flops.py --ldt-s-per-step 0.35")
-        print("  Expected: single-digit % MFU (tiny model, kernel/bandwidth bound);")
+        print("  Expected: sub-1% MFU (tiny model, kernel/bandwidth bound);")
         print("  the FAILURE to catch is MFU > 100% (formula over-counts).")
 
 

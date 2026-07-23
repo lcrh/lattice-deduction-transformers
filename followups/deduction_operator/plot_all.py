@@ -1,4 +1,4 @@
-"""E3 figures O1a / O1b / O2 / O4 from results/ (collect.py output).
+"""E3 figures O1a / O1b / O2 / O3 / O4 from results/ (collect.py output).
 
     uv run --with matplotlib python followups/deduction_operator/plot_all.py
 
@@ -14,6 +14,8 @@ Writes under plots/:
                           the d2_final_only row appended below the matrix.
   o2_per_iteration.pdf    per-iteration eliminations (cumulative + marginal),
                           unsound rate, and CLS logit trajectory (SAT vs UNSAT).
+  o3_per_pass_compounding.pdf  unsound-elimination rate vs deduce pass index
+                          for the multi-pass O3 configs (deduce-to-fixpoint).
   o4_thresholds.pdf       theta_elim sensitivity (baseline + d4_sym overlaid)
                           and theta_CLS sensitivity (baseline).
 
@@ -42,6 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(HERE, "results")
 SUMMARY_CSV = os.path.join(RESULTS_DIR, "summary.csv")
 PROFILE_CSV = os.path.join(RESULTS_DIR, "profile_iters.csv")
+O3_PER_PASS_CSV = os.path.join(RESULTS_DIR, "o3_per_pass.csv")
 PLOTS_DIR = os.path.join(HERE, "plots")
 
 INK = "#15233b"
@@ -398,12 +401,78 @@ def fig_o4(data: dict) -> None:
     _save(fig, "o4_thresholds.pdf")
 
 
+# --------------------------------------------------------------------------
+# O3 — per-pass-index unsound compounding (deduce-to-fixpoint).
+# --------------------------------------------------------------------------
+
+def load_o3_per_pass() -> dict[str, list[tuple[int, float, int]]] | None:
+    """Return {config: [(pass_index, unsound_rate, deduced), ...]} sorted by
+    pass_index, or None if the per-pass table is absent/empty."""
+    if not os.path.exists(O3_PER_PASS_CSV):
+        return None
+    by_cfg: dict[str, list[tuple[int, float, int]]] = {}
+    with open(O3_PER_PASS_CSV, newline="") as fh:
+        for r in csv.DictReader(fh):
+            rate = _fnum(r.get("unsound_rate"))
+            ded = _fnum(r.get("deduced"))
+            pi = _fnum(r.get("pass_index"))
+            if rate is None or pi is None:
+                continue
+            by_cfg.setdefault(r["config"], []).append(
+                (int(pi), rate, int(ded) if ded is not None else 0))
+    for cfg_name in by_cfg:
+        by_cfg[cfg_name].sort(key=lambda t: t[0])
+    return by_cfg or None
+
+
+# O3 per-pass config -> plot label + color.
+O3_PP_STYLE = {
+    "o3_d2": ("2 passes", C_MAIN),
+    "o3_d4": ("4 passes", C_ALT),
+    "o3_fix": ("fixpoint (cap 16)", STRAT_COLORS["late"]),
+    "o3_d4_noaug": ("4 passes, no aug", STRAT_COLORS["early"]),
+}
+
+
+def fig_o3_per_pass() -> None:
+    by_cfg = load_o3_per_pass()
+    if not by_cfg:
+        skipped.append("o3_per_pass:ALL(no data)")
+        return
+
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+    fig.patch.set_facecolor("white")
+    any_data = False
+    for cfg_name, (label, color) in O3_PP_STYLE.items():
+        series = by_cfg.get(cfg_name)
+        if not series:
+            skipped.append(f"o3_per_pass:{cfg_name}")
+            continue
+        xs = [t[0] for t in series]
+        rate = [t[1] for t in series]
+        ax.plot(xs, rate, "-o", color=color, lw=2.0, label=label)
+        any_data = True
+    if not any_data:
+        plt.close(fig)
+        skipped.append("o3_per_pass:ALL(no data)")
+        return
+    ax.set_xlabel("deduce pass index")
+    ax.set_ylabel("unsound-elimination rate (per pass)")
+    ax.set_title("O3 — unsound rate vs deduce pass (compounding)",
+                 fontsize=12, fontweight="bold", color=INK)
+    ax.grid(True, alpha=0.25)
+    ax.legend(fontsize=8, loc="best")
+    fig.tight_layout()
+    _save(fig, "o3_per_pass_compounding.pdf")
+
+
 def main() -> None:
     data = load_summary()
     fig_o1a(data)
     fig_o1b(data)
     fig_o2()
     fig_o4(data)
+    fig_o3_per_pass()
 
     print("\n=== plot_all summary ===", flush=True)
     if written:

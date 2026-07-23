@@ -76,10 +76,17 @@ eval_max_timeouts: int = 50,
     # empty, artifacts fall back next to the input checkpoint (legacy default).
     from pathlib import Path as _Path
     if ckpt_name:
+        # Routed (followup) output MUST use the exchange-contract suffix
+        # `.eval.json` — collect.py, configs.py status/remaining, and
+        # `_common.volume_done_set` all key off `.eval.json`. The standalone
+        # `out_suffix` default (`.eval.fixed.json`) is for un-routed one-off
+        # evals only; honoring it here would make every followup eval invisible
+        # to the whole collect/status pipeline.
+        _routed_suffix = ".eval.json"
         _out_dir = f"{CHECKPOINT_MOUNT}/{ckpt_subdir}" if ckpt_subdir else CHECKPOINT_MOUNT
         _out_base = f"{_out_dir}/{ckpt_name}"
-        eval_path = f"{_out_base}{out_suffix}"
-        eval_jsonl_path = f"{_out_base}{out_suffix.replace('.json', '.jsonl')}"
+        eval_path = f"{_out_base}{_routed_suffix}"
+        eval_jsonl_path = f"{_out_base}{_routed_suffix.replace('.json', '.jsonl')}"
     else:
         eval_path = checkpoint.replace(".pt", out_suffix)
         eval_jsonl_path = checkpoint.replace(".pt", out_suffix.replace(".json", ".jsonl"))
@@ -236,6 +243,17 @@ eval_max_timeouts=_max_to,
           f"[tp={res.diag_conflict_tp} fp={res.diag_conflict_fp} "
           f"fn={res.diag_conflict_fn} tn={res.diag_conflict_tn}] "
           f"over {res.diag_active_chain_rounds} active chain-rounds", flush=True)
+    if res.per_pass_deduced_total:
+        # E3-O3: per-pass unsound compounding (multi-pass deduce only).
+        pp = [
+            (i, d, u, (u / d if d else 0.0))
+            for i, (d, u) in enumerate(
+                zip(res.per_pass_deduced_total, res.per_pass_unsound_total))
+        ]
+        print(f"  Per-pass unsound (deduce_passes={deduce_passes}):", flush=True)
+        for i, d, u, r in pp:
+            print(f"    pass {i}: {u} unsound / {d} deduced  (rate={r:.4%})",
+                  flush=True)
     if backtrack != "root":
         un_rate = res.n_unsound_negations / max(res.n_negations, 1)
         cd_mean = (sum(res.conflict_depths) / len(res.conflict_depths)
@@ -297,6 +315,14 @@ eval_max_timeouts=_max_to,
             "conflict_precision": cls_p,
             "conflict_recall": cls_r,
             "active_chain_rounds": res.diag_active_chain_rounds,
+            # E3-O3 per-pass-index compounding (deduce-to-fixpoint). Lists
+            # indexed by deduce pass number; `unsound[i]` bits killed a
+            # GT-alive bit on pass i, `deduced[i]` total bits killed on pass i.
+            # Inert (empty lists) for single-pass evals (deduce_passes==1).
+            "per_pass": {
+                "deduced": res.per_pass_deduced_total,
+                "unsound": res.per_pass_unsound_total,
+            },
             # E2 backtracking diagnostics.
             "backtrack_policy": res.backtrack_policy,
             "n_negations": res.n_negations,

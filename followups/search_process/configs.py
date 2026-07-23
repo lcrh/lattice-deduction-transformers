@@ -177,17 +177,32 @@ _add_train(
     "base_4k", "TRAIN", {"steps": 4000}, n_seeds=3,
     note="Strong 4K-step checkpoint for the S4 budget axis. ~15 B200-min.",
 )
-# S2 matched-policy trainer: trains WITH P* (the best S1 policy) so the pool's
-# state distribution matches the inference policy. P* is a PLACEHOLDER pending
-# S1 results — currently mrv + rank_k (the leading DPLL-heuristic guess); adjust
-# the overrides here once S1 is collected. Trained at 1K steps to pair with the
-# base_1k mismatch control (where policy effects are largest).
+# --------------------------------------------------------------------------
+# P0 / P* — the two S2 policies, defined ONCE here (single source of truth used
+# by both the train_pstar_1k trainer and the S2 2x2 eval cells below).
+#
+# P* is a PLACEHOLDER pending S1 results. It is deliberately a DETERMINISTIC
+# digit policy (`argmax`), NOT `rank_k`: the trainer's pool has no K-chain
+# structure, so it always pins at rank 0 (== argmax). A `rank_k` P* would make
+# the S2 "matched" cell train at argmax but eval rank-diverse — i.e. NOT truly
+# matched on the digit axis, muddying the very distribution-fidelity claim S2
+# tests. Keeping P*'s digit policy deterministic makes train and eval identical
+# on that axis by construction. Re-point this to the S1 winner before running
+# S2 (prefer a softmax/argmax digit policy for the same reason); everything
+# below derives from these two dicts.
+# --------------------------------------------------------------------------
+P0 = {"cell_policy": "uniform", "digit_policy": "softmax"}
+PSTAR = {"cell_policy": "mrv", "digit_policy": "argmax"}
+
+# S2 matched-policy trainer: trains WITH P* so the pool's state distribution
+# matches the inference policy. Trained at 1K steps to pair with the base_1k
+# mismatch control (where policy effects are largest).
 _add_train(
     "train_pstar_1k", "S2", {
         "steps": 1000, "eval_every": 50,
-        "cell_policy": "mrv", "digit_policy": "rank_k",
+        **PSTAR,
     }, n_seeds=3,
-    note="S2 matched-training: train WITH P*=(mrv,rank_k). PLACEHOLDER P* — "
+    note=f"S2 matched-training: train WITH P*={PSTAR}. PLACEHOLDER P* — "
          "re-point to the S1 winner before running. Eval both P0 and P* below.",
 )
 
@@ -230,14 +245,11 @@ for base in ("baseline", "base_1k"):
 # --------------------------------------------------------------------------
 # S2 — matched vs mismatched 2x2. train-P0 = base_1k (already trained above,
 # eval it under P0 and P*); train-P* = train_pstar_1k (eval under P0 and P*).
-# P0 = (uniform, softmax); P* = (mrv, rank_k) [placeholder — keep in sync with
-# train_pstar_1k]. 3 seeds (table rows). The train-P0/eval-P0 and
-# train-P0/eval-P* cells reuse the base_1k checkpoint under the two policies;
-# the train-P*/eval-* cells use train_pstar_1k.
+# P0 and P* are defined once above (train_pstar_1k derives from the same dicts).
+# 3 seeds (table rows). The train-P0/eval-P0 and train-P0/eval-P* cells reuse
+# the base_1k checkpoint under the two policies; the train-P*/eval-* cells use
+# train_pstar_1k.
 # --------------------------------------------------------------------------
-PSTAR = {"cell_policy": "mrv", "digit_policy": "rank_k"}
-P0 = {"cell_policy": "uniform", "digit_policy": "softmax"}
-
 _add_eval("s2_trainP0_evalP0", "S2", "base_1k", dict(P0), n_seeds=3,
           note="train P0 / eval P0 (the baseline cell of the 2x2).")
 _add_eval("s2_trainP0_evalPstar", "S2", "base_1k", dict(PSTAR), n_seeds=3,

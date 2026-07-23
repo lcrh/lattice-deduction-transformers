@@ -30,11 +30,18 @@ givens. At l = 16 the per-iteration head `all_bce[15]` is exactly the iterate a
 same input) — so the profiler's iteration-16 marginal-elimination count is the
 count the L_eval=16 end-to-end eval applies on each state's FIRST pass. Because
 both use the deterministic threshold on the same bce head over the same states,
-the profiler's iter-16 column is directly comparable to the eliminations the
-L=16 eval logs (see `--assert-l16-forward`: it additionally runs a separate
+the profiler's iter-16 column is comparable to a CLEAN (no-dropout, no-aug)
+L=16 forward (see `--assert-l16-forward`: it additionally runs a separate
 `use_final=True` forward at n_loops=16 over the bank and asserts the iter-16
 elimination count matches, to catch any drift). This makes the O1/O2 tie-back
 checkable without a full end-to-end run.
+
+Caveat: the actual O1 end-to-end eval runs with eval-time dropout (train()
+mode) and augmentation enabled, so it is a stochastic/augmented ensemble over
+passes — its per-round elimination count will not be bit-identical to this
+profiler's clean iter-16 column. The tie-back is exact against a clean forward
+(what `--assert-l16-forward` checks); against the logged O1 numbers it is a
+close comparison, not an equality.
 """
 
 from __future__ import annotations
