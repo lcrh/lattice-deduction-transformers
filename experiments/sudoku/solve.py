@@ -59,6 +59,28 @@ class SolveConfig:
     estimate_sequential: bool = False
     seq_drain_max_rounds: int = 200  # cap on extra rounds spent draining
 
+    # ----- Eval early-abort (heavy-timeout configs) -----
+    # When set, once this many puzzles have TIMED OUT, stop FILLING new puzzles
+    # into slots. In-flight slots are drained to completion so the returned
+    # results form a contiguous prefix (see `dispatched_hi` in SolveResult and
+    # the clean-prefix handling in the callers) — no fast puzzle overtakes a
+    # slow one and skews the pass rate upward. None = never abort (full eval).
+    eval_max_timeouts: int | None = None
+
+    # ----- Resume support -----
+    # Puzzle indices already evaluated in a previous (interrupted) run. These
+    # are never filled into a slot; their outcome is carried by the caller from
+    # the persisted per-puzzle progress log. Lets an interrupted eval resume
+    # without re-solving finished puzzles. None/empty = evaluate all.
+    already_done: set | None = None
+
+    # ----- Streaming per-puzzle progress -----
+    # Called once per puzzle at slot eviction with a dict of that puzzle's
+    # outcome (idx, correct, wrong, timeout, round_solved, puzzle_calls). The
+    # caller persists it (e.g. one JSONL line) so an interrupted eval can
+    # resume from the last recorded puzzle. None = no callback.
+    on_puzzle_done: object = None
+
     # Optional per-puzzle per-round trajectory of the WINNING chain.
     # When True, for each correctly-solved puzzle, record TWO related metrics:
     #
@@ -128,6 +150,17 @@ class SolveResult:
                                  # the streaming-queue solver. -1 if puzzle
                                  # was never filled (only possible if P > Q
                                  # and we exit before all queued).
+    # ----- Early-abort bookkeeping -----
+    aborted: bool = False        # True if eval_max_timeouts was hit and we
+                                 # stopped filling new puzzles.
+    dispatched_hi: int = -1      # highest puzzle index ever filled into a slot.
+                                 # On a full run == P-1. On an aborted run, the
+                                 # caller keeps only the maximal gap-free prefix
+                                 # [0..k] of evaluated puzzles (every idx<=k has
+                                 # an outcome), so the reported percentage is an
+                                 # unbiased prefix, not a fast-puzzle subsample.
+    n_evaluated: int = 0         # # puzzles with a real outcome this run
+                                 # (excludes already_done and never-filled).
 
 
 def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
@@ -229,6 +262,19 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
     n_correct_running = 0
     n_wrong_running = 0
     n_timeout_running = 0
+    n_evaluated = 0             # puzzles given a real outcome this run
+    dispatched_hi = -1         # highest puzzle idx ever filled into a slot
+    aborted = False            # eval_max_timeouts hit → stop filling new puzzles
+
+    # Resume: puzzle indices already evaluated in a prior interrupted run.
+    # Never filled into a slot; the caller carries their outcomes.
+    _already_done = cfg.already_done or set()
+
+    def _advance_to_fillable(np_: int) -> int:
+        """Return the next queue index >= np_ that is not already-done."""
+        while np_ < P and np_ in _already_done:
+            np_ += 1
+        return np_
     # Per-puzzle inference cost: total_calls consumed between fill and evict
     # for that puzzle. -1 if puzzle was never filled. NB: this is calls
     # *during which the slot held the puzzle* — not strictly puzzle-private
@@ -305,15 +351,31 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
             slot_attempt_dur_count[slot] = 0
 
     def evict(slot: int, p: int) -> None:
+        nonlocal n_evaluated
         n_resets_out[p] = slot_resets[slot]
         puzzle_calls_out[p] = total_calls - slot_calls_start[slot]
         slot_puzzle[slot] = -1
         chain_done[slot * K:(slot + 1) * K] = True  # freeze rows so forward is benign
+        n_evaluated += 1
+        # Stream this puzzle's final outcome to the caller (resume/progress log).
+        if cfg.on_puzzle_done is not None:
+            cfg.on_puzzle_done({
+                "idx": int(p),
+                "correct": bool(correct_out[p].item()),
+                "wrong": bool(wrong_out[p].item()),
+                "timeout": bool((~solved_out[p]).item()),
+                "round_solved": int(round_solved_out[p].item()),
+                "puzzle_calls": int(puzzle_calls_out[p].item()),
+            })
 
-    # Initial fill.
-    for slot in range(min(M, P)):
+    # Initial fill (skipping any already-done resume indices).
+    next_puzzle = _advance_to_fillable(next_puzzle)
+    for slot in range(M):
+        if next_puzzle >= P:
+            break
         fill(slot, next_puzzle)
-        next_puzzle += 1
+        dispatched_hi = max(dispatched_hi, next_puzzle)
+        next_puzzle = _advance_to_fillable(next_puzzle + 1)
 
     while (slot_puzzle >= 0).any():
         # `dpll_step` handles augmentation internally if cfg.step.augment;
@@ -542,6 +604,17 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                 evictions.append(slot)
                 if not solved_out[p]:
                     n_timeout_running += 1
+                    # Early-abort: once enough puzzles have timed out, stop
+                    # filling NEW puzzles. In-flight slots still drain below,
+                    # so the caller gets a contiguous evaluated prefix.
+                    if (cfg.eval_max_timeouts is not None
+                            and n_timeout_running >= cfg.eval_max_timeouts
+                            and not aborted):
+                        aborted = True
+                        if verbose:
+                            print(f"  [eval-abort] {n_timeout_running} timeouts "
+                                  f">= {cfg.eval_max_timeouts}; draining in-flight "
+                                  f"slots, no new fills.", flush=True)
                 resets = int(slot_resets[slot].item())
                 rounds = int(slot_round[slot].item())
                 if seq and forwards_seq_out[p].item() == -1:
@@ -561,15 +634,24 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         state = new_state
 
         # Refill evicted slots with the next queued puzzles (or mark empty).
+        # When aborted, we DON'T refill — the loop then drains as in-flight
+        # slots evict and empty out.
         for slot in evictions:
             p = int(slot_puzzle[slot].item())
             if p >= 0:
                 evict(slot, p)
-            if next_puzzle < P:
+            if not aborted and next_puzzle < P:
                 fill(slot, next_puzzle)
-                next_puzzle += 1
+                dispatched_hi = max(dispatched_hi, next_puzzle)
+                next_puzzle = _advance_to_fillable(next_puzzle + 1)
 
-    timeouts = ~solved_out
+    # A puzzle is a TIMEOUT only if it was actually filled+evicted this run
+    # (puzzle_calls >= 0) and never solved. Never-filled puzzles (resume-
+    # skipped, or unfilled after abort) are NOT timeouts — they carry -1 in
+    # puzzle_calls and must be excluded by the caller (they are not part of
+    # this run's evaluated set). This keeps `~solved` from mislabeling them.
+    filled_this_run = puzzle_calls_out >= 0
+    timeouts = (~solved_out) & filled_this_run
     return SolveResult(
         solved=solved_out.clone(),
         correct=correct_out.clone(),
@@ -596,4 +678,7 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         decision_bitflips_per_round=decision_bitflips_out,
         n_givens=n_givens_out,
         puzzle_calls=puzzle_calls_out,
+        aborted=aborted,
+        dispatched_hi=dispatched_hi,
+        n_evaluated=n_evaluated,
     )

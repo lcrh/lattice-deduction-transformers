@@ -38,6 +38,7 @@ _RUN_PARAMS: tuple[tuple[str, object], ...] = (
     ("eval_max_rounds",          1000),
     ("eval_n_chains",            64),
     ("eval_batch_size",          512),
+    ("eval_max_timeouts",        50),
     ("augment",                  True),
     ("data_augment_digit_perm",  True),
     ("data_augment_dihedral",    True),
@@ -124,6 +125,7 @@ def run(
     eval_max_rounds: int = 1000,
     eval_n_chains: int = 64,
     eval_batch_size: int = 512,
+    eval_max_timeouts: int = 50,
     augment: bool = True,
     data_augment_digit_perm: bool = True,
     data_augment_dihedral: bool = True,
@@ -157,15 +159,28 @@ def run(
     # re-evaluate. This is distinct from --overwrite (which errors on an existing
     # checkpoint); --skip-if-done lets a whole-sweep re-launch execute only the
     # missing (config, seed) pairs. Default-off: plain runs are unaffected.
+    # `_resume_eval_only` is set below when --skip-if-done finds a trained
+    # checkpoint (.pt) but no eval.json: we then SKIP training and jump straight
+    # to eval, loading the existing .pt. This makes a killed-mid-eval run (and
+    # the per-puzzle progress-file resume) recoverable without retraining.
+    _resume_eval_only = False
+    _resume_ckpt_path = None
     if skip_if_done and ckpt_name:
         from pathlib import Path as _Path
         _done_dir = f"{CHECKPOINT_MOUNT}/{ckpt_subdir}" if ckpt_subdir else CHECKPOINT_MOUNT
         _done_eval = _Path(_done_dir) / f"{ckpt_name}.eval.json"
+        _done_pt = _Path(_done_dir) / f"{ckpt_name}.pt"
         checkpoint_volume.reload()
         if _done_eval.exists():
             print(f"\n[skip-if-done] {_done_eval} already exists — "
                   f"skipping train + eval (no-op).", flush=True)
             return {"skipped": True, "checkpoint": str(_done_eval.with_suffix("").with_suffix(".pt"))}
+        if _done_pt.exists():
+            # Trained but not (fully) evaluated — resume at the eval stage.
+            print(f"\n[skip-if-done] {_done_pt} exists but no eval.json — "
+                  f"skipping training, resuming EVAL only.", flush=True)
+            _resume_eval_only = True
+            _resume_ckpt_path = _done_pt
 
     ts = time.strftime("%Y%m%d_%H%M%S")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -198,36 +213,42 @@ def run(
         train_name = f"seed{seed}_{steps}s_bs{batch_size}_aug{int(augment)}_{ts}"
         train_no_timestamp = False
 
-    ckpt_path = train(TrainConfig(
-        steps=steps,
-        batch_size=batch_size,
-        seed=seed,
-        lr=lr,
-        weight_decay=weight_decay,
-        bce_pos_mult=bce_pos_mult,
-        bce_neg_mult=bce_neg_mult,
-        softmax_loss_weight=softmax_loss_weight,
-        conflict_loss_weight=conflict_loss_weight,
-        warmup_fraction=warmup_fraction,
-        step=step_cfg,
-        max_age=max_age,
-        use_ema=use_ema,
-        ema_decay=ema_decay,
-        supervise=supervise,
-        eval_every=eval_every,
-        model=model_cfg,
-        data=SudokuExtremeConfig(
-            cache_dir=DATA_MOUNT, batch_size=batch_size, seed=42,
-            n_puzzles=n_train_puzzles,
-            augment_digit_perm=data_augment_digit_perm,
-            augment_dihedral=data_augment_dihedral,
-        ),
-        out_dir=train_out_dir,
-        name=train_name,
-        no_timestamp=train_no_timestamp,
-        overwrite=overwrite,
-    ))
-    checkpoint_volume.commit()
+    if _resume_eval_only:
+        # Trained checkpoint already on the volume — skip training entirely and
+        # eval the existing .pt (per-puzzle progress file, if any, resumes below).
+        from pathlib import Path as _Path
+        ckpt_path = _Path(str(_resume_ckpt_path))
+    else:
+        ckpt_path = train(TrainConfig(
+            steps=steps,
+            batch_size=batch_size,
+            seed=seed,
+            lr=lr,
+            weight_decay=weight_decay,
+            bce_pos_mult=bce_pos_mult,
+            bce_neg_mult=bce_neg_mult,
+            softmax_loss_weight=softmax_loss_weight,
+            conflict_loss_weight=conflict_loss_weight,
+            warmup_fraction=warmup_fraction,
+            step=step_cfg,
+            max_age=max_age,
+            use_ema=use_ema,
+            ema_decay=ema_decay,
+            supervise=supervise,
+            eval_every=eval_every,
+            model=model_cfg,
+            data=SudokuExtremeConfig(
+                cache_dir=DATA_MOUNT, batch_size=batch_size, seed=42,
+                n_puzzles=n_train_puzzles,
+                augment_digit_perm=data_augment_digit_perm,
+                augment_dihedral=data_augment_dihedral,
+            ),
+            out_dir=train_out_dir,
+            name=train_name,
+            no_timestamp=train_no_timestamp,
+            overwrite=overwrite,
+        ))
+        checkpoint_volume.commit()
 
     print("\n" + "=" * 60, flush=True)
     print(f"Eval ({n_eval_puzzles} test puzzles)", flush=True)
@@ -278,18 +299,94 @@ def run(
     # 0.5); final eval uses `eval_cls_threshold` (default 0.6), tuned on
     # the train set.
     eval_step_cfg = dataclasses.replace(step_cfg, cls_threshold=eval_cls_threshold)
+
+    # ----- Eval early-abort + per-puzzle resume wiring -----
+    # Progress file lives next to the checkpoint (.pt -> .eval.progress.jsonl).
+    # It is a streaming, append-only per-puzzle log so an interrupted eval can
+    # resume without re-solving finished puzzles. All of this is default-off:
+    # with eval_max_timeouts<=0 and no pre-existing progress file, the abort
+    # never fires, already_done is empty, and behavior is identical to before.
+    from pathlib import Path as _Path
+    progress_path = ckpt_path.with_suffix(".eval.progress.jsonl")
+    _max_to = eval_max_timeouts if eval_max_timeouts > 0 else None
+
+    # Resume: read any existing progress file, build already_done + prior counts,
+    # and keep the prior rows for the clean-prefix computation + final jsonl.
+    prior_rows: list[dict] = []
+    already_done: set = set()
+    if progress_path.exists():
+        with progress_path.open("r") as _pf:
+            for _line in _pf:
+                _line = _line.strip()
+                if not _line:
+                    continue
+                _row = json.loads(_line)
+                prior_rows.append(_row)
+                already_done.add(int(_row["idx"]))
+        print(f"  [resume] loaded {len(prior_rows)} prior puzzle outcomes from "
+              f"{progress_path.name} ({len(already_done)} indices already done)",
+              flush=True)
+
     solve_cfg = SolveConfig(
         step=eval_step_cfg, max_rounds=eval_max_rounds,
         n_chains=eval_n_chains, batch_size=eval_batch_size,
         estimate_sequential=estimate_sequential,
         seq_drain_max_rounds=seq_drain_max_rounds,
+        eval_max_timeouts=_max_to,
+        already_done=(already_done or None),
     )
-    res = solve(model, x, y, given_mask, solve_cfg)
 
-    n = res.solved.shape[0]
-    n_correct = int(res.correct.sum().item())
-    n_wrong = int(res.wrong.sum().item())
-    n_timeout = int(res.timeouts.sum().item())
+    # Streaming callback: append+flush each puzzle as it completes. No per-puzzle
+    # volume commit — the file rides along on the single commit after solve().
+    _progress_fh = progress_path.open("a")
+
+    def _on_puzzle_done(row: dict) -> None:
+        _progress_fh.write(json.dumps(row) + "\n")
+        _progress_fh.flush()
+
+    solve_cfg.on_puzzle_done = _on_puzzle_done
+    try:
+        res = solve(model, x, y, given_mask, solve_cfg)
+    finally:
+        _progress_fh.close()
+
+    # Merge prior rows (resume) + this run's evicted puzzles into a single
+    # outcomes map, then compute the MAXIMAL GAP-FREE PREFIX [0..k]. Reporting
+    # over the prefix keeps the pass rate an unbiased sample: fast puzzles that
+    # finished past an abort point don't skew the denominator upward.
+    outcomes: dict[int, dict] = {}
+    for _row in prior_rows:
+        outcomes[int(_row["idx"])] = _row
+    P_total = res.solved.shape[0]
+    for i in range(P_total):
+        if i in already_done:
+            continue
+        # A puzzle actually filled+evicted this run has a real outcome. On a full
+        # run that's every index; on an aborted run only a prefix + stragglers.
+        if int(res.puzzle_calls[i].item()) < 0:
+            continue  # never filled — no outcome
+        outcomes[i] = {
+            "idx": i,
+            "correct": bool(res.correct[i].item()),
+            "wrong": bool(res.wrong[i].item()),
+            "timeout": bool(res.timeouts[i].item()),
+            "round_solved": int(res.round_solved[i].item()),
+            "puzzle_calls": int(res.puzzle_calls[i].item()),
+        }
+
+    k = -1
+    while (k + 1) in outcomes:
+        k += 1
+    prefix_idxs = range(0, k + 1)
+
+    n = k + 1
+    n_correct = sum(1 for i in prefix_idxs if outcomes[i]["correct"])
+    n_wrong = sum(1 for i in prefix_idxs if outcomes[i]["wrong"])
+    n_timeout = sum(1 for i in prefix_idxs if outcomes[i]["timeout"])
+    if res.aborted or already_done:
+        print(f"  [prefix] gap-free prefix length n={n} "
+              f"(aborted={res.aborted}, resumed={bool(already_done)}, "
+              f"outcomes={len(outcomes)}/{P_total})", flush=True)
     avg_rounds_solved = float(
         res.round_solved[res.solved].float().mean().item()
         if int(res.solved.sum().item()) > 0 else 0.0
@@ -331,6 +428,9 @@ def run(
     eval_json_path.write_text(json.dumps({
         "checkpoint": str(ckpt_path),
         "n_eval_puzzles": n,
+        "eval_aborted": res.aborted,
+        "n_evaluated_prefix": n,
+        "eval_max_timeouts": eval_max_timeouts,
         "n_chains": res.n_chains,
         "correct": n_correct, "wrong": n_wrong, "timeouts": n_timeout,
         "model_calls_total": res.model_calls,
@@ -377,11 +477,15 @@ def run(
                 "conflict_p": cls_p, "conflict_r": cls_r,
             },
         }) + "\n")
-        for i in range(n):
-            is_correct = bool(res.correct[i].item())
-            is_wrong = bool(res.wrong[i].item())
-            is_timeout = bool(res.timeouts[i].item())
-            rs = int(res.round_solved[i].item())
+        # Dump only the clean-prefix puzzles, sourcing per-puzzle outcome from
+        # the merged `outcomes` map (so resumed indices carry their prior row,
+        # not the False/-1 placeholders in this run's `res`).
+        for i in prefix_idxs:
+            o = outcomes[i]
+            is_correct = bool(o["correct"])
+            is_wrong = bool(o["wrong"])
+            is_timeout = bool(o["timeout"])
+            rs = int(o["round_solved"])
             # forwards_unbatched: per-puzzle cost in single-chain forwards
             # if we ran with no batching of any kind (M=1 slot, K=1 chain,
             # serial). Solved: K*(round_solved+1). Wrong/timeout: K*max_rounds.
@@ -398,10 +502,17 @@ def run(
                 "round_solved": rs,
                 "n_resets": int(res.n_resets[i].item()),
                 "n_givens": int(n_givens_per_puzzle[i]),
-                "puzzle_calls": int(res.puzzle_calls[i].item()),
+                "puzzle_calls": int(o["puzzle_calls"]),
                 "forwards_unbatched": forwards_unbatched,
             }) + "\n")
     checkpoint_volume.commit()
+
+    # The progress file has served its purpose now that eval.json + eval.jsonl
+    # are written and committed. Delete it so a future --skip-if-done resume
+    # doesn't mistake it for partial work. Guard with an existence check.
+    if progress_path.exists():
+        progress_path.unlink()
+        checkpoint_volume.commit()
 
     return {
         "steps": steps, "batch_size": batch_size,
@@ -433,6 +544,7 @@ def entrypoint(
     eval_max_rounds: int = 1000,
     eval_n_chains: int = 64,
     eval_batch_size: int = 512,
+    eval_max_timeouts: int = 50,
     augment: bool = True,
     data_augment_digit_perm: bool = True,
     data_augment_dihedral: bool = True,
@@ -469,6 +581,7 @@ def entrypoint(
         eval_max_rounds=eval_max_rounds,
         eval_n_chains=eval_n_chains,
         eval_batch_size=eval_batch_size,
+        eval_max_timeouts=eval_max_timeouts,
         augment=augment,
         data_augment_digit_perm=data_augment_digit_perm,
         data_augment_dihedral=data_augment_dihedral,
