@@ -14,7 +14,7 @@ are read-only.
 
 Each run is a Modal eval-only entrypoint launched INDIVIDUALLY with:
 
-    uv run modal run --detach experiments/sudoku/eval_only.py -- \
+    uv run modal run --detach experiments/sudoku/eval_only.py \
         --checkpoint /checkpoints/followups/e1/<input>_seed<N>.pt \
         <eval flags> \
         --ckpt-subdir followups/e3 \
@@ -312,7 +312,7 @@ def launch_command(config_name: str, seed: int) -> str:
     eff = effective_flags(config_name)
     ckpt = input_checkpoint(config_name, seed)
     out = output_name(config_name, seed)
-    parts = [f"uv run modal run --detach {EVAL_ENTRYPOINT} --"]
+    parts = [f"uv run modal run --detach {EVAL_ENTRYPOINT}"]
     parts.append(f"{_flag('checkpoint')} {ckpt}")
     # Emit eval flags in a stable order (present keys only).
     ordered = list(FLAG_ORDER) + [k for k in eff if k not in FLAG_ORDER]

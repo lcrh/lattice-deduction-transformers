@@ -390,7 +390,7 @@ def launch_command(config_name: str, seed: int) -> str:
     eff = effective_eval_flags(config_name)
     ckpt = input_checkpoint(config_name, seed)
     out = output_name(config_name, seed)
-    parts = [f"uv run modal run --detach {EVAL_ENTRYPOINT} --"]
+    parts = [f"uv run modal run --detach {EVAL_ENTRYPOINT}"]
     parts.append(f"{_flag('checkpoint')} {ckpt}")
     ordered = list(EVAL_FLAG_ORDER) + [k for k in eff if k not in EVAL_FLAG_ORDER]
     emitted: set[str] = set()
