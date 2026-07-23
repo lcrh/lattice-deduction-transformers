@@ -276,14 +276,33 @@ def run(
     # Eval data: snowflake test split, all SAT (zero_hint_weight=1.0).
     # return_orders=True so we can carry each surviving puzzle's order `n`
     # through the sat_mask and build the per-order breakdown below. The eval
-    # dataset uses a single full batch (batch_size = n_eval_puzzles, one
-    # next_batch() call) so the returned rows align 1:1 with the solve results.
-    eval_ds = SnowflakeDataset(SnowflakeConfig(
+    # dataset uses a single full batch (one next_batch() call) so the returned
+    # rows align 1:1 with the solve results.
+    #
+    # IMPORTANT: cap the batch to the number of UNIQUE puzzles in the filtered
+    # pool. The prefetch loop cycles-with-reshuffle when asked for more samples
+    # than exist, which would silently pad the eval batch with DUPLICATE puzzles
+    # and inflate the per-order denominators / headline correct/n. With an order
+    # filter the pool can easily be smaller than n_eval_puzzles, so we build the
+    # dataset first (n_puzzles caps its pool), read its true size, and request a
+    # single batch of exactly that many unique puzzles. (An empty pool raises in
+    # the dataset constructor rather than hanging — see SnowflakeDataset.)
+    eval_cfg_probe = SnowflakeConfig(
         data_path=f"{DATA_MOUNT}/snowflake_test.parquet",
-        n_puzzles=n_eval_puzzles, batch_size=n_eval_puzzles, seed=200,
+        n_puzzles=n_eval_puzzles, batch_size=1, seed=200,
         zero_hint_weight=1.0, correct_hint_weight=0.0, error_hint_weight=0.0,
         orders=eval_orders_list,           # E4: restrict eval to these orders
         return_orders=True,
+    )
+    eval_pool_size = SnowflakeDataset(eval_cfg_probe).n_puzzles
+    if eval_pool_size < n_eval_puzzles:
+        print(f"  WARNING: only {eval_pool_size} unique eval puzzles available "
+              f"(requested {n_eval_puzzles}"
+              + (f", orders={eval_orders_list}" if eval_orders_list else "")
+              + f"); evaluating on all {eval_pool_size} unique puzzles "
+              "(no duplicate padding).", flush=True)
+    eval_ds = SnowflakeDataset(dataclasses.replace(
+        eval_cfg_probe, batch_size=eval_pool_size,
     ))
     x, y, mask, sat, orders_t = eval_ds.next_batch(); eval_ds.close()
     sat_mask = sat.bool()
@@ -295,7 +314,8 @@ def run(
     state = _build_state(x, in_puzzle_mask)
     given_mask = _given_mask(x)
     n_sat = x.shape[0]
-    print(f"  Loaded {n_sat}/{n_eval_puzzles} SAT snowflake eval puzzles", flush=True)
+    print(f"  Loaded {n_sat}/{eval_pool_size} SAT snowflake eval puzzles "
+          f"(unique pool; requested {n_eval_puzzles})", flush=True)
 
     # Build a separate eval-time step_cfg that may use a different
     # cls_threshold than training (snowflake inherits the cls=0.5/0.6
@@ -353,7 +373,9 @@ def run(
         o = int(eval_orders_per_puzzle[i])
         key = str(o)
         bucket = per_order.setdefault(
-            key, {"correct": 0, "wrong": 0, "timeout": 0, "calls": 0, "n": 0}
+            key,
+            {"correct": 0, "wrong": 0, "timeout": 0,
+             "calls": 0, "calls_n": 0, "n": 0},
         )
         bucket["n"] += 1
         if bool(res.correct[i].item()):
@@ -362,9 +384,14 @@ def run(
             bucket["wrong"] += 1
         if bool(res.timeouts[i].item()):
             bucket["timeout"] += 1
+        # `puzzle_calls` is -1 for never-scheduled puzzles; only real counts
+        # contribute. `calls_n` records how many puzzles that was, so a
+        # downstream calls/solve normalizes by the right denominator rather
+        # than treating skipped puzzles as zero-cost.
         pc = int(res.puzzle_calls[i].item())
         if pc > 0:
             bucket["calls"] += pc
+            bucket["calls_n"] += 1
     # Print the per-order table.
     print(f"\n{'='*60}\nPER-ORDER BREAKDOWN\n{'='*60}", flush=True)
     for key in sorted(per_order, key=lambda k: int(k)):

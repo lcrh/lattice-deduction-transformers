@@ -195,9 +195,12 @@ def _losses(out, state, orig_y, given_mask, is_sat, gt_conflict_target,
 
     n_loops = len(out["bce"])
     # Deep supervision: "all" sums the loss over every iteration; "final"
-    # only accumulates the last iteration's loss. We keep the same
-    # `/ n_loops` normalization in both modes so loss magnitudes stay
-    # comparable (final-only sums one term but still divides by n_loops).
+    # only accumulates the last iteration's loss. We normalize by the number
+    # of *supervised* iterations (not n_loops) so the per-iteration loss
+    # magnitude — and hence the effective gradient scale — is the same in
+    # both modes. Dividing "final" by n_loops instead would train it at
+    # ~1/n_loops the gradient scale, turning the D2 ablation into a hidden
+    # learning-rate cut.
     if supervise == "final":
         iter_indices = (n_loops - 1,)
     else:
@@ -220,7 +223,7 @@ def _losses(out, state, orig_y, given_mask, is_sat, gt_conflict_target,
             total = total + conflict_w * F.binary_cross_entropy_with_logits(
                 c_logits, gt_conflict_target.float(),
             )
-    return total / n_loops
+    return total / len(iter_indices)
 
 
 def train(cfg: TrainConfig):
@@ -242,9 +245,15 @@ def train(cfg: TrainConfig):
         ckpt_path = out_dir / f"{cfg.name}_{ts}.pt"
     # In-train mini-solve curve, one JSON object per eval point, written
     # incrementally next to the checkpoint. Truncated fresh at train start so
-    # a killed run still leaves partial (but valid) curve data.
-    curve_path = ckpt_path.with_suffix(".train_curve.jsonl")
-    curve_path.write_text("")
+    # a killed run still leaves partial (but valid) curve data. Only emitted
+    # for followup runs (deterministic `no_timestamp` path, where collect.py
+    # reads it) — plain benchmark runs keep their original side-effect-free
+    # output. `None` disables the incremental writes below.
+    if cfg.no_timestamp and cfg.eval_every > 0:
+        curve_path = ckpt_path.with_suffix(".train_curve.jsonl")
+        curve_path.write_text("")
+    else:
+        curve_path = None
 
     model = PowersetModel(cfg.model).to(device)
     n_params = sum(p.numel() for p in model.parameters())
@@ -505,17 +514,19 @@ def train(cfg: TrainConfig):
                 flush=True,
             )
             # Append this eval point to the structured train curve. Written
-            # incrementally so a killed run keeps partial curve data.
-            with curve_path.open("a") as _cf:
-                _cf.write(json.dumps({
-                    "step": step,
-                    "correct": n_cor_e,
-                    "wrong": n_wr_e,
-                    "calls": eval_res.model_calls,
-                    "unsound_rate": unsound_rate_e,
-                    "cls_p": cls_p_e,
-                    "cls_r": cls_r_e,
-                }) + "\n")
+            # incrementally so a killed run keeps partial curve data. Skipped
+            # on plain benchmark runs (curve_path is None; see train start).
+            if curve_path is not None:
+                with curve_path.open("a") as _cf:
+                    _cf.write(json.dumps({
+                        "step": step,
+                        "correct": n_cor_e,
+                        "wrong": n_wr_e,
+                        "calls": eval_res.model_calls,
+                        "unsound_rate": unsound_rate_e,
+                        "cls_p": cls_p_e,
+                        "cls_r": cls_r_e,
+                    }) + "\n")
             if device.type == "cuda":
                 torch.cuda.synchronize()
             intrain_eval_secs += time.perf_counter() - _eval_t0

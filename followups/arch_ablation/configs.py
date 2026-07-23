@@ -352,17 +352,24 @@ def _print_list(prefix: str = "") -> None:
 
 
 def _print_status(prefix: str = "") -> None:
-    """Query the volume and print, per config, how many seeds have landed."""
+    """Query the volume and print, per config, how many seeds have landed.
+
+    Degrades gracefully when the volume is unavailable (modal not installed /
+    not authed / dir missing): still prints the full expected picture with a
+    warning tag and zero landed, rather than aborting — matching E4's status.
+    """
     try:
         done = _volume_done_set()
+        err = None
     except Exception as exc:  # noqa: BLE001 — degrade gracefully, don't crash
-        print(f"[status] could not query Modal volume {VOLUME_NAME!r}: "
-              f"{type(exc).__name__}: {exc}", flush=True)
-        print("[status] (need modal auth + network). Aborting status.", flush=True)
-        sys.exit(1)
+        done, err = set(), f"{type(exc).__name__}: {exc}"
 
-    print(f"# E1 volume status  (/{CKPT_SUBDIR}/, {len(done)} eval.json files)",
-          flush=True)
+    if err is not None:
+        print(f"# [status] Modal volume {VOLUME_NAME!r} unavailable ({err}); "
+              "counts below are EXPECTED totals (0 landed).", flush=True)
+    tag = "  (volume unavailable — expected totals)" if err else ""
+    print(f"# E1 volume status  (/{CKPT_SUBDIR}/, {len(done)} eval.json files)"
+          + tag, flush=True)
     n_total = n_done = 0
     for study in STUDY_ORDER:
         study_names = [n for n, c in CONFIGS.items() if c["study"] == study

@@ -21,10 +21,12 @@ Schema (per row):
 Usage:
     uv run modal run --detach experiments/snowflake/gen_data.py
     uv run modal run --detach experiments/snowflake/gen_data.py --n-shards 100 --count-per-shard 10
-    # E4 order-transfer OOD: extend the generated range up to order 10.
+    # E4 order-transfer OOD: extend the generated range up to order 10. This
+    # regenerates the SINGLE consolidated snowflake_train/test.parquet that
+    # run.py reads, so orders 9-10 become available to both training (via
+    # --train-orders) and eval (--eval-orders). run.py has no separate-file
+    # data path, so generate into the main split rather than a side file.
     uv run modal run --detach experiments/snowflake/gen_data.py --n-max 10
-    # (or generate ONLY the new orders 9-10 into a separate suffixed split)
-    uv run modal run --detach experiments/snowflake/gen_data.py --n-min 9 --n-max 10 --out-suffix _ext
 """
 
 from __future__ import annotations

@@ -50,6 +50,18 @@ def cell_to_grid_idx(q: int, r: int, direction: str) -> int:
     dr, dc = DIR_OFFSET[direction]
     row = 3 * (r - R_MIN) + dr
     col = 2 * (q - Q_MIN) + dc
+    # Bounds check: the covering grid assumes (q, r) ∈ [Q_MIN, Q_MAX] × [R_MIN,
+    # R_MAX]. A cell outside that box would otherwise silently wrap into the
+    # wrong row (col >= GRID_COLS) or index out of range (row >= GRID_ROWS) —
+    # corrupting constraint geometry with no error. Larger snowflake orders
+    # (9-10) may place cells beyond [-2, 2]²; fail loudly here rather than
+    # producing garbage. If this fires, the covering-grid extents must grow.
+    if not (0 <= row < GRID_ROWS and 0 <= col < GRID_COLS):
+        raise ValueError(
+            f"cell ({q=}, {r=}, {direction=}) maps to (row={row}, col={col}) "
+            f"outside the {GRID_ROWS}×{GRID_COLS} covering grid; (q, r) must lie "
+            f"in [{Q_MIN}, {Q_MAX}] × [{R_MIN}, {R_MAX}]."
+        )
     return row * GRID_COLS + col
 
 
@@ -283,6 +295,18 @@ class SnowflakeDataset:
             idx = rng_init.choice(len(self.puzzles), cfg.n_puzzles, replace=False)
             self.puzzles = [self.puzzles[i] for i in idx]
         self.n_puzzles = len(self.puzzles)
+        # Fail fast on an empty pool. Without this, `_next_sample` would
+        # IndexError inside the daemon prefetch thread and `next_batch()`
+        # (a blocking queue.get) would hang forever. The common cause is an
+        # `orders` filter for orders not present in `data_path` (e.g. orders
+        # 9-10 requested against a parquet generated with --n-max 8).
+        if self.n_puzzles == 0:
+            raise ValueError(
+                f"SnowflakeDataset pool is empty for data_path={cfg.data_path!r}"
+                + (f", orders={cfg.orders!r}" if cfg.orders is not None else "")
+                + " — no puzzles match. Check the order filter and that the "
+                "parquet was generated for the requested orders."
+            )
 
         self.rng = np.random.default_rng(cfg.seed)
         weights = np.array([cfg.zero_hint_weight, cfg.correct_hint_weight, cfg.error_hint_weight])
@@ -294,6 +318,10 @@ class SnowflakeDataset:
 
         self._queue: Queue = Queue(maxsize=cfg.prefetch_batches)
         self._stop = threading.Event()
+        # Any exception raised inside the daemon prefetch thread is captured
+        # here and re-raised from next_batch(), so a crash in the producer
+        # surfaces to the caller instead of hanging the blocking queue.get().
+        self._error: BaseException | None = None
         self._thread = threading.Thread(target=self._prefetch_loop, daemon=True)
         self._thread.start()
 
@@ -317,22 +345,33 @@ class SnowflakeDataset:
         return x, y, mask, is_sat, order
 
     def _prefetch_loop(self):
-        while not self._stop.is_set():
-            bx, by, bm, bs, bo = [], [], [], [], []
-            for _ in range(self.cfg.batch_size):
-                x, y, mask, is_sat, order = self._next_sample()
-                bx.append(x); by.append(y); bm.append(mask); bs.append(is_sat)
-                bo.append(order)
-            tx = torch.from_numpy(np.stack(bx))
-            ty = torch.from_numpy(np.stack(by))
-            tm = torch.from_numpy(np.stack(bm))
-            ts = torch.tensor(bs, dtype=torch.bool)
-            to = torch.tensor(bo, dtype=torch.long)
+        try:
+            while not self._stop.is_set():
+                bx, by, bm, bs, bo = [], [], [], [], []
+                for _ in range(self.cfg.batch_size):
+                    x, y, mask, is_sat, order = self._next_sample()
+                    bx.append(x); by.append(y); bm.append(mask); bs.append(is_sat)
+                    bo.append(order)
+                tx = torch.from_numpy(np.stack(bx))
+                ty = torch.from_numpy(np.stack(by))
+                tm = torch.from_numpy(np.stack(bm))
+                ts = torch.tensor(bs, dtype=torch.bool)
+                to = torch.tensor(bo, dtype=torch.long)
+                # Retry the put on timeout so we notice self._stop promptly,
+                # but keep looping until the batch is enqueued or we're stopped.
+                while not self._stop.is_set():
+                    try:
+                        self._queue.put((tx, ty, tm, ts, to), timeout=1.0)
+                        break
+                    except Exception:
+                        continue
+        except BaseException as e:  # noqa: BLE001 — surface to next_batch()
+            # Record and unblock any waiting consumer with a sentinel.
+            self._error = e
             try:
-                self._queue.put((tx, ty, tm, ts, to), timeout=1.0)
+                self._queue.put(None, timeout=1.0)
             except Exception:
-                if self._stop.is_set():
-                    break
+                pass
 
     def next_batch(self):
         """Return one prefetched batch.
@@ -341,15 +380,29 @@ class SnowflakeDataset:
         callers unpack. When `cfg.return_orders` is True, returns the 5-tuple
         (x, y, mask, sat, orders) with `orders` a [B] long tensor of per-sample
         puzzle order `n` (E4 per-order eval breakdown).
+
+        Raises RuntimeError if the prefetch thread died (e.g. a bad puzzle
+        record) rather than blocking forever.
         """
-        tx, ty, tm, ts, to = self._queue.get()
+        item = self._queue.get()
+        if item is None:  # prefetch thread crashed — re-raise its error
+            raise RuntimeError(
+                "SnowflakeDataset prefetch thread failed"
+            ) from self._error
+        tx, ty, tm, ts, to = item
         if self.cfg.return_orders:
             return tx, ty, tm, ts, to
         return tx, ty, tm, ts
 
     def close(self):
-        self._stop.set()
-        self._thread.join(timeout=5.0)
+        # Safe to call even if __init__ raised before the thread was created
+        # (e.g. empty-pool guard) — __del__ must not raise on a partial object.
+        stop = getattr(self, "_stop", None)
+        if stop is not None:
+            stop.set()
+        thread = getattr(self, "_thread", None)
+        if thread is not None:
+            thread.join(timeout=5.0)
 
     def __del__(self):
         self.close()
