@@ -53,7 +53,7 @@ def launch_command(
     readability (keys not listed are appended in dict order). The deterministic
     exchange path is set via `--ckpt-subdir` / `--ckpt-name <config>_seed<N>`.
     """
-    parts = [f"uv run modal run --detach {entrypoint} --"]
+    parts = [f"uv run modal run --detach {entrypoint}"]
     parts.append(f"{flag('ckpt_subdir')} {ckpt_subdir}")
     parts.append(f"{flag('ckpt_name')} {config_name}_seed{seed}")
     parts.append(f"{flag('seed')} {seed}")

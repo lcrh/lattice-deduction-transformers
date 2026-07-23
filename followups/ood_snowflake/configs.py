@@ -172,7 +172,7 @@ def launch_command(config_name: str, seed: int) -> str:
     """Build the `uv run modal run --detach ...` command for (config, seed)."""
     cfg = CONFIGS[config_name]
     eff = effective_flags(config_name)
-    parts = [f"uv run modal run --detach {RUN_ENTRYPOINT} --"]
+    parts = [f"uv run modal run --detach {RUN_ENTRYPOINT}"]
     # Deterministic exchange path.
     parts.append(f"{_flag('ckpt_subdir')} {CKPT_SUBDIR}")
     parts.append(f"{_flag('ckpt_name')} {config_name}_seed{seed}")
