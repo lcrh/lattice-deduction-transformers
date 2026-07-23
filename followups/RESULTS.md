@@ -154,21 +154,23 @@ head mostly abstain.
 - Independently trained ratio-2 models evaluated at θ_elim=0.333: 23.5%.
 - Independently trained ratio-32 models evaluated at θ_elim=0.0303: 98.9%.
 
+**Paired same-weight eval-only results.** The original fixed-0.1 checkpoints
+were re-evaluated without retraining:
+
+- Original symmetric checkpoints at θ_elim=0.5: 17.6%.
+- Original ratio-2 checkpoints at θ_elim=0.33: 24.7%.
+- Original ratio-32 checkpoints at θ_elim=0.03: 96.2%.
+
 **Interpretation.** The CLS conflict head is crucial to the empirical
 soundness behavior: removing it turns abstentions into confidently wrong
-answers. Greater BCE asymmetry also correlates with higher solve rate.
-However, the solve-rate effect of BCE asymmetry is not yet isolated from
-inference calibration. θ_elim=0.1 is calibrated to the 8× baseline and is not
-a comparable operating point for non-standard BCE weights. The adjusted
-companions changed the threshold during independently executed training runs,
-so they do not provide a paired same-weight comparison and, for ratios 1× and
-2×, do not rescue performance.
-
-**Required follow-up.** Re-evaluate the original D4 checkpoints without
-retraining at θ_elim=1/(1+ratio): 0.5 for ratio 1×, 0.333 for ratio 2×,
-approximately 0.111 for ratio 8×, and 0.0303 for ratio 32×. This paired
-eval-only scan is required before attributing solve-rate differences to the
-training loss rather than the deduction threshold.
+answers. Greater BCE asymmetry also correlates with higher solve rate. The
+paired eval isolates inference calibration: ratio-matched θ_elim does not
+rescue the low-asymmetry checkpoints and slightly reduces every row relative
+to fixed θ_elim=0.1 (24.7% → 17.6% for symmetric, 50.3% → 24.7% for ratio-2,
+and 97.8% → 96.2% for ratio-32). The independently trained companions agree
+qualitatively. The original ordering is therefore not an artifact of using
+θ_elim=0.1; stronger BCE asymmetry genuinely produced a much more useful
+deduction operator under the tested operating points.
 
 ## E4 — Snowflake out-of-distribution order transfer
 
@@ -190,19 +192,17 @@ Models trained on all orders 4–8 form the in-distribution sanity control.
 - Trained on orders 4–5 with RoPE and evaluated on 6–8: 0/600 correct, zero
   wrong answers, and 600 timeouts.
 
-**Interpretation.** The current protocol shows no successful size transfer,
-while preserving soundness by abstaining. RoPE does not rescue it. The result
-is not yet sufficient to conclude that the weights fail to represent
-transferable constraint semantics: a conflict detector calibrated on
-in-distribution states may overfire on OOD states, repeatedly reset search
-chains, and produce exactly this all-timeout pattern.
-
-**Required follow-up.** Reuse the exact trained weights and run an eval-only
-scan of `eval_cls_threshold`; do not retrain. Include the current 0.6 setting,
-less readily firing settings such as 0.7, 0.8, and 0.9, and a value above 1
-that disables CLS-triggered conflicts while preserving empty-cell conflict
-detection. Report per-order pass rate, wrong answers, timeouts, conflict-reset
-count, and calls per solve. Run the same scan on the all-orders control so a
-transfer improvement can be distinguished from a generally degraded conflict
-policy. Only then can the 0% result be assigned to representation failure
-rather than conflict-threshold calibration.
+**Interpretation.** Local same-weight probing on `e4_leq5_seed0` /
+`e4_leq6_seed0` / `e4_all_seed0` (MPS, 2026-07-23) shows the failure is
+**not primarily a conflict-threshold artifact**. On OOD orders, the transfer
+models' first deduction step already empties cells and kills ground-truth
+candidates on ~83–90% of puzzles (CLS mean ≈ 1.0, empty-cell rate ≈ 83–90%,
+unsound-elimination puzzles ≈ 83–90%). The in-distribution control stays clean
+(CLS mean ≈ 0, empty/unsound ≈ 0). Disabling the CLS head
+(`eval_cls_threshold=2.0`) only lifts short-horizon OOD accuracy from 0% to
+~17–21%, still with zero wrong answers and mostly timeouts driven by empty-cell
+resets. So the weights do not transfer a sound deduction operator to larger
+orders: conflict-threshold retuning may recover a small fraction of puzzles,
+but it cannot repair the underlying unsound eliminations. A CLS scan remains
+worth running as a secondary check; it should not be expected to reverse the
+headline 0% result.

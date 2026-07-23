@@ -53,9 +53,15 @@ def run(
     out_suffix: str = ".eval.fixed.json",
     split: str = "test",
     compile: bool = False,
+    eval_max_timeouts: int = 50,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.set_float32_matmul_precision("high")
+    print("RUN CONFIG  (eval_only)", flush=True)
+    print(f"  checkpoint={checkpoint}", flush=True)
+    print(f"  n_eval={n_eval} threshold={threshold} cls_threshold={cls_threshold} "
+          f"eval_max_timeouts={eval_max_timeouts} out_suffix={out_suffix}",
+          flush=True)
     print(f"Loading: {checkpoint}", flush=True)
     ckpt = load_checkpoint(checkpoint)
     cfg = LoopedTransformerConfig(**ckpt["model_cfg"])
@@ -105,15 +111,18 @@ def run(
         cls_threshold=cls_threshold,
         augment=augment,
     )
+    _max_to = eval_max_timeouts if eval_max_timeouts > 0 else None
     solve_cfg = SolveConfig(
         step=step_cfg, max_rounds=max_rounds,
         n_chains=n_chains, batch_size=batch_size,
         estimate_sequential=estimate_sequential,
         seq_drain_max_rounds=seq_drain_max_rounds,
         log_per_round_fill=log_per_round_fill,
+        eval_max_timeouts=_max_to,
     )
     print(f"Solving {n} puzzles | n_chains={n_chains} batch_size={batch_size} "
-          f"(M={batch_size//n_chains} puzzles/forward) max_rounds={max_rounds}",
+          f"(M={batch_size//n_chains} puzzles/forward) max_rounds={max_rounds} "
+          f"eval_max_timeouts={_max_to}",
           flush=True)
     print(f"  step: threshold={threshold} (deterministic) "
           f"temp_dec={temp_decide} cls_threshold={cls_threshold} "
@@ -123,18 +132,43 @@ def run(
     res = solve(model, x, y, given_mask, solve_cfg)
     elapsed = time.time() - t0
 
-    n_correct = int(res.correct.sum().item())
-    n_wrong = int(res.wrong.sum().item())
-    n_timeout = int(res.timeouts.sum().item())
+    # Clean gap-free prefix [0..k]: on abort, fast stragglers past a gap must
+    # not inflate the denominator. puzzle_calls < 0 means never filled.
+    outcomes: dict[int, dict] = {}
+    for i in range(n):
+        if int(res.puzzle_calls[i].item()) < 0:
+            continue
+        outcomes[i] = {
+            "idx": i,
+            "correct": bool(res.correct[i].item()),
+            "wrong": bool(res.wrong[i].item()),
+            "timeout": bool(res.timeouts[i].item()),
+            "round_solved": int(res.round_solved[i].item()),
+            "n_resets": int(res.n_resets[i].item()),
+            "puzzle_calls": int(res.puzzle_calls[i].item()),
+        }
+    k = -1
+    while (k + 1) in outcomes:
+        k += 1
+    prefix_idxs = range(0, k + 1)
+    n_prefix = k + 1
+    n_correct = sum(1 for i in prefix_idxs if outcomes[i]["correct"])
+    n_wrong = sum(1 for i in prefix_idxs if outcomes[i]["wrong"])
+    n_timeout = sum(1 for i in prefix_idxs if outcomes[i]["timeout"])
     avg_calls = res.model_calls / max(n_correct, 1)
+    if res.aborted:
+        print(f"  [prefix] gap-free prefix length n={n_prefix} "
+              f"(aborted={res.aborted}, outcomes={len(outcomes)}/{n})",
+              flush=True)
 
     den = max(res.diag_total_deduced, 1)
     unsound_rate = res.diag_total_unsound_deductions / den
     cls_p = res.diag_conflict_tp / max(res.diag_conflict_tp + res.diag_conflict_fp, 1)
     cls_r = res.diag_conflict_tp / max(res.diag_conflict_tp + res.diag_conflict_fn, 1)
 
-    print(f"\n{'='*60}\nRESULT (streaming-queue solver, {n} puzzles)\n{'='*60}", flush=True)
-    print(f"  correct={n_correct}/{n}  wrong={n_wrong}  timeouts={n_timeout}", flush=True)
+    print(f"\n{'='*60}\nRESULT (streaming-queue solver, {n_prefix} puzzles)\n{'='*60}", flush=True)
+    print(f"  correct={n_correct}/{n_prefix}  wrong={n_wrong}  timeouts={n_timeout}  "
+          f"aborted={res.aborted}", flush=True)
     print(f"  total_calls={res.model_calls}  avg/correct={avg_calls:.1f}", flush=True)
     print(f"  Deduction soundness: {res.diag_total_unsound_deductions} unsound / "
           f"{res.diag_total_deduced} deduced  (rate={unsound_rate:.4%})", flush=True)
@@ -146,7 +180,11 @@ def run(
 
     out = {
         "checkpoint": checkpoint,
-        "n_eval": n,
+        "n_eval": n_prefix,
+        "n_eval_puzzles": n_prefix,
+        "eval_aborted": res.aborted,
+        "n_evaluated_prefix": n_prefix,
+        "eval_max_timeouts": eval_max_timeouts,
         "solver": "hybrid_per_chunk",
         "solver_config": {
             "threshold": threshold, "temp_decide": temp_decide,
@@ -154,7 +192,9 @@ def run(
             "n_chains": n_chains, "batch_size": batch_size,
             "max_rounds": max_rounds,
             "augment": augment,
+            "eval_max_timeouts": eval_max_timeouts,
         },
+        "correct": n_correct, "wrong": n_wrong, "timeouts": n_timeout,
         "summary": {
             "correct": n_correct, "wrong": n_wrong, "timeouts": n_timeout,
             "total_calls": res.model_calls,
@@ -178,21 +218,16 @@ def run(
     with open(eval_path, "w") as f:
         json.dump(out, f, indent=2)
 
-    # Per-puzzle JSONL alongside the summary JSON.
-    # `forwards_unbatched` = "model forwards this puzzle would cost if we
-    # ran sequentially with no slot-batching and no chain-batching" =
-    # K * (round_solved + 1) for solved (0-round-solve = 1 forward; ×K
-    # because all K chains run, each as its own forward in sequential mode).
-    # Wrongs and timeouts are charged the full K * max_rounds — a wrong
-    # confident answer is no more useful than a timeout.
+    # Per-puzzle JSONL alongside the summary JSON — clean prefix only.
     eval_jsonl_path = checkpoint.replace(".pt", out_suffix.replace(".json", ".jsonl"))
     with open(eval_jsonl_path, "w") as fh:
         fh.write(json.dumps({"kind": "header", **out}) + "\n")
-        for i in range(n):
-            is_correct = bool(res.correct[i].item())
-            is_wrong = bool(res.wrong[i].item())
-            is_timeout = bool(res.timeouts[i].item())
-            rs = int(res.round_solved[i].item())
+        for i in prefix_idxs:
+            o = outcomes[i]
+            is_correct = bool(o["correct"])
+            is_wrong = bool(o["wrong"])
+            is_timeout = bool(o["timeout"])
+            rs = int(o["round_solved"])
             if is_correct:
                 forwards_unbatched = (rs + 1) * n_chains
             else:
@@ -204,7 +239,7 @@ def run(
                 "wrong": is_wrong,
                 "timeout": is_timeout,
                 "round_solved": rs,
-                "n_resets": int(res.n_resets[i].item()),
+                "n_resets": int(o["n_resets"]),
                 "forwards_unbatched": forwards_unbatched,
             }
             if estimate_sequential:
@@ -246,6 +281,7 @@ def entrypoint(
     out_suffix: str = ".eval.fixed.json",
     split: str = "test",
     compile: bool = False,
+    eval_max_timeouts: int = 50,
 ):
     result = run.remote(
         checkpoint=checkpoint, n_eval=n_eval,
@@ -257,6 +293,7 @@ def entrypoint(
         seq_drain_max_rounds=seq_drain_max_rounds,
         dropout_p=dropout_p,
         log_per_round_fill=log_per_round_fill,
+        eval_max_timeouts=eval_max_timeouts,
         out_suffix=out_suffix,
         split=split,
         compile=compile,
