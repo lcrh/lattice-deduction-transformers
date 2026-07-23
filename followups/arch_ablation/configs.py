@@ -241,6 +241,37 @@ _add(
          "conflicts via empty-cell test only).",
 )
 
+# --- D4 matched-threshold companions -------------------------------------
+# The θ_elim=0.1 eval threshold (run.py default) is calibrated to the 8x
+# ASYMMETRIC baseline (deduction kills a candidate when σ(bce) < θ_elim; the
+# 8x false-elim penalty makes the model drive σ very low only when confident,
+# so a low cutoff is matched). A less-asymmetric model's logits aren't pushed
+# that way, so θ_elim=0.1 MISFIRES and the config's poor score conflates
+# "less soundness pressure" with "eval-threshold mismatch". These companions
+# re-run the same-weights configs at a θ_elim MATCHED to the ratio via
+# θ = 1/(1+ratio)  (8x -> 0.111 ≈ the baseline's 0.1, validating the mapping;
+# 1x -> 0.5, 2x -> 0.33, 32x -> 0.03). Same training as their sibling — only
+# the eval `--threshold` differs — so D4 can separate the two effects.
+# The θ_elim=0.1 versions above are KEPT (they show the mismatch effect).
+_add(
+    "d4_sym_th50", "D4",
+    {"bce_pos_mult": 0.5, "bce_neg_mult": 0.5, "threshold": 0.5},
+    n_seeds=3,
+    note="Symmetric BCE (1x) with MATCHED eval θ_elim=0.5. Companion to d4_sym.",
+)
+_add(
+    "d4_ratio2_th33", "D4",
+    {"bce_pos_mult": 1.0, "bce_neg_mult": 0.5, "threshold": 0.33},
+    n_seeds=3,
+    note="Ratio 2x with MATCHED eval θ_elim=0.33 (1/(1+2)). Companion to d4_ratio2.",
+)
+_add(
+    "d4_ratio32_th03", "D4",
+    {"bce_pos_mult": 16.0, "bce_neg_mult": 0.5, "threshold": 0.03},
+    n_seeds=3,
+    note="Ratio 32x with MATCHED eval θ_elim=0.03 (1/(1+32)). Companion to d4_ratio32.",
+)
+
 
 # Ordered sub-study grouping for `list` output (comment headers).
 STUDY_ORDER = [

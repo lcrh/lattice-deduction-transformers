@@ -38,6 +38,7 @@ _RUN_PARAMS: tuple[tuple[str, object], ...] = (
     ("eval_max_rounds",          1000),
     ("eval_n_chains",            64),
     ("eval_batch_size",          512),
+    ("eval_max_timeouts",        50),
     ("augment",                  True),
     ("use_ema",                  False),
     ("ema_decay",                0.999),
@@ -123,6 +124,7 @@ def run(
     eval_max_rounds: int = 1000,
     eval_n_chains: int = 64,
     eval_batch_size: int = 512,
+    eval_max_timeouts: int = 50,
     augment: bool = True,
     use_ema: bool = False,
     ema_decay: float = 0.999,
@@ -321,18 +323,91 @@ def run(
     # cls_threshold than training (snowflake inherits the cls=0.5/0.6
     # decoupling from sudoku). Mask + dihedral flags carry over.
     eval_step_cfg = dataclasses.replace(step_cfg, cls_threshold=eval_cls_threshold)
+
+    # ----- Eval early-abort + per-puzzle resume wiring -----
+    # Progress file lives next to the checkpoint (.pt -> .eval.progress.jsonl).
+    # It is a streaming, append-only per-puzzle log so an interrupted eval can
+    # resume without re-solving finished puzzles. All of this is default-off:
+    # with eval_max_timeouts<=0 and no pre-existing progress file, the abort
+    # never fires, already_done is empty, and behavior is identical to before.
+    progress_path = ckpt_path.with_suffix(".eval.progress.jsonl")
+    _max_to = eval_max_timeouts if eval_max_timeouts > 0 else None
+
+    # Resume: read any existing progress file, build already_done + prior counts,
+    # and keep the prior rows for the clean-prefix computation + final jsonl.
+    prior_rows: list[dict] = []
+    already_done: set = set()
+    if progress_path.exists():
+        with progress_path.open("r") as _pf:
+            for _line in _pf:
+                _line = _line.strip()
+                if not _line:
+                    continue
+                _row = json.loads(_line)
+                prior_rows.append(_row)
+                already_done.add(int(_row["idx"]))
+        print(f"  [resume] loaded {len(prior_rows)} prior puzzle outcomes from "
+              f"{progress_path.name} ({len(already_done)} indices already done)",
+              flush=True)
+
     solve_cfg = SolveConfig(
         step=eval_step_cfg, max_rounds=eval_max_rounds,
         n_chains=eval_n_chains, batch_size=eval_batch_size,
         estimate_sequential=estimate_sequential,
         seq_drain_max_rounds=seq_drain_max_rounds,
+        eval_max_timeouts=_max_to,
+        already_done=(already_done or None),
     )
-    res = solve(model, state, y, given_mask, solve_cfg, in_puzzle_mask=in_puzzle_mask)
 
-    n = res.solved.shape[0]
-    n_correct = int(res.correct.sum().item())
-    n_wrong = int(res.wrong.sum().item())
-    n_timeout = int(res.timeouts.sum().item())
+    # Streaming callback: append+flush each puzzle as it completes. No per-puzzle
+    # volume commit — the file rides along on the single commit after solve().
+    _progress_fh = progress_path.open("a")
+
+    def _on_puzzle_done(row: dict) -> None:
+        _progress_fh.write(json.dumps(row) + "\n")
+        _progress_fh.flush()
+
+    solve_cfg.on_puzzle_done = _on_puzzle_done
+    try:
+        res = solve(model, state, y, given_mask, solve_cfg, in_puzzle_mask=in_puzzle_mask)
+    finally:
+        _progress_fh.close()
+
+    # Merge prior rows (resume) + this run's evicted puzzles into a single
+    # outcomes map, then compute the MAXIMAL GAP-FREE PREFIX [0..k]. Reporting
+    # over the prefix keeps the pass rate an unbiased sample: fast puzzles that
+    # finished past an abort point don't skew the denominator upward.
+    outcomes: dict[int, dict] = {}
+    for _row in prior_rows:
+        outcomes[int(_row["idx"])] = _row
+    P_total = res.solved.shape[0]
+    for i in range(P_total):
+        if i in already_done:
+            continue
+        if int(res.puzzle_calls[i].item()) < 0:
+            continue  # never filled — no outcome
+        outcomes[i] = {
+            "idx": i,
+            "correct": bool(res.correct[i].item()),
+            "wrong": bool(res.wrong[i].item()),
+            "timeout": bool(res.timeouts[i].item()),
+            "round_solved": int(res.round_solved[i].item()),
+            "puzzle_calls": int(res.puzzle_calls[i].item()),
+        }
+
+    k = -1
+    while (k + 1) in outcomes:
+        k += 1
+    prefix_idxs = range(0, k + 1)
+
+    n = k + 1
+    n_correct = sum(1 for i in prefix_idxs if outcomes[i]["correct"])
+    n_wrong = sum(1 for i in prefix_idxs if outcomes[i]["wrong"])
+    n_timeout = sum(1 for i in prefix_idxs if outcomes[i]["timeout"])
+    if res.aborted or already_done:
+        print(f"  [prefix] gap-free prefix length n={n} "
+              f"(aborted={res.aborted}, resumed={bool(already_done)}, "
+              f"outcomes={len(outcomes)}/{P_total})", flush=True)
     avg_rounds_solved = float(
         res.round_solved[res.solved].float().mean().item()
         if int(res.solved.sum().item()) > 0 else 0.0
@@ -368,8 +443,12 @@ def run(
     # (correct/wrong/timeouts/puzzle_calls) are indexed by puzzle position i,
     # which aligns 1:1 with `eval_orders_per_puzzle[i]` (both derived from the
     # same sat_mask-filtered single eval batch, in the same row order).
+    # Restricted to the clean gap-free prefix (only evaluated puzzles count per
+    # order), sourcing each outcome from the merged `outcomes` map so resumed
+    # indices carry their prior row rather than this run's False/-1 placeholders.
     per_order: dict[str, dict] = {}
-    for i in range(n):
+    for i in prefix_idxs:
+        row = outcomes[i]
         o = int(eval_orders_per_puzzle[i])
         key = str(o)
         bucket = per_order.setdefault(
@@ -378,17 +457,17 @@ def run(
              "calls": 0, "calls_n": 0, "n": 0},
         )
         bucket["n"] += 1
-        if bool(res.correct[i].item()):
+        if bool(row["correct"]):
             bucket["correct"] += 1
-        if bool(res.wrong[i].item()):
+        if bool(row["wrong"]):
             bucket["wrong"] += 1
-        if bool(res.timeouts[i].item()):
+        if bool(row["timeout"]):
             bucket["timeout"] += 1
         # `puzzle_calls` is -1 for never-scheduled puzzles; only real counts
         # contribute. `calls_n` records how many puzzles that was, so a
         # downstream calls/solve normalizes by the right denominator rather
         # than treating skipped puzzles as zero-cost.
-        pc = int(res.puzzle_calls[i].item())
+        pc = int(row["puzzle_calls"])
         if pc > 0:
             bucket["calls"] += pc
             bucket["calls_n"] += 1
@@ -405,6 +484,9 @@ def run(
     eval_json_path.write_text(json.dumps({
         "checkpoint": str(ckpt_path),
         "n_eval_puzzles": n,
+        "eval_aborted": res.aborted,
+        "n_evaluated_prefix": n,
+        "eval_max_timeouts": eval_max_timeouts,
         "per_order": per_order,
         "n_chains": res.n_chains,
         "correct": n_correct, "wrong": n_wrong, "timeouts": n_timeout,
@@ -449,11 +531,15 @@ def run(
                 "conflict_p": cls_p, "conflict_r": cls_r,
             },
         }) + "\n")
-        for i in range(n):
-            is_correct = bool(res.correct[i].item())
-            is_wrong = bool(res.wrong[i].item())
-            is_timeout = bool(res.timeouts[i].item())
-            rs = int(res.round_solved[i].item())
+        # Dump only the clean-prefix puzzles, sourcing per-puzzle outcome from
+        # the merged `outcomes` map (so resumed indices carry their prior row,
+        # not the False/-1 placeholders in this run's `res`).
+        for i in prefix_idxs:
+            o = outcomes[i]
+            is_correct = bool(o["correct"])
+            is_wrong = bool(o["wrong"])
+            is_timeout = bool(o["timeout"])
+            rs = int(o["round_solved"])
             # forwards_unbatched: per-puzzle cost in single-chain forwards
             # if we ran with no batching of any kind (M=1 slot, K=1 chain,
             # serial). Solved: K*(round_solved+1). Wrong/timeout: K*max_rounds.
@@ -470,10 +556,17 @@ def run(
                 "timeout": is_timeout,
                 "round_solved": rs,
                 "n_resets": int(res.n_resets[i].item()),
-                "puzzle_calls": int(res.puzzle_calls[i].item()),
+                "puzzle_calls": int(o["puzzle_calls"]),
                 "forwards_unbatched": forwards_unbatched,
             }) + "\n")
     checkpoint_volume.commit()
+
+    # The progress file has served its purpose now that eval.json + eval.jsonl
+    # are written and committed. Delete it so a future --skip-if-done resume
+    # doesn't mistake it for partial work. Guard with an existence check.
+    if progress_path.exists():
+        progress_path.unlink()
+        checkpoint_volume.commit()
 
     return {
         "steps": steps, "batch_size": batch_size,
@@ -504,6 +597,7 @@ def entrypoint(
     eval_max_rounds: int = 1000,
     eval_n_chains: int = 64,
     eval_batch_size: int = 512,
+    eval_max_timeouts: int = 50,
     augment: bool = True,
     use_ema: bool = False,
     ema_decay: float = 0.999,
@@ -537,6 +631,7 @@ def entrypoint(
         eval_max_rounds=eval_max_rounds,
         eval_n_chains=eval_n_chains,
         eval_batch_size=eval_batch_size,
+        eval_max_timeouts=eval_max_timeouts,
         augment=augment,
         use_ema=use_ema,
         ema_decay=ema_decay,
