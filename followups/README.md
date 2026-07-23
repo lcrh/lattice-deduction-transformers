@@ -27,9 +27,44 @@ The paper-reproduction code these experiments build on lives in
 | E7 | [`maze_soundness/`](maze_soundness/) | Why does Maze-Hard emit valid-but-suboptimal paths instead of abstaining, and does a verification step restore soundness? | Maze-Hard | mostly eval/analysis |
 | E8 | [`cost_accounting/`](cost_accounting/) | Normalized training-cost comparison (GPU-hours / FLOPs) + offline α-operator cost | all | bookkeeping + small benchmarks |
 
-**Suggested order:** E1 first (it anchors the appendix and produces the
-checkpoints E2/E3 reuse), then E2/E3/E8 (cheap, mostly eval-only), then E4
-(OOD), then E5/E7, with E6 as the most invasive stretch item.
+## Priority & ordering
+
+**Tier 1 — start immediately, in parallel** (independent pipelines, no
+contention):
+
+1. **E1 `arch_ablation/`** — the fundamental experiment. It anchors the
+   appendix, validates all the shared plumbing (config manifests, curve
+   logging, collect/plot), and produces the checkpoints E2 and E3 consume.
+   Nothing downstream starts cleanly until its D1-DM sweep exists.
+2. **E4 `ood_snowflake/`** — the single highest-leverage result for
+   strengthening the paper's evaluation, and it runs on the Snowflake
+   pipeline so it doesn't contend with E1 at all. Do the occupancy check
+   and translation augmentation first (see its README — the positional
+   confound is a blocker), then the transfer runs are cheap.
+
+**Tier 2 — cheap, start as Tier 1 capacity frees up:**
+
+3. **E8 `cost_accounting/`** — mostly bookkeeping on top of `repro/`
+   measurements; fully independent; unblocks revised paper tables early.
+4. **E2 `search_process/`** phase 1 — the eval-only policy scans run on
+   existing paper-repro checkpoints today; only the matched-training phase
+   waits on S1 results.
+5. **E3 `deduction_operator/`** — eval-only throughout. O1-scaling, O3
+   fixpoint, and O4 thresholds run on the baseline checkpoint immediately;
+   the transfer matrix and `d4_sym`/`d2_final_only` rows wait on E1.
+
+**Tier 3 — independent but each needs its own new machinery:**
+
+6. **E5 `llm_baseline/`** — separate SFT/eval stack; no dependency on the
+   LDT runs, schedule opportunistically.
+7. **E7 `maze_soundness/`** — forensics + verifier eval first; its
+   training-side part is conditional on what the forensics show.
+
+**Tier 4 — stretch:**
+
+8. **E6 `latent_carry/`** — the most invasive change to shared model/
+   trainer/solver code. Start only once E1–E3 have stabilized that code,
+   so the carry plumbing doesn't churn under active ablation runs.
 
 ## Shared conventions
 
