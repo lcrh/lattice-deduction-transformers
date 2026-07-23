@@ -296,8 +296,11 @@ default-off so the existing benchmark commands are untouched):
 - [ ] `run.py`: expose `--num-layers` (plumb to
       `LoopedTransformerConfig.num_layers`; needed for `d1_untied*`).
 - [ ] `train.py` + `run.py`: `--supervise {all,final}` — in `_losses`, sum
-      only the supervised iterations (keep the 1/n normalization consistent
-      so loss magnitudes are comparable).
+      only the supervised iterations and divide by the **number of
+      supervised iterations** (i.e. `/1` in final mode, not `/n_loops` —
+      the returned loss must stay a per-iteration *mean* so both modes
+      train at the same loss/gradient magnitude; dividing one iteration's
+      loss by 16 would be a hidden 16× LR cut confounding D2).
 - [ ] `train.py`: write in-train eval points to a structured
       `<ckpt>.train_curve.jsonl` (step, correct, wrong, calls, unsound_rate,
       cls P/R) instead of stdout-only — D2/D3 learning-curve figures depend
