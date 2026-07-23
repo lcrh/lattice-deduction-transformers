@@ -43,10 +43,10 @@ checkpoints (K=1 and K=512 runs):
    ~never visited, that explains the miss, and a pool-seeding fix
    follows naturally). Only train if the measurement supports it.
 
-**Deliverable.** A results paragraph + small table (base / +verifier /
-+self-consistency: correct / wrong / abstain), and a CLS-trajectory figure
-for the failure cases. Feeds the formal-vs-empirical-soundness discussion
-in the paper.
+**Deliverable.** A small table (base / +verifier / +self-consistency:
+correct / wrong / abstain), a CLS-trajectory figure for the failure cases,
+and the part-1 forensics data (per-failure: first-inconsistent round, CLS
+peak, branch-vs-deduction attribution, path-length excess).
 
 **Cost.** Forensics + verifier evals: a few B200-hours of eval (Maze eval
 is the expensive one — fan out with the existing

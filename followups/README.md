@@ -3,8 +3,8 @@
 Follow-on experiments for **Lattice Deduction Transformers**
 ([arXiv:2605.08605](https://arxiv.org/abs/2605.08605)). Each subdirectory is a
 self-contained experiment with its own README describing the scientific
-question, the run matrix, and the deliverable (a figure/table destined for a
-paper appendix or a follow-up note).
+question, the run matrix, and the deliverable — always experimental data:
+aggregated results (`results/`) and figures/tables (`plots/`).
 
 The paper-reproduction code these experiments build on lives in
 [`../experiments/`](../experiments/) (benchmarks) and [`../repro/`](../repro/)
@@ -32,20 +32,21 @@ The paper-reproduction code these experiments build on lives in
 **Tier 1 — start immediately, in parallel** (independent pipelines, no
 contention):
 
-1. **E1 `arch_ablation/`** — the fundamental experiment. It anchors the
-   appendix, validates all the shared plumbing (config manifests, curve
-   logging, collect/plot), and produces the checkpoints E2 and E3 consume.
-   Nothing downstream starts cleanly until its D1-DM sweep exists.
-2. **E4 `ood_snowflake/`** — the single highest-leverage result for
-   strengthening the paper's evaluation, and it runs on the Snowflake
-   pipeline so it doesn't contend with E1 at all. Do the occupancy check
-   and translation augmentation first (see its README — the positional
-   confound is a blocker), then the transfer runs are cheap.
+1. **E1 `arch_ablation/`** — the fundamental experiment. It validates all
+   the shared plumbing (config manifests, curve logging, collect/plot) and
+   produces the checkpoints E2 and E3 consume. Nothing downstream starts
+   cleanly until its D1-DM sweep exists.
+2. **E4 `ood_snowflake/`** — the highest-leverage standalone result, and
+   it runs on the Snowflake pipeline so it doesn't contend with E1 at all.
+   Do the occupancy check and translation augmentation first (see its
+   README — the positional confound is a blocker), then the transfer runs
+   are cheap.
 
 **Tier 2 — cheap, start as Tier 1 capacity frees up:**
 
 3. **E8 `cost_accounting/`** — mostly bookkeeping on top of `repro/`
-   measurements; fully independent; unblocks revised paper tables early.
+   measurements; fully independent; delivers the normalized cost table
+   early.
 4. **E2 `search_process/`** phase 1 — the eval-only policy scans run on
    existing paper-repro checkpoints today; only the matched-training phase
    waits on S1 results.

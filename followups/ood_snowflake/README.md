@@ -43,8 +43,8 @@ orders 4–8; larger orders just need more CVC5 generation.
   accuracy vs. distance from the training range.
 - Also report **soundness per order**: does the model abstain (conflict →
   timeout) on far-OOD sizes, or does it emit wrong answers? An accuracy
-  drop with preserved soundness is a qualitatively better failure mode and
-  worth a sentence in the writeup.
+  drop with preserved soundness is a qualitatively better failure mode —
+  keep the two outcomes separate in the results.
 - Search-cost per order (calls/solve): OOD difficulty may show up as
   longer searches before it shows up as failures.
 

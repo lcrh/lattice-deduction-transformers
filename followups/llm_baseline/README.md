@@ -25,9 +25,10 @@ isolates this.
   best-of-N sampling at N matched to LDT's inference-compute per puzzle
   (report both). Strict 81-cell exact match; also report cells-correct so
   a near-miss profile is visible.
-- **Report:** params, training GPU-hours, and inference cost next to
-  accuracy — the table row should slot directly into the paper's Table 1
-  format (this experiment also feeds E8's normalized-cost table).
+- **Report:** one summary table with accuracy alongside params, training
+  GPU-hours, and inference cost per puzzle — same columns as the LDT eval
+  summaries so rows are directly comparable (also feeds E8's
+  normalized-cost table).
 
 **Expected outcome (to be falsified):** low-but-nonzero direct-answer
 accuracy, better-but-still-far CoT accuracy at ~4 orders of magnitude more

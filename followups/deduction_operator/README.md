@@ -118,8 +118,8 @@ threshold), baseline and `d4_sym` overlaid on the θ_elim panel.
 
 Figures O1a/O1b, O2, O4 + a table for O3 (passes-per-round vs solve rate /
 forwards-per-solve / decisions-per-solve / unsound rate / wrong answers).
-Together these make a self-contained appendix subsection: "How much
-deduction does one forward buy, and what do more buy?"
+Together they answer one question from four angles: how much deduction
+does one forward buy, and what do more buy?
 
 ## Run budget
 

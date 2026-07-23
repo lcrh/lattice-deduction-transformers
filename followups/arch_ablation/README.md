@@ -22,11 +22,11 @@ Three specific claims/choices this experiment puts numbers on:
 config as baseline (800K params, ~15 min on 1× B200). Every ablation is a
 one-factor deviation from this baseline — no factorial crossing.
 
-**Deliverable.** One appendix section ("Ablations: recursion, supervision,
-and soundness pressure") containing the main ablation table plus three
-figures, described sub-study by sub-study below. Inference-time behavior
-of the deduction operator (extra loops at eval, per-iteration elimination
-profiles, θ_elim sensitivity) is deliberately **not** here — that is
+**Deliverable.** The main ablation table (`results/summary.csv`, one row
+per config × seed with mean/range roll-ups) plus three figures, described
+sub-study by sub-study below. Inference-time behavior of the deduction
+operator (extra loops at eval, per-iteration elimination profiles, θ_elim
+sensitivity) is deliberately **not** here — that is
 [E3 `deduction_operator/`](../deduction_operator/), which reuses this
 experiment's checkpoints.
 

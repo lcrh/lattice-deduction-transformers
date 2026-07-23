@@ -41,9 +41,9 @@ for Table 3. What remains:
    the repro checkpoints (forwards × per-forward cost on the same B200) so
    train/test compute trade-off claims are also same-silicon.
 
-**Deliverable.** One appendix cost table (train GPU-h_B200 + PFLOPs +
-offline CPU-h + inference cost per puzzle, per model × task) and revised
-cost cells for main-text Tables 1/3.
+**Deliverable.** One normalized cost table (train GPU-h_B200 + PFLOPs +
+offline CPU-h + inference cost per puzzle, per model × task):
+`results/cost_table.csv` plus a rendered version.
 
 **Cost.** Bookkeeping + a few short measurement jobs (100-step throughput
 samples, pregen timing): well under 1 B200-hour + some CPU-hours.
@@ -59,7 +59,7 @@ samples, pregen timing): well under 1 B200-hour + some CPU-hours.
 - [ ] Instrument `pregen.py` and `gen_data.py` with total CPU-seconds
       reporting (they run on parallel workers — sum worker time, don't
       report wall-clock).
-- [ ] `cost_table.py`: assemble `results/cost_table.csv` + a LaTeX
-      emitter matching the paper's table style.
+- [ ] `cost_table.py`: assemble `results/cost_table.csv` + a
+      markdown/LaTeX table emitter.
 - [ ] Keep every author-reported (non-measured) number flagged in a
       `source` column — measured vs. reported must stay distinguishable.
