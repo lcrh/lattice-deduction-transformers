@@ -29,10 +29,21 @@ orders 4–8; larger orders just need more CVC5 generation.
 - Search-cost per order (calls/solve): OOD difficulty may show up as
   longer searches before it shows up as failures.
 
-**Stretch — constraint-family transfer:** hold the lattice/grid fixed but
-change the constraint pattern (e.g. train on standard snowflake groups,
-test with an added ring constraint, or vice versa). Requires new CVC5
-generation; scope out only if order transfer produces a clean result first.
+**Why order transfer is the right OOD test (and constraint-family swap is
+not).** LDT never sees a description of the rules: constraints are learned
+from (puzzle, solution) pairs and live in the weights; the input carries
+only the lattice state and the topology mask. Order transfer is well-posed
+because the constraint *family* is fixed and the concrete constraint
+groups are a deterministic function of the visible topology — the model
+has everything it needs to apply the same pattern at unseen sizes. Naively
+swapping the constraint family at test time is ill-posed: the change is
+invisible in the input, so any method would fail, and LDT fails in the
+worst direction (added constraints → confidently returns old-rules
+solutions as "solved"; removed constraints → eliminations become unsound).
+Do not run that version. The well-posed variant — encode constraint-group
+structure *in the input*, train over a distribution of families, test on
+held-out families (a learned generic AllDifferent propagator) — is a new
+architecture axis and belongs in its own future experiment, not here.
 
 **Deliverable.** One table (per-order accuracy/soundness for each training
 range) + one figure (accuracy & soundness vs. test order, vertical line at
