@@ -16,10 +16,11 @@ orders 4–8; larger orders just need more CVC5 generation.
 |---|---|---|
 | `e4_leq5` | {4, 5} | {6, 7, 8} (+ 9, 10 stretch) |
 | `e4_leq6` | {4, 5, 6} | {7, 8} (+ 9, 10) |
-| `e4_all` (control) | {4–8} | {4–8} held-out split (the paper setting, re-run) |
+| `e4_all` (control) | {4–8} | {4–8} held-out split (the standard setting, re-run) |
 
-- Match `--n-train-puzzles 500` and hyperparameters to the paper's
-  Snowflake config; only the order filter varies. 3 seeds.
+- Match `--n-train-puzzles 500` and hyperparameters to the standard
+  Snowflake config (`experiments/snowflake/run.py` defaults); only the
+  order filter varies. 3 seeds.
 - **Positional confound — must be fixed before any transfer run.**
   Snowflake placement is deterministic and hub-centered
   (`cell_to_grid_idx` in `experiments/snowflake/data.py`), and snowflake
@@ -97,6 +98,6 @@ the training boundary).
 - [ ] `gen_data.py`: parameterize max order; generate orders 9–10
       (~1,000 base solutions each, same greedy-minimization uniqueness
       pipeline). Record generation cost — feeds E7.
-- [ ] Sanity gate: `e4_all` must reproduce the paper's 100/100 before the
-      transfer runs are interpreted.
+- [ ] Sanity gate: `e4_all` must reproduce the known 100/100 result before
+      the transfer runs are interpreted.
 - [ ] `collect.py` / plot script for the accuracy-vs-order figure.

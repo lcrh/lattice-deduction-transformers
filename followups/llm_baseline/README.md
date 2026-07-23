@@ -1,10 +1,10 @@
 # E5 — Fine-tuned LLM baseline (Qwen3 on Sudoku-Extreme)
 
-**Question.** The paper compares against *zero-shot* frontier LLMs (which
-solve 0%). That leaves open whether LDT's gains come from the recursive
-architecture + lattice deduction, or simply from being *trained on the
-task*. A fine-tuned open LLM on the identical 1K-puzzle training set
-isolates this.
+**Question.** Zero-shot frontier LLMs solve 0% of Sudoku-Extreme, but
+zero-shot is a weak comparison for a task-trained solver: it leaves open
+whether LDT's gains come from the recursive architecture + lattice
+deduction, or simply from being *trained on the task*. A fine-tuned open
+LLM on the identical 1K-puzzle training set isolates this.
 
 **Design.**
 
@@ -33,7 +33,7 @@ isolates this.
 **Expected outcome (to be falsified):** low-but-nonzero direct-answer
 accuracy, better-but-still-far CoT accuracy at ~4 orders of magnitude more
 parameters and compute than LDT's 800K/15-min budget. Whatever the number,
-it replaces the weakest comparison in the paper with a meaningful one.
+it turns the LLM comparison from a strawman into a meaningful one.
 
 **Cost.** LoRA SFT on 1K–8K examples is minutes-to-an-hour per config on a
 single A100/H100-class GPU; eval dominated by best-of-N sampling. Budget a
@@ -55,9 +55,9 @@ few GPU-hours total across {2 models × 2 formats × ±aug}. Trim the grid to
       grids as wrong, count separately), best-of-N with a
       validity-then-majority pick; writes `eval.json` in the same schema
       family as the LDT evals so `collect.py` patterns transfer.
-- [ ] Prompt formats documented in a `prompts.md` (the paper appendix
-      already has zero-shot prompts to stay consistent with).
+- [ ] Prompt formats documented in a `prompts.md` (stay consistent with
+      the zero-shot prompts used in the original frontier-LLM evals).
 - [ ] Sanity gates: (1) zero-shot Qwen3 baseline first (expect ~0%,
-      consistent with the paper's frontier-LLM result); (2) SFT model must
+      consistent with the zero-shot frontier-LLM results); (2) SFT model must
       reach ~100% on *training* puzzles, otherwise the pipeline (not the
       model) is the bottleneck.

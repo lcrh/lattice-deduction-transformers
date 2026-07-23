@@ -13,7 +13,7 @@ forward, and can extra inference compute (more loops, iterated deduction)
 substitute for training compute?
 
 **Testbed.** Entirely **eval-only**. Primary checkpoint: E1 baseline (4K
-steps). The loop-transfer matrix additionally consumes E1's D1-DM sweep
+steps). The loop-transfer matrix additionally consumes E1's D1-C1 sweep
 (`L_train ∈ {1,2,4,8,16,32}`) and the `d2_final_only` checkpoint; the
 θ-sweep on symmetric BCE consumes E1's `d4_sym`. **Blocked on E1's
 training runs** — coordinate via the checkpoint manifest E1 produces.
@@ -103,9 +103,10 @@ E2's matched/mismatched machinery; note it there rather than duplicating.
 - θ_elim ∈ {0.02, 0.05, 0.1, 0.2, 0.3, 0.5} on the baseline checkpoint:
   is the asymmetry-matched 0.1 on a plateau or a knife-edge? Report solve
   rate, unsound rate, wrong answers, calls/solve.
-- The same sweep on E1's `d4_sym` checkpoint (symmetric BCE): this is the
-  "symmetric + post-hoc tuned threshold" comparison point for the paper's
-  claim that asymmetric-BCE-with-matched-threshold beats it.
+- The same sweep on E1's `d4_sym` checkpoint (symmetric BCE): the best
+  point on that curve is the "symmetric + post-hoc tuned threshold"
+  comparison — testing whether asymmetric-BCE-with-matched-threshold
+  actually beats it.
 - θ_CLS^eval ∈ {0.5, 0.55, 0.6, 0.7, 0.8} on the baseline: sensitivity of
   the false-restart / missed-conflict trade-off around the tuned 0.6.
 
@@ -150,7 +151,7 @@ All eval-only: ~48 transfer evals + ~30 scaling/threshold/fixpoint evals
       `arch_ablation/` conventions; eval-only launch commands target
       `eval_only.py --checkpoint …`.
 - [ ] Coordinate with E1: consume its checkpoint manifest
-      (`e1_d1_L*_dm_*`, `e1_d2_final_only_*`, `e1_d4_sym_*`); don't
+      (`e1_d1_L*_*`, `e1_d2_final_only_*`, `e1_d4_sym_*`); don't
       retrain anything here.
 - [ ] Sanity gates: (1) `--eval-n-loops 16` == no-flag baseline; (2)
       `deduce_passes=1` == current behavior; (3) O2 profiler's iteration-16

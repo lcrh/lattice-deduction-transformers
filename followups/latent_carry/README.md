@@ -3,14 +3,14 @@
 **Question.** LDT's outer loop passes *only the lattice state* between
 solve steps — the transformer's hidden state is discarded after every
 step. TRM/HRM do the opposite: their outer loop carries a latent embedding
-(and TRM reportedly degrades badly on Sudoku without it). The paper calls
-combining the two "a natural direction for future work". Two testable
-readings:
+(and TRM reportedly degrades badly on Sudoku without it). Combining the
+two is the obvious hybrid. Two testable readings:
 
 1. **Sufficiency**: the lattice is an information bottleneck by design —
    if accuracy doesn't move when we add a carried latent, the explicit
    lattice state really is a sufficient search state, which sharpens the
-   paper's story.
+   interpretability story (everything the model "knows" is legible in the
+   lattice).
 2. **Headroom**: if it *does* help (e.g. faster training, fewer forwards
    per solve, better conflict prediction), that's the cheapest known
    upgrade path and worth a follow-up note of its own.
@@ -23,8 +23,8 @@ behavior); return the final `h` alongside the heads.
 **Gradient scope — the latent is pool data, not a gradient path.** The
 carried `h` is written to the pool from the no-grad `dpll_step` forward
 that advances the state, so it is detached by construction; no gradient
-ever crosses solve steps (unchanged from the paper: "we do not currently
-propagate gradients across solve steps"). Within a step, gradient flows
+ever crosses solve steps (unchanged from the base trainer, which never
+propagates gradients across solve steps). Within a step, gradient flows
 through the read path (`W·h_carry`), so the model learns to *use* the
 latent — but nothing gets direct credit for *writing* a latent that helps
 a later step. TRM-style truncated BPTT through the carried latent is a

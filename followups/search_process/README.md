@@ -15,8 +15,8 @@ simplest possible choice:
   analog: true-positive-conflict pool entries are discarded and backfilled
   with fresh puzzles.)
 
-How much performance is left on the table, and — because the paper's core
-design principle is that **the same search process runs at training and
+How much performance is left on the table, and — because a core design
+principle of LDT is that **the same search process runs at training and
 inference** (it shapes the distribution of lattice states the model is
 trained on) — do smarter policies need to be *trained with*, or can they be
 swapped in at inference on an existing checkpoint?
@@ -78,9 +78,9 @@ Scan: ~10 selected combos (not the full cross) × {4K ckpt, 1K ckpt} ×
 
 ## Sub-study S2 — Matched vs. mismatched training
 
-The paper claims running the identical search process at train and
-inference is "critical for keeping the transformer in-distribution". Test
-it: take the best policy P* from S1 plus the baseline policy P0 and train/eval
+Design assumption under test: running the identical search process at
+train and inference is what keeps the transformer in-distribution. Take
+the best policy P* from S1 plus the baseline policy P0 and train/eval
 all four cells:
 
 | | eval P0 | eval P* |
@@ -96,7 +96,7 @@ baseline under identical eval protocol) × 3 seeds × ~15 B200-min.
 Hypothesis worth falsifying: cell policy changes *which* states the model
 sees (e.g. MRV visits low-branching states) → training matched to the
 inference policy should win; if it doesn't, the state distribution is less
-fragile than the paper implies, which is worth knowing (and reporting).
+fragile than assumed, which is worth knowing (and reporting).
 
 ## Sub-study S3 — Backtracking policies
 
@@ -144,8 +144,8 @@ snapshot stack for a 512-row batch × ~60 decisions is ~25 MB as uint8.
 
 Take the 2–3 best (policy, backtrack) combos + baseline and evaluate each
 across the training-budget axis: checkpoints at 1K / 2K / 4K steps
-(re-use paper repro checkpoints, or train them fresh — they're 4–15
-B200-min each).
+(re-use existing benchmark checkpoints, or train them fresh — they're
+4–15 B200-min each).
 
 **Figure S4**: x = train steps, y = sequential forwards/solve (log), one
 line per search config. Expectation: lines converge as deduction gets

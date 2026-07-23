@@ -6,8 +6,8 @@ self-contained experiment with its own README describing the scientific
 question, the run matrix, and the deliverable — always experimental data:
 aggregated results (`results/`) and figures/tables (`plots/`).
 
-The paper-reproduction code these experiments build on lives in
-[`../experiments/`](../experiments/) (benchmarks) and [`../repro/`](../repro/)
+The benchmark code these experiments build on lives in
+[`../experiments/`](../experiments/) and [`../repro/`](../repro/)
 (independent HRM/TRM reproductions).
 
 > **Status: planning skeleton.** Every experiment README below is a design
@@ -35,7 +35,7 @@ contention):
 1. **E1 `arch_ablation/`** — the fundamental experiment. It validates all
    the shared plumbing (config manifests, curve logging, collect/plot) and
    produces the checkpoints E2 and E3 consume. Nothing downstream starts
-   cleanly until its D1-DM sweep exists.
+   cleanly until its D1 loop sweep exists.
 2. **E4 `ood_snowflake/`** — the highest-leverage standalone result, and
    it runs on the Snowflake pipeline so it doesn't contend with E1 at all.
    Do the occupancy check and translation augmentation first (see its
@@ -48,7 +48,7 @@ contention):
    measurements; fully independent; delivers the normalized cost table
    early.
 4. **E2 `search_process/`** phase 1 — the eval-only policy scans run on
-   existing paper-repro checkpoints today; only the matched-training phase
+   existing benchmark checkpoints today; only the matched-training phase
    waits on S1 results.
 5. **E3 `deduction_operator/`** — eval-only throughout. O1-scaling, O3
    fixpoint, and O4 thresholds run on the baseline checkpoint immediately;
@@ -84,8 +84,8 @@ says otherwise:
   report mean and min–max range. 1 seed is fine for exploratory scans.
 - **Baselines are re-run, not quoted**: every ablation table includes the
   unmodified baseline config re-run under the *same* eval protocol as the
-  ablated rows, so numbers are internally comparable (paper Table 1 numbers
-  used a different eval sample size).
+  ablated rows, so numbers are internally comparable (previously published
+  numbers used different eval sample sizes).
 - **Results**: each experiment dir gets a `results/` folder with the
   collected `eval.json` summaries (small JSON/CSV committed to the repo) and
   a `plots/` output of its figure scripts, mirroring `repro/results/`.
