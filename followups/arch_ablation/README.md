@@ -36,6 +36,45 @@ sensitivity) is deliberately **not** here — that is
 [E3 `deduction_operator/`](../deduction_operator/), which reuses this
 experiment's checkpoints.
 
+## Results snapshot (2026-07-23; 69/81 runs landed)
+
+These are means of the per-seed pass percentages available at the snapshot.
+Early-aborted evaluations use their evaluated contiguous prefix as the
+denominator, so low-performing rows can have fewer than 1,000 evaluated
+puzzles.
+
+- **Baseline:** 99.2% (three seeds, zero wrong answers).
+- **D1-C1 recurrence sweep:** L=1 17.1%, L=2 41.6%, L=4 91.9%, L=8
+  98.8%, L=16 99.1%, and L=32 99.0%. The main recurrence effect is already
+  large and saturates around eight loops.
+- **D1-C2 compute ladder:** L=2 at compute parity reaches 95.1%; L=1 at
+  compute parity reaches 44.7%. The two 4×-compute `d1_L1_cm4x` runs and
+  two full-data `d1_L1_bigdata` runs are still training.
+- **D1-C3 static, parameter-matched shapes:** 8×92 reaches 29.8%, 16×64
+  6.0%, and 32×44 4.3%, versus 99.2% for the tied baseline.
+- **D1-C4 larger untied controls:** untied-8 reaches 85.8%, untied-16
+  96.7%, and wide-4×256 31.2%. One `d1_untied16_max` seed has landed at
+  99.8%; the second is still training.
+- **D2 final-only supervision:** 96.1% versus the 99.2% all-iteration
+  baseline.
+- **D3 cross-entropy weight:** λ_ce=0 reaches 24.4%, baseline λ_ce=0.2
+  reaches 99.2%, and λ_ce=1 reaches 99.9%.
+- **D4 at the original fixed θ_elim=0.1:** symmetric BCE reaches 24.7%,
+  ratio-2 reaches 50.3%, ratio-32 reaches 97.8%, and removing the CLS head
+  reaches 21.2%. The no-CLS row fails mainly by returning wrong answers
+  (roughly 79%), whereas the low-asymmetry rows fail mainly by timing out.
+
+The D4 solve-rate comparison at fixed θ_elim=0.1 is **provisional**. That
+threshold is calibrated to the 8× asymmetric BCE and is not a like-for-like
+inference threshold for other BCE ratios. Re-evaluate the *same trained
+checkpoints* at ratio-matched thresholds θ_elim=1/(1+ratio): 0.5 for
+symmetric BCE, 0.333 for ratio-2, about 0.111 for the 8× baseline, and
+0.0303 for ratio-32. This paired eval-only comparison is required before
+attributing the fixed-threshold D4 differences to soundness pressure. The
+currently running `d4_sym_th50`, `d4_ratio2_th33`, and
+`d4_ratio32_th03` configs are independently trained companions, not a
+substitute for the paired same-weight re-evaluation.
+
 ---
 
 ## Baseline
@@ -249,9 +288,12 @@ conflict head** (λ_cls = 0.1). Turn each knob:
 | `d4_ratio32` | 16.0 / 0.5 | 32× | 0.1 |
 | `d4_nocls` | 4.0 / 0.5 | 8× | 0.0 (no CLS token; conflicts detected by empty-cell test only) |
 
-The matching eval-only θ_elim sweeps (including the "symmetric BCE +
-post-hoc tuned threshold" comparison on `d4_sym`) run in E3, which owns
-all inference-time operator knobs.
+The required paired eval-only θ_elim comparison reuses each D4 checkpoint
+at θ_elim=1/(1+ratio): 0.5, 0.333, about 0.111, and 0.0303 for ratios
+1×, 2×, 8×, and 32× respectively. E3 owns the broader threshold sweeps,
+but E1's D4 conclusion must include these matched same-weight evaluations;
+the fixed-0.1 results alone conflate training loss asymmetry with inference
+threshold calibration.
 
 **Table/Figure D4** (`plots/d4_soundness.pdf`): unsound-elimination rate,
 wrong-answer count, solve rate, and calls/solve vs asymmetry ratio;
