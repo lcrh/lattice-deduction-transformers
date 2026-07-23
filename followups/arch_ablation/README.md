@@ -142,16 +142,31 @@ params. If no 800K shape comes close, recursion is doing something no
 static allocation of the same budget can buy.
 
 **C4 — Params escalation (generous untied controls).** Does handing the
-non-recurrent model a few times *more* parameters than the baseline close
-the gap instead? Same spirit as C2's ladder, on the parameter axis:
-`d1_untied8`
-(8 × dim 128, ~1.6M) and `d1_untied16` (16 × dim 128, ~3.2M) — the latter
-matching the tied `d1_L4` in layer-applications per forward at 4× its
-params — plus `d1_wide` (4 × dim 256, ~3.2M), so the two 3.2M points also
-compare depth vs width at parity with each other.
+non-recurrent model several times *more* parameters — at the *same
+training compute* as the baseline — close the gap? Same spirit as C2's
+ladder, on the parameter axis. Note the compute trap this table avoids:
+these models do fewer layer-applications per forward than the baseline's
+64, so at equal steps they'd train on ¼–⅛ of the baseline's FLOPs and a
+loss could be blamed on under-training. Steps are scaled to training-FLOPs
+parity instead:
 
-All configs at `steps = 2000` except C2. ~15 configs + baseline; 3 seeds
-except the C2 4× rungs (2 seeds).
+| config | layers | dim | params (≈) | fwd FLOPs vs baseline | steps (FLOPs parity) |
+|---|---|---|---|---|---|
+| `d1_untied8` | 8 | 128 | ~1.6M | 1/8 | 16,000 |
+| `d1_untied16` | 16 | 128 | ~3.2M | 1/4 | 8,000 |
+| `d1_wide` | 4 | 256 | ~3.2M | 1/4 | 8,000 |
+| `d1_untied16_max` | 16 | 128 | ~3.2M | 1/4 | 32,000 (4×) + full train split |
+
+`d1_untied16` matches the tied `d1_L4` in layer-applications per forward
+at 4× its params; the two 3.2M rows compare depth vs width at parity with
+each other. `d1_untied16_max` is the no-excuses-left challenger — 4×
+params, 4× training compute, unlimited data (2 seeds, ~30 B200-min each);
+if the tied 800K baseline still wins, nothing about the non-recurrent
+setup was starved.
+
+All configs at `steps = 2000` except C2 and C4 (compute-matched steps as
+tabled). ~16 configs + baseline; 3 seeds except the C2 4× rungs and
+`d1_untied16_max` (2 seeds).
 
 **Figure D1** (`plots/d1_loops.pdf`): solve rate (second panel:
 unsound-elimination rate) vs per-forward FLOPs, log-x — C1 as the main
@@ -247,12 +262,13 @@ search-effort impact.
 
 ## Run budget
 
-~21 training configs + baseline ≈ **65 runs**, most ≤7 B200-min
-(low-`L` C1 runs are much cheaper; `d1_L32` is ~15 min; the two C2 4×
-rungs are ~30 min each) ≈ **8 B200-hours** total. If budget-pressed:
-drop to 2 seeds for C3/C4 and `d3_ce1`, drop `d1_shape32x44` and
-`d1_L1_cm4x` (keep `d1_L1_bigdata` — it's the strongest version of the
-claim), never trim D4.
+~22 training configs + baseline ≈ **68 runs**, most ≤7 B200-min
+(low-`L` C1 runs are much cheaper; `d1_L32` is ~15 min; the C2 4× rungs,
+C4 parity runs, and `d1_untied16_max` are ~7–30 min each) ≈
+**9 B200-hours** total. If budget-pressed: drop to 2 seeds for C3/C4 and
+`d3_ce1`, drop `d1_shape32x44` and `d1_L1_cm4x` (keep `d1_L1_bigdata`
+and `d1_untied16_max` — they're the strongest versions of the claim),
+never trim D4.
 
 ## How to run (once implemented)
 
