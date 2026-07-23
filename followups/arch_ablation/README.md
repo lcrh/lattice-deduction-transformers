@@ -82,14 +82,27 @@ per-forward compute is the only thing that varies; train wallclock scales
 4-layer transformer doing one-shot lattice elimination inside the same
 outer search.
 
-**C2 — Training-compute robustness check.** The obvious objection to C1's
-low-L results: "L=1 got 16× less training compute — train it longer."
-Answer it directly with compute-matched re-runs of the contested cells
-only: `L = 1` at 64,000 steps and `L = 2` at 32,000 steps (equal total
-training FLOPs to baseline, ~15 B200-min each; warmup/cosine schedule are
-step-fractions so they rescale automatically, `max_age` stays 100 pool
-steps). If long-trained shallow models still lose, the recursion
-conclusion is robust; no need for CM at every L.
+**C2 — Can data/compute buy back the recursion? (escalation ladder).**
+The obvious objection to C1's low-L results: "L=1 got 16× less training
+compute — train it longer." The working hypothesis is stronger than
+parity: the non-looped model stays far behind *even with more data and
+compute than the baseline ever saw* — a capability gap, not a budget gap.
+Test it as a ladder on `L = 1` (plus one `L = 2` parity point):
+
+| config | n_loops | steps | train puzzles | training FLOPs vs baseline |
+|---|---|---|---|---|
+| `d1_L2_cm` | 2 | 32,000 | 1K | 1× (parity) |
+| `d1_L1_cm` | 1 | 64,000 | 1K | 1× (parity) |
+| `d1_L1_cm4x` | 1 | 256,000 | 1K | 4× |
+| `d1_L1_bigdata` | 1 | 256,000 | full split (`--n-train-puzzles` unset) | 4×, data bottleneck removed |
+
+(Warmup/cosine schedule are step-fractions so they rescale automatically;
+`max_age` stays 100 pool steps.) The decisive evidence is the
+`train_curve.jsonl` trajectory, not just the endpoint: a curve that has
+**plateaued** below baseline at 4× compute with unrestricted data is a
+capability gap; a curve **still climbing** means budget could eventually
+close it and the claim must be stated as a compute-efficiency gap
+instead. The 4× rungs cost ~1 B200-h each — run them at 2 seeds.
 
 **C3 — Depth without tying (per-forward compute matched, params grow).**
 Non-recurrent (`L = 1`) with more *untied* layers, compared against the
@@ -112,13 +125,17 @@ This completes a triangle at roughly equal params and forward FLOPs:
 `d1_untied16` (deep) vs `d1_wide` (wide) vs tied `d1_L4` (iterated, at
 4× fewer params) — separating iteration, depth, and capacity.
 
-All configs at `steps = 4000` except C2. ~10 configs + baseline, 3 seeds.
+All configs at `steps = 4000` except C2. ~12 configs + baseline; 3 seeds
+except the C2 4× rungs (2 seeds).
 
 **Figure D1** (`plots/d1_loops.pdf`): solve rate (second panel:
 unsound-elimination rate) vs per-forward layer-applications, log-x —
 C1 as the main line, C3/C4 as scatter points (marker size ∝ params,
 shape = tied/untied/wide), C2 as annotated open markers on the L=1/L=2
-positions. 3 seeds, mean ± range.
+positions. 3 seeds, mean ± range. Companion panel
+(`plots/d1_escalation_curves.pdf`): C2 learning curves (solve count vs
+training FLOPs, log-x) with the baseline curve overlaid — the
+plateaued-vs-still-climbing evidence.
 
 The C1 checkpoints double as E3's `L_train` axis; E3 reads them from
 their fixed volume paths
@@ -196,10 +213,12 @@ search-effort impact.
 
 ## Run budget
 
-~16 training configs + baseline, × 3 seeds ≈ **50 runs**, most ≤15
-B200-min (low-`L` C1 runs are much cheaper; `d1_L32` is ~30 min)
-≈ **10 B200-hours** total. If budget-pressed: drop to 2 seeds for C2–C4
-and `d3_ce1`, never for D4.
+~18 training configs + baseline ≈ **55 runs**, most ≤15 B200-min
+(low-`L` C1 runs are much cheaper; `d1_L32` is ~30 min; the two C2 4×
+rungs are ~1 B200-h each) ≈ **14 B200-hours** total. If budget-pressed:
+drop to 2 seeds for C3/C4 and `d3_ce1`, drop `d1_L1_cm4x` (keep
+`d1_L1_bigdata` — it's the strongest version of the claim), never trim
+D4.
 
 ## How to run (once implemented)
 

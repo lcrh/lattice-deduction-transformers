@@ -18,7 +18,7 @@ The benchmark code these experiments build on lives in
 
 | ID | Directory | Question | Domain | Est. cost |
 |----|-----------|----------|--------|-----------|
-| E1 | [`arch_ablation/`](arch_ablation/) | Which architectural / loss choices carry the result? (recursion & loop count, deep supervision, L_CE, soundness pressure) | Sudoku-Extreme | ~50 runs × ≤15 B200-min ≈ 10 B200-h |
+| E1 | [`arch_ablation/`](arch_ablation/) | Which architectural / loss choices carry the result? (recursion & loop count incl. a data/compute escalation ladder, deep supervision, L_CE, soundness pressure) | Sudoku-Extreme | ~55 runs ≈ 14 B200-h |
 | E2 | [`search_process/`](search_process/) | Search-process ablations: decision-selection heuristics (uniform vs. MRV vs. entropy-based vs. greedy) and backtracking policies (reset-to-root vs. partial/stochastic backjumping), matched between training and inference | Sudoku-Extreme | mostly eval-only + ~4 training configs |
 | E3 | [`deduction_operator/`](deduction_operator/) | Ablating the deduction operator at inference: extra internal loops, deduce-to-fixpoint before branching, per-iteration elimination profiles, θ_elim sensitivity | Sudoku-Extreme | eval-only, reuses E1 checkpoints |
 | E4 | [`ood_snowflake/`](ood_snowflake/) | Does LDT generalize to *unseen puzzle sizes*? Train on small Snowflake orders, test on larger ones | Snowflake | ~9 runs × ~5 B200-min |
