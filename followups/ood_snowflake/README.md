@@ -4,37 +4,6 @@
 distribution it was trained on? Test by training on small Snowflake Sudoku
 orders and evaluating on strictly larger, never-seen orders.
 
-## Results (2026-07-23; 12/12 runs landed)
-
-- `e4_all` solves 600/600 held-out puzzles across orders 4–8, with zero
-  wrong answers and zero timeouts. Every individual order is at 100%, so
-  the in-distribution sanity gate passes.
-- `e4_leq5` solves 0/600 on unseen orders 6–8. All 600 failures are
-  timeouts, with zero wrong answers.
-- `e4_leq6` solves 0/600 on unseen orders 7–8. Again, all 600 failures are
-  timeouts and none are wrong answers.
-- `e4_leq5_rope` also solves 0/600 on orders 6–8, all by timeout. RoPE
-  therefore does not rescue the current transfer protocol.
-
-The raw result is complete but does not yet isolate a failure to transfer
-the constraint semantics. A conflict detector calibrated in-distribution
-may fire too aggressively on OOD states and repeatedly reset otherwise
-viable search chains. Because every transfer failure is a timeout rather
-than a wrong answer, this inference-time explanation must be tested before
-interpreting 0% as a representation failure.
-
-**Required follow-up — paired conflict-threshold evaluation.** Reuse the
-exact `e4_leq5`, `e4_leq6`, `e4_leq5_rope`, and `e4_all` model weights and
-run eval-only scans of `eval_cls_threshold`; do not retrain. Include the
-current 0.6 setting, thresholds that fire less readily (for example 0.7,
-0.8, and 0.9), and a >1 sentinel that disables CLS-triggered conflicts
-while retaining empty-cell conflict detection. Report per-order accuracy,
-wrong answers, timeouts, conflict-reset count, and calls/solve. The
-`e4_all` checkpoints are the calibration control: any threshold that helps
-transfer but damages their 100% result is not a clean rescue. Only after
-this scan should the experiment conclude whether the zero-transfer result
-comes from learned semantics or conflict-policy calibration.
-
 **Why this is well-posed here.** The Snowflake setup already embeds every
 puzzle into a fixed 15×10 covering grid (supports up to order 19) with a
 per-cell in-puzzle mask, so a single model can be evaluated on sizes it
