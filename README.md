@@ -18,6 +18,12 @@ The shared package `lattice_diffusion/` holds the looped-transformer model,
 the dataset loaders, and the Modal image / checkpoint utilities used by all
 three.
 
+Beyond the paper reproductions, [`followups/`](followups/) holds the
+follow-on experiment program (architecture/loss ablations, search-process
+and deduction-operator studies, OOD generalization, baselines) — currently
+design documents with per-experiment run plans; see
+[`followups/README.md`](followups/README.md) for the index.
+
 All training and inference runs are launched on [Modal](https://modal.com/)
 B200 GPUs. There is no local-GPU codepath.
 
