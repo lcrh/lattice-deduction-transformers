@@ -75,11 +75,27 @@ says otherwise:
 - **Launch**: every run is a Modal app entrypoint, launched with
   `uv run modal run --detach <path> -- <flags>`. One launch command per run
   (no shell loops), so runs are individually addressable/cancellable.
-- **Artifacts**: training writes a checkpoint + `<ckpt>.eval.json` +
-  `<ckpt>.eval.jsonl` to the `lattice-diffusion-checkpoints` Modal volume,
-  exactly like `experiments/sudoku/run.py`. Checkpoint names must embed the
-  experiment ID and config name (e.g. `e1_loops8_cm_seed0_...`), so results
-  can be collected by glob.
+- **Artifacts & checkpoint exchange — by deterministic volume path.**
+  Training writes a checkpoint + `<ckpt>.eval.json` + `<ckpt>.eval.jsonl`
+  to the `lattice-diffusion-checkpoints` Modal volume, exactly like
+  `experiments/sudoku/run.py`, but at a **fixed, timestamp-free path**:
+
+  ```
+  /checkpoints/followups/<exp_id>/<config>_seed<N>.pt
+  /checkpoints/followups/<exp_id>/<config>_seed<N>.eval.json[l]
+  /checkpoints/followups/<exp_id>/<config>_seed<N>.train_curve.jsonl
+  ```
+
+  This path *is* the exchange contract: cross-experiment dependencies
+  (e.g. E3 consuming E1's loop-sweep checkpoints) are expressed as these
+  paths, never as ad-hoc handoffs — so worker agents run in isolation and
+  find inputs where the READMEs say they are, and an independent
+  reproducer who runs the same commands gets the identical layout on
+  their own volume. Eval-only jobs write their outputs under the
+  *consuming* experiment's directory, named
+  `<evalconfig>__on__<input_config>_seed<N>.eval.json`. (The existing
+  `train()` appends a wall-clock timestamp to checkpoint names — the
+  followup runs need a name-override flag; see the E1 TODOs.)
 - **Seeds**: 3 seeds (0, 1, 2) per config for anything that goes in a table;
   report mean and min–max range. 1 seed is fine for exploratory scans.
 - **Baselines are re-run, not quoted**: every ablation table includes the

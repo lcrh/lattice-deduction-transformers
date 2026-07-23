@@ -120,8 +120,9 @@ C1 as the main line, C3/C4 as scatter points (marker size ∝ params,
 shape = tied/untied/wide), C2 as annotated open markers on the L=1/L=2
 positions. 3 seeds, mean ± range.
 
-The C1 checkpoints double as E3's `L_train` axis — name them so E3 can
-glob them (`e1_d1_L<L>_seed<N>_...`).
+The C1 checkpoints double as E3's `L_train` axis; E3 reads them from
+their fixed volume paths
+(`/checkpoints/followups/e1/d1_L<L>_seed<N>.pt`).
 
 ## Sub-study D2 — Deep supervision (Sotaku-style supervise-every-iteration)
 
@@ -232,8 +233,13 @@ default-off so the existing benchmark commands are untouched):
       `<ckpt>.train_curve.jsonl` (step, correct, wrong, calls, unsound_rate,
       cls P/R) instead of stdout-only — D2/D3 learning-curve figures depend
       on this. Consider `--eval-every 50` for the D2/D3 runs.
-- [ ] Checkpoint naming: prefix with config id (`e1_<config>_seed<N>`), and
-      keep the D1-C1 names stable — E3 globs them.
+- [ ] Deterministic checkpoint paths: add a name-override to `run.py` /
+      `train()` (the current naming appends a timestamp) so every run
+      lands at exactly
+      `/checkpoints/followups/e1/<config>_seed<N>.pt` — this path is the
+      exchange contract E2/E3 depend on (see the conventions in
+      `followups/README.md`). Refuse to overwrite an existing checkpoint
+      unless `--overwrite` is passed.
 
 Experiment-side scripts (new, in this directory):
 
@@ -246,8 +252,8 @@ Experiment-side scripts (new, in this directory):
 - [ ] `plot_all.py` (or per-figure scripts) — figures D1, D2, D3, D4 as
       specified above.
 - [ ] Run order: sanity gate → D1-C1 (cheapest, validates plumbing) →
-      D2/D3/D4 → D1 C2–C4. Hand the checkpoint manifest to E3 when C1
-      and D2 finish.
+      D2/D3/D4 → D1 C2–C4. No handoff needed for E3: its inputs appear at
+      the fixed volume paths as C1/D2/D4 runs complete.
 
 Analysis caveats to observe when writing up:
 

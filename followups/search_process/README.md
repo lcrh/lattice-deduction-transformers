@@ -28,9 +28,13 @@ deduction-to-fixpoint, thresholds) is
 if E3's deduce-to-fixpoint wins at inference, its matched-training variant
 runs here with the S2 machinery.
 
-**Testbed.** Sudoku-Extreme. Primary checkpoints: the E1 baseline (4K
-steps, strong deduction → little search) **and** the 1K-step checkpoint
-(weak deduction → lots of search). Policy effects should be much larger on
+**Testbed.** Sudoku-Extreme. Primary checkpoints, referenced by their
+fixed Modal-volume paths (conventions in `followups/README.md`): the E1
+baseline (`/checkpoints/followups/e1/baseline_seed<N>.pt`; 4K steps,
+strong deduction → little search) **and** a 1K-step checkpoint this
+experiment trains and owns
+(`/checkpoints/followups/e2/base_1k_seed<N>.pt`; weak deduction → lots of
+search). Policy effects should be much larger on
 the weak model, and that contrast is itself a finding: search heuristics
 matter most when the learned deduction is imperfect, i.e. presumably on any
 harder future domain.
@@ -143,9 +147,9 @@ snapshot stack for a 512-row batch × ~60 decisions is ~25 MB as uint8.
 ## Sub-study S4 — Policy gain vs. model strength (figure)
 
 Take the 2–3 best (policy, backtrack) combos + baseline and evaluate each
-across the training-budget axis: checkpoints at 1K / 2K / 4K steps
-(re-use existing benchmark checkpoints, or train them fresh — they're
-4–15 B200-min each).
+across the training-budget axis: checkpoints at 1K / 2K / 4K steps (1K
+and 4K already exist at the fixed paths above; train a `base_2k` into
+`/checkpoints/followups/e2/` — it's ~8 B200-min).
 
 **Figure S4**: x = train steps, y = sequential forwards/solve (log), one
 line per search config. Expectation: lines converge as deduction gets
@@ -228,7 +232,10 @@ Experiment scripts (this directory, mirroring `arch_ablation/`):
 
 - [ ] `configs.py` — S1 scan combos, S2 2×2, S3 policy list as data;
       `list` prints individual `modal run --detach` launch commands
-      (eval-only ones target `eval_only.py` with a `--checkpoint`).
+      (eval-only ones target `eval_only.py` with a `--checkpoint` set to
+      the fixed volume path of the input). Includes the `base_1k` training
+      config this experiment owns. Eval outputs land under
+      `/checkpoints/followups/e2/` with the `__on__` naming convention.
 - [ ] `collect.py` / `plot_all.py` — summary CSV + Table S1–S3 +
       Figure S4 + distribution figures.
 - [ ] Sanity gates: (1) new code with all-default flags reproduces the

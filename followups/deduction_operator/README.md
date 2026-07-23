@@ -16,7 +16,11 @@ substitute for training compute?
 steps). The loop-transfer matrix additionally consumes E1's D1-C1 sweep
 (`L_train ∈ {1,2,4,8,16,32}`) and the `d2_final_only` checkpoint; the
 θ-sweep on symmetric BCE consumes E1's `d4_sym`. **Blocked on E1's
-training runs** — coordinate via the checkpoint manifest E1 produces.
+training runs** — no coordination beyond the filesystem: E1 checkpoints
+appear at deterministic Modal-volume paths
+(`/checkpoints/followups/e1/<config>_seed<N>.pt`, per the conventions in
+`followups/README.md`), and this experiment's evals start as those paths
+materialize.
 
 ---
 
@@ -150,9 +154,11 @@ All eval-only: ~48 transfer evals + ~30 scaling/threshold/fixpoint evals
 - [ ] `configs.py` / `collect.py` / `plot_all.py` mirroring
       `arch_ablation/` conventions; eval-only launch commands target
       `eval_only.py --checkpoint …`.
-- [ ] Coordinate with E1: consume its checkpoint manifest
-      (`e1_d1_L*_*`, `e1_d2_final_only_*`, `e1_d4_sym_*`); don't
-      retrain anything here.
+- [ ] Consume E1 checkpoints strictly by their fixed volume paths
+      (`/checkpoints/followups/e1/{d1_L*,d2_final_only,d4_sym}_seed<N>.pt`);
+      don't retrain anything here. Write this experiment's eval outputs
+      under `/checkpoints/followups/e3/` with the
+      `<evalconfig>__on__<input>_seed<N>` naming from the conventions.
 - [ ] Sanity gates: (1) `--eval-n-loops 16` == no-flag baseline; (2)
       `deduce_passes=1` == current behavior; (3) O2 profiler's iteration-16
       elimination counts consistent with what the end-to-end eval sees.
