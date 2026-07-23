@@ -6,36 +6,6 @@ supervision, an auxiliary per-cell cross-entropy `L_CE`, and asymmetric
 soundness pressure in the BCE + a dedicated conflict head. Which of these
 actually carry the result, and by how much?
 
-Three specific claims/choices this experiment puts numbers on:
-
-- **Recursion**: is a weight-tied recurrent backbone necessary at all,
-  given the lattice scaffolding already makes the *outer* process
-  incremental? A single-pass transformer inside the same search loop is
-  the natural null hypothesis.
-- **`L_CE` speeds up learning**: a working assumption with no supporting
-  result so far.
-- **Soundness pressure**: the asymmetric BCE and CLS conflict head are the
-  mechanism behind the empirical-soundness claim; ablating them should
-  show wrong answers reappearing.
-
-**Testbed.** Sudoku-Extreme, 1K-puzzle train split. Baseline = the
-standard config trained for **2,000 steps** (800K params, ~7 min on 1×
-B200). Deliberately *not* the 4K-step headline budget: at 4K the model
-sits at the ~100% ceiling where ablation deltas vanish; at 2K it is just
-below ceiling (~99% accuracy, still zero wrong answers), so degradations
-are visible — and every run halves in cost. Re-check any contested or
-surprising row at 4K before drawing conclusions about the headline
-setting. Every ablation is a one-factor deviation from this baseline —
-no factorial crossing.
-
-**Deliverable.** The main ablation table (`results/summary.csv`, one row
-per config × seed with mean/range roll-ups) plus three figures, described
-sub-study by sub-study below. Inference-time behavior of the deduction
-operator (extra loops at eval, per-iteration elimination profiles, θ_elim
-sensitivity) is deliberately **not** here — that is
-[E3 `deduction_operator/`](../deduction_operator/), which reuses this
-experiment's checkpoints.
-
 ## Results snapshot (2026-07-23; 69/81 runs landed)
 
 These are means of the per-seed pass percentages available at the snapshot.
@@ -74,6 +44,36 @@ attributing the fixed-threshold D4 differences to soundness pressure. The
 currently running `d4_sym_th50`, `d4_ratio2_th33`, and
 `d4_ratio32_th03` configs are independently trained companions, not a
 substitute for the paired same-weight re-evaluation.
+
+Three specific claims/choices this experiment puts numbers on:
+
+- **Recursion**: is a weight-tied recurrent backbone necessary at all,
+  given the lattice scaffolding already makes the *outer* process
+  incremental? A single-pass transformer inside the same search loop is
+  the natural null hypothesis.
+- **`L_CE` speeds up learning**: a working assumption with no supporting
+  result so far.
+- **Soundness pressure**: the asymmetric BCE and CLS conflict head are the
+  mechanism behind the empirical-soundness claim; ablating them should
+  show wrong answers reappearing.
+
+**Testbed.** Sudoku-Extreme, 1K-puzzle train split. Baseline = the
+standard config trained for **2,000 steps** (800K params, ~7 min on 1×
+B200). Deliberately *not* the 4K-step headline budget: at 4K the model
+sits at the ~100% ceiling where ablation deltas vanish; at 2K it is just
+below ceiling (~99% accuracy, still zero wrong answers), so degradations
+are visible — and every run halves in cost. Re-check any contested or
+surprising row at 4K before drawing conclusions about the headline
+setting. Every ablation is a one-factor deviation from this baseline —
+no factorial crossing.
+
+**Deliverable.** The main ablation table (`results/summary.csv`, one row
+per config × seed with mean/range roll-ups) plus three figures, described
+sub-study by sub-study below. Inference-time behavior of the deduction
+operator (extra loops at eval, per-iteration elimination profiles, θ_elim
+sensitivity) is deliberately **not** here — that is
+[E3 `deduction_operator/`](../deduction_operator/), which reuses this
+experiment's checkpoints.
 
 ---
 
