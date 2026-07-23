@@ -71,14 +71,17 @@ already emitted in `<ckpt>.eval.json`:
 ## Sub-study D1 — Is recursion necessary? (loops vs. depth vs. params)
 
 Three quantities trade off when you ablate the recurrence: **parameters**,
-**per-forward compute** (layer-applications per forward), and **training
-compute** (steps × per-forward). Weight tying is exactly the mechanism
-that decouples the first two — the tied 4-layer × L-loop model holds
-params at 800K while per-forward compute scales with L. There is *no*
-non-recurrent architecture that matches the baseline on both at once
-(untying multiplies params; shrinking width to compensate changes the
-model class) — that impossibility is part of the finding, and the grid
-below is built to surface it: every comparison names what it holds fixed.
+**per-forward compute**, and **training compute** (steps × per-forward).
+The grid is organized around **parameter parity**: the tied 4-layer ×
+L-loop model holds params at 800K while per-forward compute scales with
+L (C1), and the non-recurrent competitors are every reasonable
+width-vs-depth *shape* of the same ~800K budget (C3). The structural
+asymmetry to surface: a non-recurrent model's per-forward FLOPs are
+pinned by its param count (both ∝ layers × dim²), while weight tying
+reuses the same params L times per forward — recursion is the only way
+to spend more forward compute without buying more parameters. C2 and C4
+then escalate the two remaining excuses (more training compute/data,
+more params) to see if either closes the gap.
 
 **C1 — Tied loop sweep (params fixed at 800K; primary).** `L = n_loops ∈
 {1, 2, 4, 8, 16, 32}` at the fixed 4-layer, dim-128 backbone, all at
@@ -110,35 +113,47 @@ capability gap; a curve **still climbing** means budget could eventually
 close it and the claim must be stated as a compute-efficiency gap
 instead. The 4× rungs cost ~30 B200-min each — run them at 2 seeds.
 
-**C3 — Depth without tying (per-forward compute matched, params grow).**
-Non-recurrent (`L = 1`) with more *untied* layers, compared against the
-tied config with the same layer-applications per forward:
+**C3 — Param-matched width-vs-depth ladder (the non-recurrent shapes;
+headline comparison).** Hold the parameter budget at the baseline's
+~800K and ask: can *any* static allocation of those params — wide-shallow
+through narrow-deep — match the tied-looped model? Since transformer
+params and feed-forward FLOPs both scale as `layers × dim²`, this ladder
+is simultaneously ≈ param-matched *and* ≈ per-forward-compute-matched
+among its members (the attention-score term grows ∝ `layers × dim`, a
+second-order deviation — report exact params/FLOPs per config in
+`summary.csv`). All non-recurrent (`L = 1`), dims picked for
+`n_heads = 4` divisibility:
 
-| config | layers × loops | dim | fwd layer-apps | params |
-|---|---|---|---|---|
-| tied `d1_L2` / `d1_L4` (from C1) | 4 × {2, 4} | 128 | 8 / 16 | 800K |
-| `d1_untied8` | 8 × 1 | 128 | 8 | ~1.6M |
-| `d1_untied16` | 16 × 1 | 128 | 16 | ~3.2M |
+| config | layers | dim | params (≈) |
+|---|---|---|---|
+| `d1_L1` (shared with C1) | 4 | 128 | 800K |
+| `d1_shape8x92` | 8 | 92 | ~810K |
+| `d1_shape16x64` | 16 | 64 | ~790K |
+| `d1_shape32x44` | 32 | 44 | ~740K |
 
-If tied wins *with 2–4× fewer params*, iteration + input re-injection
-beats plain depth outright. If untied wins, C4 decides whether that's
-depth or just capacity.
+The structural punchline this makes concrete: at fixed params, a
+non-recurrent model's per-forward FLOPs are pinned (∝ params), while the
+tied 4×16 baseline spends 16× that per forward by *reusing* its 800K
+params. If no 800K shape comes close, recursion is doing something no
+static allocation of the same budget can buy.
 
-**C4 — Capacity control (params matched to untied, depth is not the
-mechanism).** One wide non-recurrent run: `d1_wide` = 4 layers × L=1,
-dim 256 → ~3.2M params, ≈16 dim-128-layer-equivalents of forward compute.
-This completes a triangle at roughly equal params and forward FLOPs:
-`d1_untied16` (deep) vs `d1_wide` (wide) vs tied `d1_L4` (iterated, at
-4× fewer params) — separating iteration, depth, and capacity.
+**C4 — Params escalation (generous untied controls).** Same spirit as
+C2's ladder, on the parameter axis: give the non-recurrent model *more*
+params than the baseline and see if that closes the gap. `d1_untied8`
+(8 × dim 128, ~1.6M) and `d1_untied16` (16 × dim 128, ~3.2M) — the latter
+matching the tied `d1_L4` in layer-applications per forward at 4× its
+params — plus `d1_wide` (4 × dim 256, ~3.2M), so the two 3.2M points also
+compare depth vs width at parity with each other.
 
-All configs at `steps = 2000` except C2. ~12 configs + baseline; 3 seeds
+All configs at `steps = 2000` except C2. ~15 configs + baseline; 3 seeds
 except the C2 4× rungs (2 seeds).
 
 **Figure D1** (`plots/d1_loops.pdf`): solve rate (second panel:
-unsound-elimination rate) vs per-forward layer-applications, log-x —
-C1 as the main line, C3/C4 as scatter points (marker size ∝ params,
-shape = tied/untied/wide), C2 as annotated open markers on the L=1/L=2
-positions. 3 seeds, mean ± range. Companion panel
+unsound-elimination rate) vs per-forward FLOPs, log-x — C1 as the main
+line (FLOPs ∝ L at fixed 800K), the C3 ladder clustered at the L=1 FLOPs
+position (annotated by shape), C4 points at their own FLOPs (marker size
+∝ params), C2 as annotated open markers on the L=1/L=2 positions.
+3 seeds, mean ± range. Companion panel
 (`plots/d1_escalation_curves.pdf`): C2 learning curves (solve count vs
 training FLOPs, log-x) with the baseline curve overlaid — the
 plateaued-vs-still-climbing evidence.
@@ -219,12 +234,12 @@ search-effort impact.
 
 ## Run budget
 
-~18 training configs + baseline ≈ **55 runs**, most ≤7 B200-min
+~21 training configs + baseline ≈ **65 runs**, most ≤7 B200-min
 (low-`L` C1 runs are much cheaper; `d1_L32` is ~15 min; the two C2 4×
-rungs are ~30 min each) ≈ **7 B200-hours** total. If budget-pressed:
-drop to 2 seeds for C3/C4 and `d3_ce1`, drop `d1_L1_cm4x` (keep
-`d1_L1_bigdata` — it's the strongest version of the claim), never trim
-D4.
+rungs are ~30 min each) ≈ **8 B200-hours** total. If budget-pressed:
+drop to 2 seeds for C3/C4 and `d3_ce1`, drop `d1_shape32x44` and
+`d1_L1_cm4x` (keep `d1_L1_bigdata` — it's the strongest version of the
+claim), never trim D4.
 
 ## How to run (once implemented)
 
