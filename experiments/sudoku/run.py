@@ -159,15 +159,28 @@ def run(
     # re-evaluate. This is distinct from --overwrite (which errors on an existing
     # checkpoint); --skip-if-done lets a whole-sweep re-launch execute only the
     # missing (config, seed) pairs. Default-off: plain runs are unaffected.
+    # `_resume_eval_only` is set below when --skip-if-done finds a trained
+    # checkpoint (.pt) but no eval.json: we then SKIP training and jump straight
+    # to eval, loading the existing .pt. This makes a killed-mid-eval run (and
+    # the per-puzzle progress-file resume) recoverable without retraining.
+    _resume_eval_only = False
+    _resume_ckpt_path = None
     if skip_if_done and ckpt_name:
         from pathlib import Path as _Path
         _done_dir = f"{CHECKPOINT_MOUNT}/{ckpt_subdir}" if ckpt_subdir else CHECKPOINT_MOUNT
         _done_eval = _Path(_done_dir) / f"{ckpt_name}.eval.json"
+        _done_pt = _Path(_done_dir) / f"{ckpt_name}.pt"
         checkpoint_volume.reload()
         if _done_eval.exists():
             print(f"\n[skip-if-done] {_done_eval} already exists — "
                   f"skipping train + eval (no-op).", flush=True)
             return {"skipped": True, "checkpoint": str(_done_eval.with_suffix("").with_suffix(".pt"))}
+        if _done_pt.exists():
+            # Trained but not (fully) evaluated — resume at the eval stage.
+            print(f"\n[skip-if-done] {_done_pt} exists but no eval.json — "
+                  f"skipping training, resuming EVAL only.", flush=True)
+            _resume_eval_only = True
+            _resume_ckpt_path = _done_pt
 
     ts = time.strftime("%Y%m%d_%H%M%S")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -200,36 +213,42 @@ def run(
         train_name = f"seed{seed}_{steps}s_bs{batch_size}_aug{int(augment)}_{ts}"
         train_no_timestamp = False
 
-    ckpt_path = train(TrainConfig(
-        steps=steps,
-        batch_size=batch_size,
-        seed=seed,
-        lr=lr,
-        weight_decay=weight_decay,
-        bce_pos_mult=bce_pos_mult,
-        bce_neg_mult=bce_neg_mult,
-        softmax_loss_weight=softmax_loss_weight,
-        conflict_loss_weight=conflict_loss_weight,
-        warmup_fraction=warmup_fraction,
-        step=step_cfg,
-        max_age=max_age,
-        use_ema=use_ema,
-        ema_decay=ema_decay,
-        supervise=supervise,
-        eval_every=eval_every,
-        model=model_cfg,
-        data=SudokuExtremeConfig(
-            cache_dir=DATA_MOUNT, batch_size=batch_size, seed=42,
-            n_puzzles=n_train_puzzles,
-            augment_digit_perm=data_augment_digit_perm,
-            augment_dihedral=data_augment_dihedral,
-        ),
-        out_dir=train_out_dir,
-        name=train_name,
-        no_timestamp=train_no_timestamp,
-        overwrite=overwrite,
-    ))
-    checkpoint_volume.commit()
+    if _resume_eval_only:
+        # Trained checkpoint already on the volume — skip training entirely and
+        # eval the existing .pt (per-puzzle progress file, if any, resumes below).
+        from pathlib import Path as _Path
+        ckpt_path = _Path(str(_resume_ckpt_path))
+    else:
+        ckpt_path = train(TrainConfig(
+            steps=steps,
+            batch_size=batch_size,
+            seed=seed,
+            lr=lr,
+            weight_decay=weight_decay,
+            bce_pos_mult=bce_pos_mult,
+            bce_neg_mult=bce_neg_mult,
+            softmax_loss_weight=softmax_loss_weight,
+            conflict_loss_weight=conflict_loss_weight,
+            warmup_fraction=warmup_fraction,
+            step=step_cfg,
+            max_age=max_age,
+            use_ema=use_ema,
+            ema_decay=ema_decay,
+            supervise=supervise,
+            eval_every=eval_every,
+            model=model_cfg,
+            data=SudokuExtremeConfig(
+                cache_dir=DATA_MOUNT, batch_size=batch_size, seed=42,
+                n_puzzles=n_train_puzzles,
+                augment_digit_perm=data_augment_digit_perm,
+                augment_dihedral=data_augment_dihedral,
+            ),
+            out_dir=train_out_dir,
+            name=train_name,
+            no_timestamp=train_no_timestamp,
+            overwrite=overwrite,
+        ))
+        checkpoint_volume.commit()
 
     print("\n" + "=" * 60, flush=True)
     print(f"Eval ({n_eval_puzzles} test puzzles)", flush=True)

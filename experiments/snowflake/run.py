@@ -184,6 +184,8 @@ def run(
     # pairs. Distinct from `--overwrite` (which errors on an existing ckpt).
     # Only meaningful for deterministic paths; a legacy timestamped run always
     # produces a fresh path, so the check is skipped when `ckpt_name` is empty.
+    _resume_eval_only = False
+    _resume_ckpt_path = None
     if skip_if_done and ckpt_name:
         done_ckpt_path = Path(train_out_dir) / f"{train_name}.pt"
         done_eval_json_path = Path(train_out_dir) / f"{train_name}.eval.json"
@@ -195,6 +197,15 @@ def run(
                   flush=True)
             print("=" * 60, flush=True)
             return {"skipped": True, "checkpoint": str(done_ckpt_path)}
+        if done_ckpt_path.exists():
+            # Trained but not (fully) evaluated — skip training, resume EVAL only
+            # (loading the existing .pt; per-puzzle progress resumes below).
+            print("=" * 60, flush=True)
+            print(f"[skip-if-done] {done_ckpt_path} exists but no eval.json — "
+                  f"skipping training, resuming EVAL only.", flush=True)
+            print("=" * 60, flush=True)
+            _resume_eval_only = True
+            _resume_ckpt_path = done_ckpt_path
 
     step_cfg = StepConfig(
         threshold=threshold,
@@ -210,7 +221,10 @@ def run(
         cls_token=conflict_loss_weight > 0,
         use_rope=use_rope,
     )
-    ckpt_path = train(TrainConfig(
+    if _resume_eval_only:
+        ckpt_path = Path(str(_resume_ckpt_path))
+    else:
+        ckpt_path = train(TrainConfig(
         steps=steps,
         batch_size=batch_size,
         seed=seed,
