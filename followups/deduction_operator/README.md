@@ -26,6 +26,10 @@ materialize.
 
 ## Sub-study O1 — Inference loop scaling & train/eval loop transfer
 
+If we let the model think longer per forward than it was trained to —
+more internal loops — does it deduce more? And does a model trained at
+one depth work when unrolled to another?
+
 The backbone is a weight-tied loop, so a checkpoint trained at `L_train`
 can be *evaluated* at any `L_eval` (the model docstring notes stability to
 128+ loops with improving NLL).
@@ -49,6 +53,9 @@ of solve rate over (L_train, L_eval), plus the `d2_final_only` row.
 
 ## Sub-study O2 — Per-iteration elimination profile
 
+Inside a single forward, what does each successive iteration actually
+contribute — and where does it stop contributing?
+
 One `return_all=True` forward exposes all intermediate iterations' heads —
 so the "what does each extra loop buy?" question can be answered *per
 forward*, cleanly separated from search effects.
@@ -68,6 +75,9 @@ fill-level stratum; CLS trajectory panel. This is the mechanistic
 companion to O1's end-to-end curves.
 
 ## Sub-study O3 — Deduce-to-fixpoint before branching
+
+Should the solver keep deducing until nothing more falls out before it
+risks a guess — instead of guessing after a single pass?
 
 Orthogonal to internal loop count: the outer solve loop currently runs
 **one** deduction pass per round, then immediately branches if the state
@@ -103,6 +113,9 @@ distribution) is the follow-on — that run belongs methodologically with
 E2's matched/mismatched machinery; note it there rather than duplicating.
 
 ## Sub-study O4 — Operating-point sensitivity (θ_elim, θ_CLS)
+
+Are the two inference thresholds sitting on comfortable plateaus, or on
+knife-edges we happened to land on?
 
 - θ_elim ∈ {0.02, 0.05, 0.1, 0.2, 0.3, 0.5} on the baseline checkpoint:
   is the asymmetry-matched 0.1 on a plateau or a knife-edge? Report solve

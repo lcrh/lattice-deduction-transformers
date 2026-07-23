@@ -18,14 +18,17 @@ measurable.
 **Design.** Three parts, almost all analysis/eval on existing Maze-Hard
 checkpoints (K=1 and K=512 runs):
 
-1. **Failure forensics.** For each wrong-returned puzzle: replay the
-   winning chain, log the CLS sigmoid per round, and locate the first
+1. **Failure forensics.** What actually happens, round by round, on the
+   solves that return a wrong path? For each wrong-returned puzzle: replay
+   the winning chain, log the CLS sigmoid per round, and locate the first
    round where the state became inconsistent with *every* optimal path
    (BFS gives ground truth). Report: CLS trajectory vs. that
    commitment point, how far below threshold the CLS peaked, and whether
    suboptimality was decided by a branch or by an (unsound) deduction.
    Also: are wrong paths longer by exactly 2 (one detour) or more?
-2. **Cheap-verifier inference.** Add an optional accept-time check:
+2. **Cheap-verifier inference.** Does checking the answer before
+   accepting it restore soundness at acceptable cost? Add an optional
+   accept-time check:
    a returned path is accepted only if it is a valid simple path AND its
    length equals the BFS-optimal length (BFS on a 30×30 maze is
    microseconds — but it uses the *problem definition*, so report it as a
@@ -35,8 +38,10 @@ checkpoints (K=1 and K=512 runs):
    A weaker, definition-free variant to include: accept only if ≥2 chains
    independently produce *some* accept in the same round budget and take
    the shortest (self-consistency, no oracle).
-3. **Training-side fix (stretch, one run):** include near-miss negatives
-   in CLS supervision — states consistent with a valid-but-suboptimal
+3. **Training-side fix (stretch, one run).** Does the training pool ever
+   even visit the near-miss states that would teach the conflict head
+   about suboptimality? The supervision mechanism exists already: states
+   consistent with a valid-but-suboptimal
    path but not with any sampled shortest path already produce
    `gt_conflict=True` under the α machinery; check whether such states
    are *rare in the training pool* (measure their frequency first — if

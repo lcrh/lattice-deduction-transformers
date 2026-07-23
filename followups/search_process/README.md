@@ -50,6 +50,10 @@ decision-depth-at-conflict distributions.
 
 ## Sub-study S1 — Decision policies (eval-only scan)
 
+When the model has to guess, does it matter *where* it guesses and *how*
+it picks the digit — or is uniform-random cell + softmax sampling already
+close to optimal?
+
 Cheap first pass: swap the decide policy at inference on frozen
 checkpoints. Two independent axes:
 
@@ -82,6 +86,9 @@ Scan: ~10 selected combos (not the full cross) × {baseline ckpt, 1K ckpt}
 
 ## Sub-study S2 — Matched vs. mismatched training
 
+Does a better search policy need to be *trained with* — or can it be
+bolted on at inference to a model trained under a different one?
+
 Design assumption under test: running the identical search process at
 train and inference is what keeps the transformer in-distribution. Take
 the best policy P* from S1 plus the baseline policy P0 and train/eval
@@ -103,6 +110,10 @@ inference policy should win; if it doesn't, the state distribution is less
 fragile than assumed, which is worth knowing (and reporting).
 
 ## Sub-study S3 — Backtracking policies
+
+When a chain hits a conflict, must we throw away everything it did — or
+can partial, stochastic, or negation-learning backtracking reuse the
+work that came before the fatal decision?
 
 Reset-to-root discards all information in a failed chain — every sound
 deduction and every good decision made before the fatal one. Alternatives,
@@ -145,6 +156,9 @@ snapshot stack for a 512-row batch × ~60 decisions is ~25 MB as uint8.
    distribution in the train logs.
 
 ## Sub-study S4 — Policy gain vs. model strength (figure)
+
+How much can smarter search compensate for a weaker, cheaper-trained
+model?
 
 Take the 2–3 best (policy, backtrack) combos + baseline and evaluate each
 across the training-budget axis: checkpoints at 1K / 2K / 4K steps (1K

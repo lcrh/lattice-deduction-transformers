@@ -83,7 +83,9 @@ to spend more forward compute without buying more parameters. C2 and C4
 then escalate the two remaining excuses (more training compute/data,
 more params) to see if either closes the gap.
 
-**C1 — Tied loop sweep (params fixed at 800K; primary).** `L = n_loops ∈
+**C1 — Tied loop sweep (params fixed at 800K; primary).** At a fixed
+parameter budget, what does each extra unroll of the same weights buy?
+Operationalization: `L = n_loops ∈
 {1, 2, 4, 8, 16, 32}` at the fixed 4-layer, dim-128 backbone, all at
 `steps = 2000` (identical optimizer steps, pool dynamics, and data —
 per-forward compute is the only thing that varies; train wallclock scales
@@ -91,8 +93,10 @@ per-forward compute is the only thing that varies; train wallclock scales
 4-layer transformer doing one-shot lattice elimination inside the same
 outer search.
 
-**C2 — Can data/compute buy back the recursion? (escalation ladder).**
-The obvious objection to C1's low-L results: "L=1 got 16× less training
+**C2 — Escalation ladder: can data/compute buy back the recursion?** If
+the non-looped model simply trains longer — or sees all the data there
+is — does it catch up? The obvious objection to C1's low-L results is
+"L=1 got 16× less training
 compute — train it longer." The working hypothesis is stronger than
 parity: the non-looped model stays far behind *even with more data and
 compute than the baseline ever saw* — a capability gap, not a budget gap.
@@ -137,9 +141,10 @@ tied 4×16 baseline spends 16× that per forward by *reusing* its 800K
 params. If no 800K shape comes close, recursion is doing something no
 static allocation of the same budget can buy.
 
-**C4 — Params escalation (generous untied controls).** Same spirit as
-C2's ladder, on the parameter axis: give the non-recurrent model *more*
-params than the baseline and see if that closes the gap. `d1_untied8`
+**C4 — Params escalation (generous untied controls).** Does handing the
+non-recurrent model a few times *more* parameters than the baseline close
+the gap instead? Same spirit as C2's ladder, on the parameter axis:
+`d1_untied8`
 (8 × dim 128, ~1.6M) and `d1_untied16` (16 × dim 128, ~3.2M) — the latter
 matching the tied `d1_L4` in layer-applications per forward at 4× its
 params — plus `d1_wide` (4 × dim 256, ~3.2M), so the two 3.2M points also
@@ -164,6 +169,10 @@ their fixed volume paths
 
 ## Sub-study D2 — Deep supervision (Sotaku-style supervise-every-iteration)
 
+Does supervising every internal iteration — rather than only the one we
+read out at inference — make the model learn faster, and is it what makes
+iteration depth transferable at inference?
+
 The baseline supervises all 16 internal iterations and averages the loss
 (`_losses` in `experiments/sudoku/train.py`). Ablation: supervise the
 **final iteration only**, keeping inference readout unchanged (it is
@@ -187,8 +196,9 @@ baseline vs final-only, 3 seeds each.
 
 ## Sub-study D3 — Does `L_CE` speed up learning?
 
-Working assumption under test: adding `L_CE` makes the model learn
-faster. Measure it with learning curves:
+Does the auxiliary per-cell cross-entropy actually make the model learn
+faster — and if so, through better deduction or through better branching?
+Operationalization: learning curves across `λ_ce`:
 
 | config | softmax_loss_weight |
 |---|---|
@@ -207,6 +217,9 @@ unsound rate to attribute the effect, and cross-reference E2's decision
 policies if branching turns out to be the channel.
 
 ## Sub-study D4 — Soundness pressure knobs
+
+What keeps the model from ever returning a wrong answer — the asymmetric
+elimination loss, the dedicated conflict head, or only the two together?
 
 Two mechanisms push the model toward never returning a wrong answer:
 the **asymmetric BCE** (false eliminations penalized `w+/w− = 8×` more than
