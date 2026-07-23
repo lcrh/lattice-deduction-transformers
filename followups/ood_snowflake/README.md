@@ -20,6 +20,25 @@ orders 4–8; larger orders just need more CVC5 generation.
 
 - Match `--n-train-puzzles 500` and hyperparameters to the paper's
   Snowflake config; only the order filter varies. 3 seeds.
+- **Positional confound — must be fixed before any transfer run.**
+  Snowflake placement is deterministic and hub-centered
+  (`cell_to_grid_idx` in `experiments/snowflake/data.py`), and snowflake
+  training has *no positional augmentation* (digit-perm only; dihedral is
+  off for hex). Snowflakes grow outward with order, so training on small
+  orders leaves the outer covering-grid positions seen only as "absent" —
+  their learned 2D positional embeddings would be effectively untrained
+  when order 7–8 activates them, and a transfer failure would measure
+  that, not constraint generalization. Mitigations, in order of
+  preference: (a) random `(q, r)` translation aug — shift input, solution,
+  and in-puzzle mask together; sound because constraint groups are a
+  function of the visible geometry, which translation preserves; (b) hex
+  D6 rotation/reflection aug (needs a custom covering-grid cell
+  permutation); (c) a 2D-RoPE variant (`use_rope` exists in the model
+  config, used for 30×30 maze) as the relative-position control. Run the
+  in-distribution control `e4_all` under the same aug regime as the
+  transfer runs. Vocabulary needs no such care: `VOCAB = 6` at every
+  order (all-different groups cap at 6 cells), so channels are identical
+  across orders — only active positions and group counts change.
 - Report accuracy *per test order* (not pooled) — the interesting curve is
   accuracy vs. distance from the training range.
 - Also report **soundness per order**: does the model abstain (conflict →
@@ -58,6 +77,19 @@ the training boundary).
       (`orders: list[int] | None` in the dataset config) for both train and
       eval loaders; verify the covering-grid embedding is genuinely
       order-independent (no order-derived normalization anywhere).
+- [ ] Occupancy check (cheap, do first): compute per-order covering-grid
+      occupancy from the dataset and quantify how many positions are
+      active at orders 7–8 but never active at ≤6 — this measures the
+      size of the positional confound before designing around it.
+- [ ] Translation augmentation: random `(q, r)` shift applied jointly to
+      x / y / in_puzzle_mask, bounds-checked against the 15×10 grid;
+      train-time (dataset-level or per-step, mirroring how sudoku handles
+      dihedral). Hex D6 rotation aug as a follow-on if translation alone
+      leaves outer positions under-covered.
+- [ ] Optional RoPE control: `--use-rope` plumbed through
+      `experiments/snowflake/run.py` (config support already exists in
+      `LoopedTransformerConfig`); one config to compare learned-absolute
+      + translation-aug vs. relative encodings.
 - [ ] `experiments/snowflake/run.py`: expose `--train-orders` /
       `--eval-orders` (comma-separated), and make eval report per-order
       breakdowns in `eval.json` (`per_order: {order: {correct, wrong,
