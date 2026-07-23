@@ -23,6 +23,7 @@ _RUN_PARAMS: tuple[tuple[str, object], ...] = (
     ("n_eval_puzzles",           200),
     ("n_train_puzzles",          None),
     ("seed",                     0),
+    ("data_seed",                42),
     ("bce_pos_mult",             4.0),
     ("bce_neg_mult",             0.5),
     ("softmax_loss_weight",      0.2),
@@ -48,6 +49,8 @@ _RUN_PARAMS: tuple[tuple[str, object], ...] = (
     ("eval_dropout_p",           0.05),
     ("n_loops",                  16),
     ("pre_norm",                 True),
+    ("dim",                      128),
+    ("n_heads",                  4),
 )
 
 
@@ -95,7 +98,7 @@ app = modal.App("sudoku")
 @app.function(
     image=image,
     gpu="B200",
-    timeout=3600 * 4,
+    timeout=3600 * 8,
     secrets=[hf_secret],
     volumes={DATA_MOUNT: data_volume, CHECKPOINT_MOUNT: checkpoint_volume},
 )
@@ -105,6 +108,7 @@ def run(
     n_eval_puzzles: int = 200,
     n_train_puzzles: int | None = None,
     seed: int = 0,
+    data_seed: int = 42,
     bce_pos_mult: float = 4.0,
     bce_neg_mult: float = 0.5,
     softmax_loss_weight: float = 0.2,
@@ -130,6 +134,8 @@ def run(
     eval_dropout_p: float = 0.05,
     n_loops: int = 16,
     pre_norm: bool = True,
+    dim: int = 128,
+    n_heads: int = 4,
 ):
     # Snapshot the call-site arg values BEFORE any local mutation, then dump
     # the config table. (Snapshot locals() outside the comprehension —
@@ -152,6 +158,8 @@ def run(
         cls_token=conflict_loss_weight > 0,
         n_loops=n_loops,
         pre_norm=pre_norm,
+        dim=dim,
+        n_heads=n_heads,
     )
     ckpt_path = train(TrainConfig(
         steps=steps,
@@ -170,7 +178,7 @@ def run(
         ema_decay=ema_decay,
         model=model_cfg,
         data=SudokuExtremeConfig(
-            cache_dir=DATA_MOUNT, batch_size=batch_size, seed=42,
+            cache_dir=DATA_MOUNT, batch_size=batch_size, seed=data_seed,
             n_puzzles=n_train_puzzles,
             augment_digit_perm=data_augment_digit_perm,
             augment_dihedral=data_augment_dihedral,
@@ -369,6 +377,7 @@ def entrypoint(
     n_eval_puzzles: int = 200,
     n_train_puzzles: int | None = None,
     seed: int = 0,
+    data_seed: int = 42,
     bce_pos_mult: float = 4.0,
     bce_neg_mult: float = 0.5,
     softmax_loss_weight: float = 0.2,
@@ -394,10 +403,13 @@ def entrypoint(
     eval_dropout_p: float = 0.05,
     n_loops: int = 16,
     pre_norm: bool = True,
+    dim: int = 128,
+    n_heads: int = 4,
 ):
     result = run.remote(
         steps=steps, batch_size=batch_size,
         n_eval_puzzles=n_eval_puzzles, n_train_puzzles=n_train_puzzles, seed=seed,
+        data_seed=data_seed,
         bce_pos_mult=bce_pos_mult, bce_neg_mult=bce_neg_mult,
         softmax_loss_weight=softmax_loss_weight,
         conflict_loss_weight=conflict_loss_weight,
@@ -422,5 +434,7 @@ def entrypoint(
         eval_dropout_p=eval_dropout_p,
         n_loops=n_loops,
         pre_norm=pre_norm,
+        dim=dim,
+        n_heads=n_heads,
     )
     print(f"\nFinal: {result}", flush=True)
