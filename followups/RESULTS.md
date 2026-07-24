@@ -1,8 +1,9 @@
 # Follow-up experiment results
 
-Snapshot: 2026-07-23. E1 has 81/81 evaluation summaries; E4 has 15/15.
-All planned training runs have landed, plus nine paired same-weight D4
-eval-only scans.
+Snapshot: 2026-07-23. E1 has 81/81 evaluation summaries. E4 has the original
+transfer runs plus the sparse-support grid (H × {1K,4K} × {abs,RoPE}, 1 seed
+per cell; some 4K-abs cells also have 3 seeds) and 8K absolute probes at
+H∈{12,25,50}.
 
 Pass rates below are means of the per-seed percentages. Most evaluations use
 1,000 puzzles per seed. Low-performing reruns can stop after 50 timeouts and
@@ -231,7 +232,10 @@ position confound; a RoPE condition provides a relative-position control.
 Models trained on all orders 4–8 form the in-distribution sanity control.
 A support-preserving distribution-shift condition (`e4_shift95`) also trains
 on all orders, but allocates 475/500 training puzzles to orders 4–5 and only
-25/500 to orders 6–8 (exact counts: 238, 237, 9, 8, 8).
+25/500 to orders 6–8 (exact counts: 238, 237, 9, 8, 8). A follow-on
+sparse-support grid then fixes 1K total puzzles and sweeps higher-order count
+H, training steps, and absolute vs RoPE position encodings, with 8K absolute
+probes at H∈{12,25,50}.
 
 **Results.**
 
@@ -244,18 +248,40 @@ on all orders, but allocates 475/500 training puzzles to orders 4–5 and only
   answers, and 600 timeouts.
 - Trained on orders 4–5 with RoPE and evaluated on 6–8: 0/600 correct, zero
   wrong answers, and 600 timeouts.
-- Trained on the 95% lower-order mixture and evaluated evenly across orders
-  4–8: **587/600 correct (97.8%)**, 13 wrong answers, and zero timeouts
-  (1.02 calls/solve). Per-order pass rates are 100%, 100%, 96.6%, 96.7%, and
-  96.8% for orders 4 through 8, respectively.
+- Trained on the 95% lower-order mixture (500 puzzles, 4K steps) and evaluated
+  evenly across orders 4–8: **587/600 correct (97.8%)**, 13 wrong answers, and
+  zero timeouts (1.02 calls/solve). Per-order pass rates are 100%, 100%,
+  96.6%, 96.7%, and 96.8% for orders 4 through 8, respectively. On under-
+  represented orders 6–8 alone: **380/393 (96.7%)**.
+
+**Sparse-support grid.** Hold total training puzzles at 1K and vary (a) higher-
+order count H ∈ {3,6,12,25,50} (examples of orders 6–8 combined), (b) steps ∈
+{1000,4000}, and (c) position encoding ∈ {absolute, RoPE}. Metric focus is
+accuracy on orders **6–8** (n=131 per seed). Cells are 1 seed unless noted.
+
+| H | 1K abs | 1K RoPE | 4K abs | 4K RoPE |
+|---:|---:|---:|---:|---:|
+| 3 | 26% | 19% | 33% (3 seeds) | 43% |
+| 6 | 34% | 36% | 43% (3 seeds) | 56% |
+| 12 | 51% | 70% | 77% (3 seeds) | 87% |
+| 25 | 71% | 86% | 88% (3 seeds) | **100%** |
+| 50 | 82% | 92% | 93% (3 seeds) | 97% |
+
+**8K absolute probes** (compute vs sparse support):
+
+| H | overall | orders 6–8 |
+|---:|---:|---:|
+| 12 | 94% (188/200) | 91% (119/131) |
+| 25 | 99% (198/200) | 98.5% (129/131) |
+| 50 | 99.8% (599/600, 3 seeds) | 99.7% (392/393) |
 
 **Interpretation.** Local same-weight probing on `e4_leq5_seed0` /
-`e4_leq6_seed0` / `e4_all_seed0` (MPS, 2026-07-23) shows the failure is
-**not primarily a conflict-threshold artifact**. On OOD orders, the transfer
-models' first deduction step already empties cells and kills ground-truth
-candidates on ~83–90% of puzzles (CLS mean ≈ 1.0, empty-cell rate ≈ 83–90%,
-unsound-elimination puzzles ≈ 83–90%). The in-distribution control stays clean
-(CLS mean ≈ 0, empty/unsound ≈ 0). Disabling the CLS head
+`e4_leq6_seed0` / `e4_all_seed0` (MPS, 2026-07-23) shows the strict-omission
+failure is **not primarily a conflict-threshold artifact**. On OOD orders, the
+transfer models' first deduction step already empties cells and kills ground-
+truth candidates on ~83–90% of puzzles (CLS mean ≈ 1.0, empty-cell rate ≈
+83–90%, unsound-elimination puzzles ≈ 83–90%). The in-distribution control stays
+clean (CLS mean ≈ 0, empty/unsound ≈ 0). Disabling the CLS head
 (`eval_cls_threshold=2.0`) only lifts short-horizon OOD accuracy from 0% to
 ~17–21%, still with zero wrong answers and mostly timeouts driven by empty-cell
 resets. Making θ_elim more conservative down to 10⁻⁴ also does not help: on
@@ -263,11 +289,24 @@ OOD, ground-truth digit scores sit near 10⁻⁸–10⁻¹⁰, so they remain el
 The weights do not transfer a sound deduction operator to completely unseen
 larger orders.
 
-The soft-shift result sharply qualifies that failure. Giving orders 6–8 only
-25 total training examples raises higher-order performance from 0% under
-strict omission to 96.7% (380/393) under sparse support. Thus the catastrophic
-result is mainly an **out-of-support extrapolation failure**, not fragility to
-a large change in order frequencies. Sparse exposure is enough to recover
-nearly all accuracy, although the 13 wrong answers (versus zero for the
-balanced control) show a small residual soundness cost under the 95/5
-distribution shift.
+The soft-shift results sharply qualify that failure. Giving orders 6–8 only
+25 total training examples (the original `e4_shift95`) raises higher-order
+performance from 0% under strict omission to 96.7%. The 1K-puzzle grid then
+shows how far that can be pushed:
+
+- **H is the main lever.** H≤6 remains weak (~19–56% on 6–8). The cliff is
+  around H≈12; H≥25 approaches the balanced `e4_all` ceiling.
+- **Training steps matter at mid H.** At H=12, going 1K→4K lifts 6–8 accuracy
+  from 51% to 77% (abs); 8K reaches 91%. Paper-budget 1K steps are not enough
+  for sparse support.
+- **RoPE helps once support is non-trivial**, especially at short budgets
+  (H=12 @1K: 51%→70%; H=25 @1K: 71%→86%). It does not rescue H=3. At H=25 with
+  4K steps, RoPE reaches 100% on 6–8; at H=50, RoPE@4K (97%) nearly matches
+  abs@8K (99.7%).
+- Residual errors under soft shift are almost entirely **wrong answers**, not
+  timeouts — a small soundness cost versus the balanced control's zero wrongs.
+
+Thus the catastrophic transfer failure is mainly an **out-of-support
+extrapolation failure**, not fragility to a large change in order frequencies.
+Tens of higher-order examples plus enough optimization steps recover nearly all
+accuracy; a handful of examples do not.

@@ -48,8 +48,8 @@ from followups import _common  # shared volume / flag helpers
 
 # --------------------------------------------------------------------------
 # Defaults applied to every run unless a config overrides them.
-#   - steps: NOT emitted (left at the run.py default 4000) — README pins the
-#     standard Snowflake hyperparameters; only the order filter varies.
+#   - steps: NOT emitted (left at the run.py default 4000). This is the E4
+#     follow-up budget; the Table 2 reproduction command uses 1000 steps.
 #   - n_train_puzzles 500 (README).
 #   - translate_aug ON for ALL configs (transfer AND control) so the
 #     positional confound is mitigated uniformly.
@@ -136,6 +136,80 @@ _add(
          "(25/500) are orders 6-8. Evaluate on the balanced held-out split.",
 )
 
+# --- Support-preserving sparse-support GRID (1 seed each) ------------------
+# Axes:
+#   H ∈ {3, 6, 12, 25, 50}   # higher-order (6-8) unique examples in a 1K set
+#   steps ∈ {1000, 4000}     # paper budget vs E4 default
+#   pos ∈ {absolute, RoPE}
+# Naming:
+#   e4_shift1k_h{HH}              -> H, 4K steps, absolute (legacy names)
+#   e4_shift95_1k                 -> H=50, 4K, absolute (legacy name)
+#   e4_shift1k_h{HH}_s1k[_rope]   -> H, 1K steps, abs/RoPE
+#   e4_shift1k_h{HH}_rope         -> H, 4K steps, RoPE
+#   e4_shift1k_h50_rope           -> H=50, 4K, RoPE
+# Plus 8K absolute probes at H∈{12,25,50} (1 seed; H=50 keeps legacy name).
+_SHIFT1K_COUNTS = {
+    3: "4:499,5:498,6:1,7:1,8:1",
+    6: "4:497,5:497,6:2,7:2,8:2",
+    12: "4:494,5:494,6:4,7:4,8:4",
+    25: "4:488,5:487,6:9,7:8,8:8",
+    50: "4:475,5:475,6:17,7:17,8:16",
+}
+
+
+def _shift1k_name(h: int, steps: int, rope: bool) -> str:
+    if h == 50 and steps == 4000 and not rope:
+        return "e4_shift95_1k"  # keep the first-launched H=50@4K name
+    base = f"e4_shift1k_h{h:02d}"
+    if steps == 1000:
+        base += "_s1k"
+    if rope:
+        base += "_rope"
+    return base
+
+
+for h, counts in _SHIFT1K_COUNTS.items():
+    for steps in (1000, 4000):
+        for rope in (False, True):
+            name = _shift1k_name(h, steps, rope)
+            overrides: dict[str, object] = {
+                "n_train_puzzles": 1000,
+                "train_order_counts": counts,
+            }
+            if steps != 4000:
+                overrides["steps"] = steps
+            if rope:
+                overrides["use_rope"] = True
+            _add(
+                name, "4,5,6,7,8", "4,5,6,7,8",
+                overrides=overrides,
+                n_seeds=1,
+                note=(
+                    f"GRID cell: 1K puzzles, H={h} higher-order, "
+                    f"{steps} steps, "
+                    f"{'RoPE' if rope else 'absolute'} pos."
+                ),
+            )
+
+# --- 8K absolute compute probes (1 seed each; not a full grid) ------------
+# H=50 ceiling plus cliff/mid support (H=12, H=25): does more steps rescue
+# sparse support without adding examples?
+for h in (12, 25, 50):
+    name = "e4_shift95_1k_8k" if h == 50 else f"e4_shift1k_h{h:02d}_s8k"
+    _add(
+        name, "4,5,6,7,8", "4,5,6,7,8",
+        overrides={
+            "steps": 8000,
+            "n_train_puzzles": 1000,
+            "train_order_counts": _SHIFT1K_COUNTS[h],
+        },
+        n_seeds=1,
+        note=(
+            f"8K-step absolute probe at H={h} "
+            f"({'ceiling' if h == 50 else 'compute vs sparse support'})."
+        ),
+    )
+
 # --- e4_leq5_rope: relative-position control (OPTIONAL) --------------------
 # e4_leq5 + RoPE, to compare learned-absolute + translation-aug vs. relative
 # encodings on the same transfer split.
@@ -151,7 +225,17 @@ _add(
 
 # Ordered grouping for `list` output (comment headers).
 CONFIG_ORDER = [
-    "e4_all", "e4_leq5", "e4_leq6", "e4_shift95", "e4_leq5_rope",
+    "e4_all", "e4_leq5", "e4_leq6", "e4_shift95",
+]
+CONFIG_ORDER += [
+    _shift1k_name(h, steps, rope)
+    for h in (3, 6, 12, 25, 50)
+    for steps in (1000, 4000)
+    for rope in (False, True)
+]
+CONFIG_ORDER += [
+    "e4_shift1k_h12_s8k", "e4_shift1k_h25_s8k", "e4_shift95_1k_8k",
+    "e4_leq5_rope",
 ]
 
 
@@ -195,7 +279,8 @@ def launch_command(config_name: str, seed: int) -> str:
     parts.append(f"{_flag('eval_orders')} {cfg['eval_orders']}")
     # Remaining effective flags in a stable, readable order.
     for name in (
-        "n_train_puzzles", "train_order_counts", "translate_aug", "use_rope",
+        "steps", "n_train_puzzles", "train_order_counts", "translate_aug",
+        "use_rope",
     ):
         if name not in eff:
             continue
