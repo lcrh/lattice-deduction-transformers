@@ -392,3 +392,14 @@ and evaluate only at epochs 2, 4, …, 16. Artifacts:
 settings stay solved. Several mid settings peak around epoch 6–10 and then
 flatten or soften on pass@32 (especially 4/8/16/32), so extra epochs are not
 uniformly helpful.
+
+### Natural blanks, 16 epochs
+
+**Experiment.** Same 16-epoch / even-eval protocol with the original
+Sudoku-Extreme blank pattern (~56 blanks; `.` normalized to `0`). Artifact:
+`results/natural_ep16_eval_all_epochs.json`.
+
+**Results (seed 0).** Every evaluated checkpoint (epochs 2–16) scores **0%**
+on pass@1/2/4/8/16/32. Malformed outputs improve early (344 → 6 by epoch 6)
+then worsen again (538 by epoch 16), so longer training does not unlock
+natural-difficulty Sudoku-Extreme for this model/data budget.
