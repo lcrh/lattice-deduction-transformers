@@ -369,3 +369,26 @@ model reaches perfect pass@32 by epoch 3. Performance degrades smoothly with
 blank count and is already weak at 16 blanks; at 32 blanks (still far easier
 than natural Sudoku-Extreme) it returns to 0%, matching the natural-blank
 failure mode.
+
+### Controlled blank sweep, 16 epochs (even-epoch eval)
+
+**Experiment.** Same blank construction and eval set, but train for 16 epochs
+and evaluate only at epochs 2, 4, …, 16. Artifacts:
+`results/blanks_ep16_sweep_summary.csv`.
+
+**Best checkpoint by pass@32 (then pass@1).**
+
+| blanks | best epoch | pass@1 | pass@32 |
+|---:|---:|---:|---:|
+| 1 | 14 | 99.6% | 100% |
+| 2 | 16 | 99.4% | 100% |
+| 4 | 6 | 89.7% | 100% |
+| 8 | 6 | 65.0% | 96.9% |
+| 16 | 6 | 29.8% | 84.4% |
+| 32 | 10 | 10.5% | 37.5% |
+
+**Interpretation.** Longer training helps the mid/hard band a lot versus the
+3-epoch ladder (16 blanks: 47% → 84% pass@32; 32 blanks: 0% → 38%). Easy
+settings stay solved. Several mid settings peak around epoch 6–10 and then
+flatten or soften on pass@32 (especially 4/8/16/32), so extra epochs are not
+uniformly helpful.

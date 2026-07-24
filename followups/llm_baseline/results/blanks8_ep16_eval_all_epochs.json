@@ -1,0 +1,194 @@
+{
+  "run_config": {
+    "model_id": "Qwen/Qwen3.5-0.8B",
+    "epochs": 16,
+    "n_train": 1000,
+    "n_eval": 32,
+    "samples_per_puzzle": 32,
+    "train_batch_size": 32,
+    "eval_batch_puzzles": 4,
+    "learning_rate": 2e-05,
+    "max_length": 512,
+    "max_new_tokens": 128,
+    "temperature": 0.8,
+    "top_p": 0.95,
+    "seed": 0,
+    "n_blanks": 8,
+    "eval_every_epochs": 2,
+    "train_subset_seed": 42,
+    "eval_subset_seed": 200,
+    "train_digest_sha256": "5b3889e807b608f1163feeef65af773ed1900b0465db17e9dd6ae99543b01cbe",
+    "eval_digest_sha256": "b91547847834320d3f637d3ae342dc06cdc0dfec113b5eb5ed2d9ce145892b13"
+  },
+  "train_seconds": 767.2216279506683,
+  "epochs": [
+    {
+      "checkpoint": "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks8_ep16_seed0/checkpoint-64",
+      "epoch": 2.0,
+      "n_eval_puzzles": 32,
+      "samples_per_puzzle": 32,
+      "pass_at_1": 0.16796875,
+      "pass_at_2": 0.25667842741935487,
+      "pass_at_4": 0.36004936040044494,
+      "pass_at_8": 0.4722388569207952,
+      "pass_at_16": 0.5832550617210286,
+      "pass_at_32": 0.6875,
+      "puzzles_passed": 22,
+      "correct_samples": 172,
+      "malformed_samples": 13,
+      "total_samples": 1024,
+      "generation": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "max_new_tokens": 128
+      }
+    },
+    {
+      "checkpoint": "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks8_ep16_seed0/checkpoint-128",
+      "epoch": 4.0,
+      "n_eval_puzzles": 32,
+      "samples_per_puzzle": 32,
+      "pass_at_1": 0.416015625,
+      "pass_at_2": 0.5047253024193549,
+      "pass_at_4": 0.5939411846496105,
+      "pass_at_8": 0.6705697867050759,
+      "pass_at_16": 0.7162956244193062,
+      "pass_at_32": 0.75,
+      "puzzles_passed": 24,
+      "correct_samples": 426,
+      "malformed_samples": 22,
+      "total_samples": 1024,
+      "generation": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "max_new_tokens": 128
+      }
+    },
+    {
+      "checkpoint": "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks8_ep16_seed0/checkpoint-192",
+      "epoch": 6.0,
+      "n_eval_puzzles": 32,
+      "samples_per_puzzle": 32,
+      "pass_at_1": 0.650390625,
+      "pass_at_2": 0.7852822580645162,
+      "pass_at_4": 0.8836276418242491,
+      "pass_at_8": 0.942111272734187,
+      "pass_at_16": 0.9648597063073376,
+      "pass_at_32": 0.96875,
+      "puzzles_passed": 31,
+      "correct_samples": 666,
+      "malformed_samples": 0,
+      "total_samples": 1024,
+      "generation": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "max_new_tokens": 128
+      }
+    },
+    {
+      "checkpoint": "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks8_ep16_seed0/checkpoint-256",
+      "epoch": 8.0,
+      "n_eval_puzzles": 32,
+      "samples_per_puzzle": 32,
+      "pass_at_1": 0.765625,
+      "pass_at_2": 0.8274319556451613,
+      "pass_at_4": 0.871412680756396,
+      "pass_at_8": 0.8948249004116635,
+      "pass_at_16": 0.9052959999036069,
+      "pass_at_32": 0.90625,
+      "puzzles_passed": 29,
+      "correct_samples": 784,
+      "malformed_samples": 0,
+      "total_samples": 1024,
+      "generation": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "max_new_tokens": 128
+      }
+    },
+    {
+      "checkpoint": "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks8_ep16_seed0/checkpoint-320",
+      "epoch": 10.0,
+      "n_eval_puzzles": 32,
+      "samples_per_puzzle": 32,
+      "pass_at_1": 0.8759765625,
+      "pass_at_2": 0.9001386088709677,
+      "pass_at_4": 0.909569660734149,
+      "pass_at_8": 0.9140615195658994,
+      "pass_at_16": 0.921875,
+      "pass_at_32": 0.9375,
+      "puzzles_passed": 30,
+      "correct_samples": 897,
+      "malformed_samples": 0,
+      "total_samples": 1024,
+      "generation": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "max_new_tokens": 128
+      }
+    },
+    {
+      "checkpoint": "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks8_ep16_seed0/checkpoint-384",
+      "epoch": 12.0,
+      "n_eval_puzzles": 32,
+      "samples_per_puzzle": 32,
+      "pass_at_1": 0.849609375,
+      "pass_at_2": 0.876008064516129,
+      "pass_at_4": 0.887994473025584,
+      "pass_at_8": 0.8970143107726534,
+      "pass_at_16": 0.9046683815350389,
+      "pass_at_32": 0.90625,
+      "puzzles_passed": 29,
+      "correct_samples": 870,
+      "malformed_samples": 0,
+      "total_samples": 1024,
+      "generation": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "max_new_tokens": 128
+      }
+    },
+    {
+      "checkpoint": "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks8_ep16_seed0/checkpoint-448",
+      "epoch": 14.0,
+      "n_eval_puzzles": 32,
+      "samples_per_puzzle": 32,
+      "pass_at_1": 0.8369140625,
+      "pass_at_2": 0.8754410282258065,
+      "pass_at_4": 0.8969193200778645,
+      "pass_at_8": 0.9047804986309574,
+      "pass_at_16": 0.9062372543566926,
+      "pass_at_32": 0.90625,
+      "puzzles_passed": 29,
+      "correct_samples": 857,
+      "malformed_samples": 0,
+      "total_samples": 1024,
+      "generation": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "max_new_tokens": 128
+      }
+    },
+    {
+      "checkpoint": "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks8_ep16_seed0/checkpoint-512",
+      "epoch": 16.0,
+      "n_eval_puzzles": 32,
+      "samples_per_puzzle": 32,
+      "pass_at_1": 0.8408203125,
+      "pass_at_2": 0.8715347782258064,
+      "pass_at_4": 0.8908335650723026,
+      "pass_at_8": 0.9033365420267534,
+      "pass_at_16": 0.9062245087133852,
+      "pass_at_32": 0.90625,
+      "puzzles_passed": 29,
+      "correct_samples": 861,
+      "malformed_samples": 0,
+      "total_samples": 1024,
+      "generation": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "max_new_tokens": 128
+      }
+    }
+  ]
+}
