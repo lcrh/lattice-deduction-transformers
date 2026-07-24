@@ -1,4 +1,4 @@
-# E5 — Fine-tuned LLM baseline (Qwen3 on Sudoku-Extreme)
+# E5 — Fine-tuned LLM baseline (Qwen3.5 on Sudoku-Extreme)
 
 **Question.** Zero-shot frontier LLMs solve 0% of Sudoku-Extreme, but
 zero-shot is a weak comparison for a task-trained solver: it leaves open
@@ -8,56 +8,47 @@ LLM on the identical 1K-puzzle training set isolates this.
 
 **Design.**
 
-- **Models:** Qwen3-4B and Qwen3-8B (instruct variants), LoRA fine-tuned.
-  One model is enough to make the point; two sizes show the trend.
-- **Data parity:** the same 1K Sudoku-Extreme training puzzles LDT uses.
-  Two supervision formats, both worth running because they bracket the
-  fairness spectrum:
-  1. **Direct answer**: puzzle string → 81-char solution string. Matches
-     LDT's information diet exactly (puzzle + solution, nothing else).
-  2. **Search-trace CoT**: puzzle → serialized solver trace (e.g. from
-     `experiments/sudoku/dpll.py`-style propagation + branching by a
-     symbolic solver) → solution. More favorable to the LLM; if even this
-     fails, the point is made strongly.
-- **Augmentation parity:** run both with and without the digit-perm ×
-  dihedral augmentation LDT uses (as data expansion for the SFT set).
-- **Eval:** same 1,000-puzzle test subsample as E1, greedy decoding plus
-  best-of-N sampling at N matched to LDT's inference-compute per puzzle
-  (report both). Strict 81-cell exact match; also report cells-correct so
-  a near-miss profile is visible.
-- **Report:** one summary table with accuracy alongside params, training
-  GPU-hours, and inference cost per puzzle — same columns as the LDT eval
-  summaries so rows are directly comparable (also feeds E8's
-  normalized-cost table).
+- **Model:** `Qwen/Qwen3.5-0.8B`, fully fine-tuned in BF16 on one B200.
+  The model is small enough that parameter-efficient tuning is unnecessary.
+- **Supervision:** direct answer only: puzzle string → 81-character solution
+  string. There are no generated search traces or trace-supervision variants.
+- **Training data:** exactly 1,000 examples from the
+  `sapientinc/sudoku-extreme` train split, selected with the LDT loader's
+  fixed subset seed 42. No data augmentation is used in this first experiment.
+- **Epoch sweep:** one run trains for five epochs by default and saves a
+  resumable Hugging Face checkpoint after every epoch. Those checkpoints are
+  the 1-, 2-, 3-, 4-, and 5-epoch conditions; `--epochs` changes the sweep
+  ceiling.
+- **Eval:** evaluate every epoch checkpoint on 32 held-out test puzzles
+  selected with the LDT eval seed 200 by default. Draw 32 independent samples
+  per puzzle and report strict pass@1 (sample-level success) and pass@32 (at
+  least one exact solution). A
+  completion is correct only if, after stripping outer whitespace, it is
+  exactly 81 digits in `1`–`9` and equals the reference solution.
+- **Artifacts:** use the deterministic Modal-volume directory
+  `/checkpoints/followups/llm_baseline/qwen3_5_0_8b_seed<N>/`. Each
+  `checkpoint-*` directory gets an `eval.json` and `eval.jsonl`; the run root
+  gets `run_config.json` and `eval_all_epochs.json`.
 
-**Expected outcome (to be falsified):** low-but-nonzero direct-answer
-accuracy, better-but-still-far CoT accuracy at ~4 orders of magnitude more
-parameters and compute than LDT's 800K/15-min budget. Whatever the number,
-it turns the LLM comparison from a strawman into a meaningful one.
+The implementation is [`run.py`](run.py). It uses Transformers' native
+Qwen3.5 support for both full SFT and generation, so training and evaluation
+share the same tokenizer, chat template, and checkpoint format.
 
-**Cost.** LoRA SFT on 1K–8K examples is minutes-to-an-hour per config on a
-single A100/H100-class GPU; eval dominated by best-of-N sampling. Budget a
-few GPU-hours total across {2 models × 2 formats × ±aug}. Trim the grid to
-{4B × both formats, 8B × best format} if needed.
+## Run
 
-## TODO(worker)
+```bash
+# Default: 5 epochs, 1,000 train puzzles, 32 eval puzzles, pass@32.
+uv run modal run --detach followups/llm_baseline/run.py
 
-- [ ] Decide serving/training stack on Modal (e.g. HF `peft` + `trl` SFT
-      for training; vLLM for batched eval) and pin it in this README.
-- [ ] `make_sft_data.py`: emit JSONL for both formats from the
-      `sapientinc/sudoku-extreme` train split (reuse
-      `lattice_diffusion/data/sudoku_extreme.py`); trace generator for
-      format 2 (a plain symbolic DPLL with a serialization — do NOT use the
-      learned model; the trace must be solver-ground-truth).
-- [ ] `train_sft.py` (Modal app): LoRA config, both model sizes, logs to
-      W&B like `repro/` does.
-- [ ] `eval_llm.py`: batched generation, strict parser (reject malformed
-      grids as wrong, count separately), best-of-N with a
-      validity-then-majority pick; writes `eval.json` in the same schema
-      family as the LDT evals so `collect.py` patterns transfer.
-- [ ] Prompt formats documented in a `prompts.md` (stay consistent with
-      the zero-shot prompts used in the original frontier-LLM evals).
-- [ ] Sanity gates: (1) zero-shot Qwen3 baseline first (expect ~0%,
-      consistent with the zero-shot frontier-LLM results); (2) SFT model must
-      reach ~100% on *training* puzzles, otherwise the pipeline (not the
-      model) is the bottleneck.
+# Short smoke test before spending the full evaluation budget.
+uv run modal run followups/llm_baseline/run.py \
+    --epochs 1 --n-train 32 --n-eval 2 --samples-per-puzzle 2
+```
+
+The default run is the experiment of record. The reduced command only checks
+that model loading, checkpointing, and generation work end to end.
+
+**Sanity gate.** Inspect the training loss and the one-epoch eval before
+trusting the sweep. If no checkpoint can solve any training example when
+sampled, debug the prompt/label masking rather than increasing the epoch
+count.

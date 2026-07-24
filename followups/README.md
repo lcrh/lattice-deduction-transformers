@@ -22,7 +22,7 @@ The benchmark code these experiments build on lives in
 | E2 | [`search_process/`](search_process/) | Search-process ablations: decision-selection heuristics (uniform vs. MRV vs. entropy-based vs. greedy) and backtracking policies (reset-to-root vs. partial/stochastic backjumping), matched between training and inference | Sudoku-Extreme | mostly eval-only + ~4 training configs |
 | E3 | [`deduction_operator/`](deduction_operator/) | Ablating the deduction operator at inference: extra internal loops, deduce-to-fixpoint before branching, per-iteration elimination profiles, θ_elim sensitivity | Sudoku-Extreme | eval-only, reuses E1 checkpoints |
 | E4 | [`ood_snowflake/`](ood_snowflake/) | Does LDT generalize to *unseen puzzle sizes*? Train on small Snowflake orders, test on larger ones | Snowflake | ~9 runs × ~5 B200-min |
-| E5 | [`llm_baseline/`](llm_baseline/) | Does a *fine-tuned* LLM (Qwen3) close the gap, or is the architecture + lattice doing the work? | Sudoku-Extreme | a few GPU-hours (LoRA SFT) |
+| E5 | [`llm_baseline/`](llm_baseline/) | Does a directly fine-tuned Qwen3.5-0.8B close the gap, or is the architecture + lattice doing the work? | Sudoku-Extreme | one B200 run plus pass@32 eval |
 | E6 | [`latent_carry/`](latent_carry/) | Does carrying a TRM-style latent across solve steps help, or is the lattice a sufficient state? | Sudoku-Extreme | ~15 runs ≈ 2 B200-h |
 | E7 | [`maze_soundness/`](maze_soundness/) | Why does Maze-Hard emit valid-but-suboptimal paths instead of abstaining, and does a verification step restore soundness? | Maze-Hard | mostly eval/analysis |
 | E8 | [`cost_accounting/`](cost_accounting/) | Normalized training-cost comparison (GPU-hours / FLOPs) + offline α-operator cost | all | bookkeeping + small benchmarks |
