@@ -169,6 +169,8 @@ def aug_forward(
     state: torch.Tensor,           # [B, S, C] CANONICAL
     given_mask: torch.Tensor,      # [B, S]    CANONICAL
     *,
+    orig_x: torch.Tensor | None = None,   # [B, S, C] immutable puzzle
+    carry: torch.Tensor | None = None,    # [B, S, dim] fixed-frame latent
     orig_y: torch.Tensor | None = None,   # [B, S, C] CANONICAL or None
     augment: bool = True,
     augment_dihedral: bool = True,        # if False, digit-perm only (no spatial)
@@ -216,19 +218,37 @@ def aug_forward(
             apply_aug_state(orig_y, digit_perm, dih_idx, cell_perms)
             if orig_y is not None else None
         )
+        orig_x_aug = (
+            apply_aug_state(orig_x, digit_perm, dih_idx, cell_perms)
+            if orig_x is not None else None
+        )
     else:
         digit_perm = None
         dih_idx = None
         state_aug = state
         gm_aug = given_mask
         orig_y_aug = orig_y
+        orig_x_aug = orig_x
 
-    out = model(state_aug, return_all=return_all)
+    if orig_x is None and carry is None:
+        out = model(state_aug, return_all=return_all)
+    else:
+        if augment and carry is not None:
+            raise ValueError(
+                "cannot re-augment an opaque carried latent; use a fixed frame"
+            )
+        out = model(
+            state_aug,
+            return_all=return_all,
+            orig_x=orig_x_aug,
+            carry=carry,
+        )
     aug_info = {
         "digit_perm": digit_perm,
         "dih_idx": dih_idx,
         "aug_state": state_aug,
         "aug_given_mask": gm_aug,
         "aug_orig_y": orig_y_aug,
+        "aug_orig_x": orig_x_aug,
     }
     return out, aug_info

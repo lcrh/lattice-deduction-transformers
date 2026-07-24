@@ -235,6 +235,21 @@ def train(cfg: TrainConfig):
     torch.manual_seed(cfg.seed)
     torch.set_float32_matmul_precision("high")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    carry_policy = cfg.step.carry_latent
+    expected_mode = {
+        "off": "off", "h": "h", "z": "z", "zero_z": "z",
+    }.get(carry_policy)
+    if expected_mode is None:
+        raise ValueError(f"unknown carry_latent policy {carry_policy!r}")
+    if cfg.model.carry_mode != expected_mode:
+        raise ValueError(
+            f"carry policy {carry_policy!r} requires model carry_mode "
+            f"{expected_mode!r}, got {cfg.model.carry_mode!r}"
+        )
+    if carry_policy != "off" and cfg.step.augment:
+        raise ValueError("latent-carry training requires per-step augment=False")
+    if carry_policy != "off" and cfg._pool_strategy is not None:
+        raise ValueError("latent carry does not compose with pool backtracking strategies")
     out_dir = Path(cfg.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     if cfg.no_timestamp:
         # Deterministic path used by launchers so downstream
@@ -341,6 +356,15 @@ def train(cfg: TrainConfig):
     # cell is multi-alive on all GT bits). α-of-surviving = OR over K.
     pool_last_alpha = pool_solutions.bool().any(dim=1).float()  # [P, S, C]
     pool_age = torch.zeros(pool_size, dtype=torch.long, device=device)
+    # zero_z deliberately has no outer carry storage: passing carry=None is
+    # its exact zero-boundary control.
+    pool_carry = (
+        torch.zeros(
+            pool_size, pool_state.shape[1], cfg.model.dim,
+            device=device, dtype=pool_state.dtype,
+        )
+        if carry_policy in {"h", "z"} else None
+    )
     pool_strategy = getattr(cfg, "_pool_strategy", None)
     _S, _C = pool_state.shape[1], pool_state.shape[2]
     pool_handle = (pool_strategy.attach(pool_size, _S, _C, device)
@@ -384,6 +408,7 @@ def train(cfg: TrainConfig):
         solutions = pool_solutions[sample_idx]   # [B, K, S, C]
         last_alpha = pool_last_alpha[sample_idx]  # [B, S, C]
         orig_x = pool_orig_x[sample_idx]
+        carry = pool_carry[sample_idx] if pool_carry is not None else None
         age = pool_age[sample_idx]
         given_mask = _given_mask(orig_x)
         # `orig_y` for this step is the dynamic α(surviving K solutions),
@@ -403,12 +428,21 @@ def train(cfg: TrainConfig):
         # cfg.step.augment=False this is a strict pass-through.
         model.train()
         optimizer.zero_grad(set_to_none=True)
-        out, aug_info = aug_forward(
-            model, state, given_mask, orig_y=orig_y,
-            augment=cfg.step.augment,
-            cell_perms=cell_perms_train,
-            return_all=True,
-        )
+        if carry_policy == "off":
+            out, aug_info = aug_forward(
+                model, state, given_mask, orig_y=orig_y,
+                augment=cfg.step.augment,
+                cell_perms=cell_perms_train,
+                return_all=True,
+            )
+        else:
+            out, aug_info = aug_forward(
+                model, state, given_mask,
+                orig_x=orig_x, carry=carry, orig_y=orig_y,
+                augment=False,
+                cell_perms=cell_perms_train,
+                return_all=True,
+            )
         loss = _losses(
             out,
             aug_info["aug_state"], aug_info["aug_orig_y"], aug_info["aug_given_mask"],
@@ -436,9 +470,16 @@ def train(cfg: TrainConfig):
         want_info_stats = (step % cfg.log_every == 0)
         with torch.no_grad():
             new_state, detected_conflict, solved, _, info = dpll_step(
-                model, state, given_mask, cfg.step, orig_y=orig_y,
+                model, state, given_mask, cfg.step,
+                orig_x=orig_x if carry_policy != "off" else None,
+                carry=carry,
+                orig_y=orig_y,
                 want_stats=want_info_stats,
             )
+        new_carry = (
+            info["carry_out"].clone()
+            if pool_carry is not None else None
+        )
         gt_conflict_post = _gt_conflict(new_state, orig_y)
 
         # ---- discard policy on the sampled batch ----
@@ -482,6 +523,8 @@ def train(cfg: TrainConfig):
             new_solutions[discard] = f_solutions
             new_age[discard] = 0
             new_last_alpha[discard] = f_solutions.bool().any(dim=1).float()
+            if new_carry is not None:
+                new_carry[discard] = 0
         else:
             new_orig_x = orig_x
             new_solutions = solutions
@@ -497,6 +540,8 @@ def train(cfg: TrainConfig):
         pool_solutions[sample_idx] = new_solutions
         pool_last_alpha[sample_idx] = new_last_alpha
         pool_age[sample_idx] = new_age
+        if pool_carry is not None:
+            pool_carry[sample_idx] = new_carry
 
         # ---- in-train eval (mini-solve on held-out SAT puzzles) ----
         if cfg.eval_every > 0 and step % cfg.eval_every == 0:

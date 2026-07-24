@@ -38,6 +38,9 @@ class EvalRunSpec:
     batch_size: int = 512
     max_rounds: int = 1000
     augment: bool = True
+    # "auto" recovers the training policy from checkpoint metadata. Explicit
+    # zero_z provides the E6 eval-time zero-carry probe.
+    carry_latent: str = "auto"
     estimate_sequential: bool = False
     seq_drain_max_rounds: int = 200
     dropout_p: float = 0.05
@@ -100,6 +103,22 @@ def run_eval(spec: EvalRunSpec) -> dict:
         print(f"  [eval-n-loops] overriding n_loops {native_loops} -> "
               f"{spec.eval_n_loops}", flush=True)
     cfg = LoopedTransformerConfig(**saved_cfg)
+    saved_policy = (
+        ckpt.get("train_cfg", {}).get("step", {}).get("carry_latent", "off")
+    )
+    carry_policy = saved_policy if spec.carry_latent == "auto" else spec.carry_latent
+    expected_mode = {"off": "off", "h": "h", "z": "z", "zero_z": "z"}.get(
+        carry_policy
+    )
+    if expected_mode is None or expected_mode != cfg.carry_mode:
+        raise ValueError(
+            f"eval carry policy {carry_policy!r} is incompatible with "
+            f"checkpoint carry_mode {cfg.carry_mode!r}"
+        )
+    if carry_policy != "off" and spec.augment:
+        raise ValueError(
+            "carry checkpoint eval requires augment=False (fixed latent frame)"
+        )
     model = PowersetModel(cfg)
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device).eval()
@@ -140,7 +159,13 @@ def run_eval(spec: EvalRunSpec) -> dict:
         temp_decide=spec.temp_decide,
         cls_threshold=spec.cls_threshold,
         augment=spec.augment,
+        carry_latent=carry_policy,
     )
+    if step_cfg.carry_latent != carry_policy:
+        raise ValueError(
+            f"step_cfg carry policy {step_cfg.carry_latent!r} does not match "
+            f"requested eval policy {carry_policy!r}"
+        )
     _max_to = spec.eval_max_timeouts if spec.eval_max_timeouts > 0 else None
     solve_cfg = spec.solve_cfg or SolveConfig(
         step=step_cfg, max_rounds=spec.max_rounds,
@@ -199,6 +224,7 @@ def run_eval(spec: EvalRunSpec) -> dict:
         "n_chains": spec.n_chains, "batch_size": spec.batch_size,
         "max_rounds": spec.max_rounds,
         "augment": spec.augment,
+        "carry_latent": carry_policy,
         "eval_max_timeouts": spec.eval_max_timeouts,
         "eval_n_loops": spec.eval_n_loops,
         "native_n_loops": native_loops,
