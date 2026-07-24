@@ -19,9 +19,14 @@ LLM on the identical 1K-puzzle training set isolates this.
   resumable Hugging Face checkpoint after every epoch. Evaluation runs only
   at epochs 2, 4, ..., 16 by default (`--eval-every-epochs 2`).
 - **Hint / blank control:** `--n-blanks K` rebuilds every train and eval
-  puzzle from its solution with exactly `K` missing cells (`0`s). Natural
-  Sudoku-Extreme puzzles average ~56 blanks; omit the flag to keep the natural
-  blank pattern (`.` normalized to `0`).
+  puzzle from its complete 81-digit solution, then chooses exactly `K` of the
+  81 cell positions uniformly at random (without replacement) and replaces
+  them with `0`. Thus the controlled blanks are **not** restricted to the
+  original puzzle's blank positions: an original blank may be revealed, and
+  an original given may be hidden. Selection is deterministic from the subset
+  seed and puzzle index, but the sets are not nested across different `K`
+  runs. Natural Sudoku-Extreme puzzles average ~56 blanks; omit the flag to
+  preserve their original blank pattern (`.` normalized to `0`).
 - **Eval:** evaluate every epoch checkpoint on 32 held-out test puzzles
   selected with the LDT eval seed 200 by default. Draw 32 independent samples
   per puzzle and report the unbiased HumanEval pass@k curve for
@@ -29,7 +34,7 @@ LLM on the identical 1K-puzzle training set isolates this.
   if, after stripping outer whitespace, it is exactly 81 digits in `1`–`9` and
   equals the reference solution.
 - **Artifacts:** use the deterministic Modal-volume directory
-  `/checkpoints/followups/llm_baseline/qwen3_5_0_8b_<blanksTag>_seed<N>/`,
+  `/checkpoints/followups/llm_baseline/qwen3_5_0_8b_<blanksTag>_ep<E>_seed<N>/`,
   where `<blanksTag>` is `natural` or `blanksK`. Each `checkpoint-*`
   directory gets an `eval.json` and `eval.jsonl`; the run root gets
   `run_config.json` and `eval_all_epochs.json`.
