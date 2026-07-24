@@ -191,7 +191,7 @@ class SolveResult:
                                  # the streaming-queue solver. -1 if puzzle
                                  # was never filled (only possible if P > Q
                                  # and we exit before all queued).
-# ----- Early-abort bookkeeping -----
+    # ----- Early-abort bookkeeping -----
     aborted: bool = False        # True if eval_max_timeouts was hit and we
                                  # stopped filling new puzzles.
     dispatched_hi: int = -1      # highest puzzle index ever filled into a slot.
@@ -481,6 +481,7 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                 "wrong": bool(wrong_out[p].item()),
                 "timeout": bool((~solved_out[p]).item()),
                 "round_solved": int(round_solved_out[p].item()),
+                "n_resets": int(n_resets_out[p].item()),
                 "puzzle_calls": int(puzzle_calls_out[p].item()),
             })
 
@@ -945,7 +946,7 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         decision_bitflips_per_round=decision_bitflips_out,
         n_givens=n_givens_out,
         puzzle_calls=puzzle_calls_out,
-aborted=aborted,
+        aborted=aborted,
         dispatched_hi=dispatched_hi,
         n_evaluated=n_evaluated,
         backtrack_policy=cfg.backtrack,

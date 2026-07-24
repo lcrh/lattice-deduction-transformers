@@ -53,7 +53,7 @@ def run(
     out_suffix: str = ".eval.fixed.json",
     split: str = "test",
     compile: bool = False,
-eval_max_timeouts: int = 50,
+    eval_max_timeouts: int = 50,
     # ---- E3 additions (all default-off / no-op at defaults) ----
     eval_n_loops: int = 0,        # 0 = checkpoint's native n_loops (E3-O1)
     deduce_passes: int = 1,       # 1 = legacy single pass (E3-O3)
@@ -181,7 +181,7 @@ eval_max_timeouts: int = 50,
         estimate_sequential=estimate_sequential,
         seq_drain_max_rounds=seq_drain_max_rounds,
         log_per_round_fill=log_per_round_fill,
-eval_max_timeouts=_max_to,
+        eval_max_timeouts=_max_to,
         backtrack=backtrack,
         geometric_p=geometric_p,
         learn_negation=learn_negation,
@@ -278,7 +278,7 @@ eval_max_timeouts=_max_to,
             "n_chains": n_chains, "batch_size": batch_size,
             "max_rounds": max_rounds,
             "augment": augment,
-"eval_max_timeouts": eval_max_timeouts,
+            "eval_max_timeouts": eval_max_timeouts,
             # E3 knobs recorded for downstream collect/plot.
             "eval_n_loops": eval_n_loops,
             "native_n_loops": native_loops,
@@ -298,11 +298,15 @@ eval_max_timeouts=_max_to,
             "correct": n_correct, "wrong": n_wrong, "timeouts": n_timeout,
             "total_calls": res.model_calls,
             "avg_calls_per_correct": avg_calls,
-            "avg_resets": float(res.n_resets.float().mean().item()),
+            # Prefix-scoped means: aborted/resume runs must not average over
+            # never-filled (-1) or post-gap straggler puzzles.
+            "avg_resets": (
+                float(sum(outcomes[i]["n_resets"] for i in prefix_idxs) / n_prefix)
+                if n_prefix > 0 else 0.0),
             # E2 sequential-cost + puzzle-calls summary (README key-cost metric).
-            "avg_puzzle_calls": float(
-                res.puzzle_calls[res.puzzle_calls >= 0].float().mean().item()
-                if int((res.puzzle_calls >= 0).sum().item()) > 0 else -1.0),
+            "avg_puzzle_calls": (
+                float(sum(outcomes[i]["puzzle_calls"] for i in prefix_idxs) / n_prefix)
+                if n_prefix > 0 else -1.0),
         },
         "diag": {
             "total_deduced": res.diag_total_deduced,
@@ -422,7 +426,7 @@ def entrypoint(
     out_suffix: str = ".eval.fixed.json",
     split: str = "test",
     compile: bool = False,
-eval_max_timeouts: int = 50,
+    eval_max_timeouts: int = 50,
     eval_n_loops: int = 0,
     deduce_passes: int = 1,
     deduce_pass_cap: int = 16,

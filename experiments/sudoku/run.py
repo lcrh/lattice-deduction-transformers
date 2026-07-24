@@ -234,7 +234,7 @@ def run(
         train_name = f"seed{seed}_{steps}s_bs{batch_size}_aug{int(augment)}_{ts}"
         train_no_timestamp = False
 
-if _resume_eval_only:
+    if _resume_eval_only:
         # Trained checkpoint already on the volume — skip training entirely and
         # eval the existing .pt (per-puzzle progress file, if any, resumes below).
         from pathlib import Path as _Path
@@ -370,7 +370,7 @@ if _resume_eval_only:
         n_chains=eval_n_chains, batch_size=eval_batch_size,
         estimate_sequential=estimate_sequential,
         seq_drain_max_rounds=seq_drain_max_rounds,
-eval_max_timeouts=_max_to,
+        eval_max_timeouts=_max_to,
         already_done=(already_done or None),
         backtrack=backtrack,
         geometric_p=geometric_p,
@@ -413,6 +413,7 @@ eval_max_timeouts=_max_to,
             "wrong": bool(res.wrong[i].item()),
             "timeout": bool(res.timeouts[i].item()),
             "round_solved": int(res.round_solved[i].item()),
+            "n_resets": int(res.n_resets[i].item()),
             "puzzle_calls": int(res.puzzle_calls[i].item()),
         }
 
@@ -429,11 +430,23 @@ eval_max_timeouts=_max_to,
         print(f"  [prefix] gap-free prefix length n={n} "
               f"(aborted={res.aborted}, resumed={bool(already_done)}, "
               f"outcomes={len(outcomes)}/{P_total})", flush=True)
-    avg_rounds_solved = float(
-        res.round_solved[res.solved].float().mean().item()
-        if int(res.solved.sum().item()) > 0 else 0.0
+    # Prefix-scoped means so abort/resume reporting matches the clean sample.
+    prefix_correct_rounds = [
+        int(outcomes[i]["round_solved"]) for i in prefix_idxs
+        if outcomes[i]["correct"] and int(outcomes[i]["round_solved"]) >= 0
+    ]
+    avg_rounds_solved = (
+        float(sum(prefix_correct_rounds) / len(prefix_correct_rounds))
+        if prefix_correct_rounds else 0.0
     )
-    avg_resets = float(res.n_resets.float().mean().item())
+    avg_resets = (
+        float(sum(int(outcomes[i].get("n_resets", 0)) for i in prefix_idxs) / n)
+        if n > 0 else 0.0
+    )
+    avg_puzzle_calls = (
+        float(sum(int(outcomes[i]["puzzle_calls"]) for i in prefix_idxs) / n)
+        if n > 0 else -1.0
+    )
 
     # Diagnostics
     den = max(res.diag_total_deduced, 1)
@@ -478,6 +491,7 @@ eval_max_timeouts=_max_to,
         "model_calls_total": res.model_calls,
         "avg_rounds_solved": avg_rounds_solved,
         "avg_resets": avg_resets,
+        "avg_puzzle_calls": avg_puzzle_calls,
         "step_cfg": asdict(step_cfg),
         "max_rounds": eval_max_rounds,
         "train_wallclock": train_wallclock,
@@ -530,6 +544,7 @@ eval_max_timeouts=_max_to,
                 "model_calls_total": res.model_calls,
                 "avg_rounds_solved": avg_rounds_solved,
                 "avg_resets": avg_resets,
+                "avg_puzzle_calls": avg_puzzle_calls,
                 "unsound_rate": unsound_rate,
                 "conflict_p": cls_p, "conflict_r": cls_r,
             },
@@ -557,7 +572,7 @@ eval_max_timeouts=_max_to,
                 "wrong": is_wrong,
                 "timeout": is_timeout,
                 "round_solved": rs,
-                "n_resets": int(res.n_resets[i].item()),
+                "n_resets": int(o.get("n_resets", res.n_resets[i].item())),
                 "n_givens": int(n_givens_per_puzzle[i]),
                 "puzzle_calls": int(o["puzzle_calls"]),
                 "forwards_unbatched": forwards_unbatched,
