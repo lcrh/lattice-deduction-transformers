@@ -1,0 +1,88 @@
+{
+  "run_config": {
+    "model_id": "Qwen/Qwen3.5-0.8B",
+    "epochs": 3,
+    "n_train": 1000,
+    "n_eval": 32,
+    "samples_per_puzzle": 32,
+    "train_batch_size": 32,
+    "eval_batch_puzzles": 4,
+    "learning_rate": 2e-05,
+    "max_length": 512,
+    "max_new_tokens": 128,
+    "temperature": 0.8,
+    "top_p": 0.95,
+    "seed": 0,
+    "n_blanks": 16,
+    "train_subset_seed": 42,
+    "eval_subset_seed": 200,
+    "train_digest_sha256": "bbfaab5b2de39d22df0a412591cdd5245ecf9a4aa58ac31b20562416dbf242e8",
+    "eval_digest_sha256": "7602d55e774c634862e17938f374156bf4e18733f40bca66e9e94963cf8b74c7"
+  },
+  "train_seconds": 107.27529835700989,
+  "epochs": [
+    {
+      "checkpoint": "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks16_seed0/checkpoint-32",
+      "epoch": 1.0,
+      "n_eval_puzzles": 32,
+      "samples_per_puzzle": 32,
+      "pass_at_1": 0.0,
+      "pass_at_2": 0.0,
+      "pass_at_4": 0.0,
+      "pass_at_8": 0.0,
+      "pass_at_16": 0.0,
+      "pass_at_32": 0.0,
+      "puzzles_passed": 0,
+      "correct_samples": 0,
+      "malformed_samples": 238,
+      "total_samples": 1024,
+      "generation": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "max_new_tokens": 128
+      }
+    },
+    {
+      "checkpoint": "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks16_seed0/checkpoint-64",
+      "epoch": 2.0,
+      "n_eval_puzzles": 32,
+      "samples_per_puzzle": 32,
+      "pass_at_1": 0.0234375,
+      "pass_at_2": 0.04227570564516129,
+      "pass_at_4": 0.07131882647385984,
+      "pass_at_8": 0.11298259640341118,
+      "pass_at_16": 0.17288281262594507,
+      "pass_at_32": 0.25,
+      "puzzles_passed": 8,
+      "correct_samples": 24,
+      "malformed_samples": 31,
+      "total_samples": 1024,
+      "generation": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "max_new_tokens": 128
+      }
+    },
+    {
+      "checkpoint": "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks16_seed0/checkpoint-96",
+      "epoch": 3.0,
+      "n_eval_puzzles": 32,
+      "samples_per_puzzle": 32,
+      "pass_at_1": 0.056640625,
+      "pass_at_2": 0.09929435483870966,
+      "pass_at_4": 0.16139286707452727,
+      "pass_at_8": 0.24318277430763524,
+      "pass_at_16": 0.3434904523544679,
+      "pass_at_32": 0.46875,
+      "puzzles_passed": 15,
+      "correct_samples": 58,
+      "malformed_samples": 2,
+      "total_samples": 1024,
+      "generation": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "max_new_tokens": 128
+      }
+    }
+  ]
+}

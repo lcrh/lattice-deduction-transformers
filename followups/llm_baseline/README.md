@@ -1,4 +1,4 @@
-# E5 — Fine-tuned LLM baseline (Qwen3 on Sudoku-Extreme)
+# E5 — Fine-tuned LLM baseline (Qwen3.5 on Sudoku-Extreme)
 
 **Question.** Zero-shot frontier LLMs solve 0% of Sudoku-Extreme, but
 zero-shot is a weak comparison for a task-trained solver: it leaves open
@@ -8,56 +8,72 @@ LLM on the identical 1K-puzzle training set isolates this.
 
 **Design.**
 
-- **Models:** Qwen3-4B and Qwen3-8B (instruct variants), LoRA fine-tuned.
-  One model is enough to make the point; two sizes show the trend.
-- **Data parity:** the same 1K Sudoku-Extreme training puzzles LDT uses.
-  Two supervision formats, both worth running because they bracket the
-  fairness spectrum:
-  1. **Direct answer**: puzzle string → 81-char solution string. Matches
-     LDT's information diet exactly (puzzle + solution, nothing else).
-  2. **Search-trace CoT**: puzzle → serialized solver trace (e.g. from
-     `experiments/sudoku/dpll.py`-style propagation + branching by a
-     symbolic solver) → solution. More favorable to the LLM; if even this
-     fails, the point is made strongly.
-- **Augmentation parity:** run both with and without the digit-perm ×
-  dihedral augmentation LDT uses (as data expansion for the SFT set).
-- **Eval:** same 1,000-puzzle test subsample as E1, greedy decoding plus
-  best-of-N sampling at N matched to LDT's inference-compute per puzzle
-  (report both). Strict 81-cell exact match; also report cells-correct so
-  a near-miss profile is visible.
-- **Report:** one summary table with accuracy alongside params, training
-  GPU-hours, and inference cost per puzzle — same columns as the LDT eval
-  summaries so rows are directly comparable (also feeds E8's
-  normalized-cost table).
+- **Model:** `Qwen/Qwen3.5-0.8B`, fully fine-tuned in BF16 on one B200.
+  The model is small enough that parameter-efficient tuning is unnecessary.
+- **Supervision:** direct answer only: puzzle string → 81-character solution
+  string. There are no generated search traces or trace-supervision variants.
+- **Training data:** exactly 1,000 examples from the
+  `sapientinc/sudoku-extreme` train split, selected with the LDT loader's
+  fixed subset seed 42. No data augmentation is used in this first experiment.
+- **Epoch sweep:** one run trains for 16 epochs by default and saves a
+  resumable Hugging Face checkpoint after every epoch. Evaluation runs only
+  at epochs 2, 4, ..., 16 by default (`--eval-every-epochs 2`).
+- **Hint / blank control:** `--n-blanks K` rebuilds every train and eval
+  puzzle from its complete 81-digit solution, then chooses exactly `K` of the
+  81 cell positions uniformly at random (without replacement) and replaces
+  them with `0`. Thus the controlled blanks are **not** restricted to the
+  original puzzle's blank positions: an original blank may be revealed, and
+  an original given may be hidden. Selection is deterministic from the subset
+  seed and puzzle index, but the sets are not nested across different `K`
+  runs. Natural Sudoku-Extreme puzzles average ~56 blanks; omit the flag to
+  preserve their original blank pattern (`.` normalized to `0`).
+- **Eval:** evaluate every epoch checkpoint on 32 held-out test puzzles
+  selected with the LDT eval seed 200 by default. Draw 32 independent samples
+  per puzzle and report the unbiased HumanEval pass@k curve for
+  `k ∈ {1, 2, 4, 8, 16, 32}` from those samples. A completion is correct only
+  if, after stripping outer whitespace, it is exactly 81 digits in `1`–`9` and
+  equals the reference solution.
+- **Artifacts:** use the deterministic Modal-volume directory
+  `/checkpoints/followups/llm_baseline/qwen3_5_0_8b_<blanksTag>_ep<E>_seed<N>/`,
+  where `<blanksTag>` is `natural` or `blanksK`. Each `checkpoint-*`
+  directory gets an `eval.json` and `eval.jsonl`; the run root gets
+  `run_config.json` and `eval_all_epochs.json`.
 
-**Expected outcome (to be falsified):** low-but-nonzero direct-answer
-accuracy, better-but-still-far CoT accuracy at ~4 orders of magnitude more
-parameters and compute than LDT's 800K/15-min budget. Whatever the number,
-it turns the LLM comparison from a strawman into a meaningful one.
+The implementation is [`run.py`](run.py). It uses Transformers' native
+Qwen3.5 support for both full SFT and generation, so training and evaluation
+share the same tokenizer, chat template, and checkpoint format.
 
-**Cost.** LoRA SFT on 1K–8K examples is minutes-to-an-hour per config on a
-single A100/H100-class GPU; eval dominated by best-of-N sampling. Budget a
-few GPU-hours total across {2 models × 2 formats × ±aug}. Trim the grid to
-{4B × both formats, 8B × best format} if needed.
+## Run
 
-## TODO(worker)
+```bash
+# Default: 16 epochs, eval at 2/4/.../16, natural blanks.
+uv run modal run --detach followups/llm_baseline/run.py
 
-- [ ] Decide serving/training stack on Modal (e.g. HF `peft` + `trl` SFT
-      for training; vLLM for batched eval) and pin it in this README.
-- [ ] `make_sft_data.py`: emit JSONL for both formats from the
-      `sapientinc/sudoku-extreme` train split (reuse
-      `lattice_diffusion/data/sudoku_extreme.py`); trace generator for
-      format 2 (a plain symbolic DPLL with a serialization — do NOT use the
-      learned model; the trace must be solver-ground-truth).
-- [ ] `train_sft.py` (Modal app): LoRA config, both model sizes, logs to
-      W&B like `repro/` does.
-- [ ] `eval_llm.py`: batched generation, strict parser (reject malformed
-      grids as wrong, count separately), best-of-N with a
-      validity-then-majority pick; writes `eval.json` in the same schema
-      family as the LDT evals so `collect.py` patterns transfer.
-- [ ] Prompt formats documented in a `prompts.md` (stay consistent with
-      the zero-shot prompts used in the original frontier-LLM evals).
-- [ ] Sanity gates: (1) zero-shot Qwen3 baseline first (expect ~0%,
-      consistent with the zero-shot frontier-LLM results); (2) SFT model must
-      reach ~100% on *training* puzzles, otherwise the pipeline (not the
-      model) is the bottleneck.
+# Controlled-blank sweep (same 16-epoch/even-epoch-eval regime).
+uv run modal run --detach followups/llm_baseline/run.py --n-blanks 1
+uv run modal run --detach followups/llm_baseline/run.py --n-blanks 2
+uv run modal run --detach followups/llm_baseline/run.py --n-blanks 4
+uv run modal run --detach followups/llm_baseline/run.py --n-blanks 8
+uv run modal run --detach followups/llm_baseline/run.py --n-blanks 16
+uv run modal run --detach followups/llm_baseline/run.py --n-blanks 32
+```
+
+The default run is the experiment of record.
+
+**Sanity gate.** Inspect the training loss and the one-epoch eval before
+trusting the sweep. If no checkpoint can solve any training example when
+sampled, debug the prompt/label masking rather than increasing the epoch
+count.
+
+## Results
+
+Seed-0 default run (natural ~56 blanks) recorded in [`results/`](results/)
+and summarized in [`../RESULTS.md`](../RESULTS.md). Every epoch checkpoint
+scored 0 on pass@1/2/4/8/16/32.
+
+The controlled-blank sweep (`--n-blanks {1,2,4,8,16,32}`) shows the pipeline
+can learn. At 3 epochs, 1–2 blanks reach 100% pass@32 and 32 blanks stay at 0.
+The 16-epoch even-eval rerun lifts the mid/hard band (best pass@32: 16 blanks
+84%, 32 blanks 38%) and peaks around epoch 6–10 for several settings. See
+[`results/blanks_sweep_summary.csv`](results/blanks_sweep_summary.csv) and
+[`results/blanks_ep16_sweep_summary.csv`](results/blanks_ep16_sweep_summary.csv).
