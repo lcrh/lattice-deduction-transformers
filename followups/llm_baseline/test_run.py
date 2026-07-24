@@ -5,8 +5,10 @@ from pathlib import Path
 
 from followups.llm_baseline.run import (
     _checkpoint_dirs,
+    estimate_pass_at_k,
     make_messages,
     parse_solution,
+    pass_at_k_curve,
 )
 
 
@@ -40,6 +42,19 @@ class QwenSudokuExperimentTest(unittest.TestCase):
                 [path.name for path in _checkpoint_dirs(root)],
                 ["checkpoint-10", "checkpoint-20", "checkpoint-30"],
             )
+
+    def test_pass_at_k_curve_from_thirty_two_samples(self) -> None:
+        self.assertEqual(estimate_pass_at_k(n=32, c=0, k=1), 0.0)
+        self.assertEqual(estimate_pass_at_k(n=32, c=32, k=16), 1.0)
+        self.assertAlmostEqual(estimate_pass_at_k(n=32, c=1, k=1), 1.0 / 32.0)
+        curve = pass_at_k_curve(n=32, c=4)
+        self.assertEqual(
+            list(curve),
+            ["pass_at_1", "pass_at_2", "pass_at_4", "pass_at_8", "pass_at_16", "pass_at_32"],
+        )
+        self.assertLess(curve["pass_at_1"], curve["pass_at_2"])
+        self.assertLess(curve["pass_at_2"], curve["pass_at_4"])
+        self.assertEqual(curve["pass_at_32"], 1.0)
 
 
 if __name__ == "__main__":

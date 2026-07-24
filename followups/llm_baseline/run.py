@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import time
 from pathlib import Path
@@ -54,6 +55,30 @@ def parse_solution(text: str) -> str | None:
     """Strictly parse a completion as one bare 81-digit Sudoku solution."""
     stripped = text.strip()
     return stripped if _SOLUTION_RE.fullmatch(stripped) else None
+
+
+def estimate_pass_at_k(n: int, c: int, k: int) -> float:
+    """Unbiased pass@k estimator from n samples with c correct (HumanEval)."""
+    if k < 1:
+        raise ValueError("k must be at least 1")
+    if n < 1:
+        raise ValueError("n must be at least 1")
+    if c < 0 or c > n:
+        raise ValueError("c must be between 0 and n inclusive")
+    if k > n:
+        raise ValueError(f"k={k} exceeds the number of samples n={n}")
+    if n - c < k:
+        return 1.0
+    return 1.0 - math.comb(n - c, k) / math.comb(n, k)
+
+
+def pass_at_k_curve(
+    n: int,
+    c: int,
+    ks: tuple[int, ...] = (1, 2, 4, 8, 16, 32),
+) -> dict[str, float]:
+    """Estimate pass@k for each requested k that fits in n samples."""
+    return {f"pass_at_{k}": estimate_pass_at_k(n, c, k) for k in ks if k <= n}
 
 
 def _dataset_digest(rows: list[dict[str, str]]) -> str:
@@ -347,7 +372,8 @@ def train_and_evaluate(
                     texts = completions[lo : lo + samples_per_puzzle]
                     parsed = [parse_solution(text) for text in texts]
                     correct = [solution == row["answer"] for solution in parsed]
-                    total_correct_samples += sum(correct)
+                    n_correct = sum(correct)
+                    total_correct_samples += n_correct
                     total_malformed += sum(solution is None for solution in parsed)
                     puzzle_records.append(
                         {
@@ -355,24 +381,30 @@ def train_and_evaluate(
                             "puzzle_index": start + offset,
                             "question": row["question"],
                             "answer": row["answer"],
-                            "passed": any(correct),
-                            "n_correct_samples": sum(correct),
+                            "passed": n_correct > 0,
+                            "n_correct_samples": n_correct,
                             "n_malformed_samples": sum(
                                 solution is None for solution in parsed
                             ),
+                            **pass_at_k_curve(samples_per_puzzle, n_correct),
                             "completions": texts,
                         }
                     )
 
         n_passed = sum(record["passed"] for record in puzzle_records)
         n_samples = len(eval_rows) * samples_per_puzzle
+        pass_metrics = {
+            f"pass_at_{k}": sum(record[f"pass_at_{k}"] for record in puzzle_records)
+            / len(puzzle_records)
+            for k in (1, 2, 4, 8, 16, 32)
+            if k <= samples_per_puzzle
+        }
         summary = {
             "checkpoint": str(checkpoint),
             "epoch": epoch,
             "n_eval_puzzles": len(eval_rows),
             "samples_per_puzzle": samples_per_puzzle,
-            "pass_at_1": total_correct_samples / n_samples,
-            f"pass_at_{samples_per_puzzle}": n_passed / len(eval_rows),
+            **pass_metrics,
             "puzzles_passed": n_passed,
             "correct_samples": total_correct_samples,
             "malformed_samples": total_malformed,

@@ -21,10 +21,10 @@ LLM on the identical 1K-puzzle training set isolates this.
   ceiling.
 - **Eval:** evaluate every epoch checkpoint on 32 held-out test puzzles
   selected with the LDT eval seed 200 by default. Draw 32 independent samples
-  per puzzle and report strict pass@1 (sample-level success) and pass@32 (at
-  least one exact solution). A
-  completion is correct only if, after stripping outer whitespace, it is
-  exactly 81 digits in `1`–`9` and equals the reference solution.
+  per puzzle and report the unbiased HumanEval pass@k curve for
+  `k ∈ {1, 2, 4, 8, 16, 32}` from those samples. A completion is correct only
+  if, after stripping outer whitespace, it is exactly 81 digits in `1`–`9` and
+  equals the reference solution.
 - **Artifacts:** use the deterministic Modal-volume directory
   `/checkpoints/followups/llm_baseline/qwen3_5_0_8b_seed<N>/`. Each
   `checkpoint-*` directory gets an `eval.json` and `eval.jsonl`; the run root
