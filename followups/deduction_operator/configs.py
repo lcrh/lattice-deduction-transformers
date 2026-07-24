@@ -14,7 +14,7 @@ are read-only.
 
 Each run is a Modal eval-only entrypoint launched INDIVIDUALLY with:
 
-    uv run modal run --detach experiments/sudoku/eval_only.py \
+    uv run modal run --detach followups/deduction_operator/modal_eval.py \
         --checkpoint /checkpoints/followups/e1/<input>_seed<N>.pt \
         <eval flags> \
         --ckpt-subdir followups/e3 \
@@ -59,7 +59,7 @@ from followups import _common
 # Constants.
 # --------------------------------------------------------------------------
 
-EVAL_ENTRYPOINT = "experiments/sudoku/eval_only.py"
+EVAL_ENTRYPOINT = "followups/deduction_operator/modal_eval.py"
 CKPT_SUBDIR = "followups/e3"          # where E3 eval artifacts land
 E1_SUBDIR = "followups/e1"            # where the consumed input checkpoints live
 VOLUME_NAME = _common.VOLUME_NAME

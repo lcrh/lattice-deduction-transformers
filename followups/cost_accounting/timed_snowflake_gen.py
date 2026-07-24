@@ -1,4 +1,9 @@
-"""Modal-parallel snowflake puzzle generator.
+"""Timed snowflake generator wrapper for offline cost accounting.
+
+Same generation as ``experiments/snowflake/gen_data.py``, plus
+CPU timing summed across workers for the cost table.
+
+Original: Modal-parallel snowflake puzzle generator.
 
 Uses the `snowflake` package from https://github.com/santolucito/snowflakesudoku
 (MIT-licensed) for hex-topology construction; CVC5 for SAT solving.
@@ -19,14 +24,14 @@ Schema (per row):
   - topology  : string  (JSON-encoded {n_cells, hex_coords, cell_positions, constraints})
 
 Usage:
-    uv run modal run --detach experiments/snowflake/gen_data.py
-    uv run modal run --detach experiments/snowflake/gen_data.py --n-shards 100 --count-per-shard 10
+    uv run modal run --detach followups/cost_accounting/timed_snowflake_gen.py
+    uv run modal run --detach followups/cost_accounting/timed_snowflake_gen.py --n-shards 100 --count-per-shard 10
     # E4 order-transfer OOD: extend the generated range up to order 10. This
     # regenerates the SINGLE consolidated snowflake_train/test.parquet that
     # run.py reads, so orders 9-10 become available to both training (via
     # --train-orders) and eval (--eval-orders). run.py has no separate-file
     # data path, so generate into the main split rather than a side file.
-    uv run modal run --detach experiments/snowflake/gen_data.py --n-max 10
+    uv run modal run --detach followups/cost_accounting/timed_snowflake_gen.py --n-max 10
 """
 
 from __future__ import annotations
@@ -55,7 +60,7 @@ gen_image = (
 data_volume = modal.Volume.from_name("lattice-diffusion-data", create_if_missing=True)
 DATA_MOUNT = "/data"
 
-app = modal.App("snowflake-data-gen")
+app = modal.App("cost-accounting-snowflake-gen")
 
 SHARDS_DIR = "snowflake_shards"  # subdir on the volume
 
@@ -199,6 +204,11 @@ def gen_shard(
     base_seed = seed_base + shard_id * 100_000
     records: list[dict] = []
     t0 = time.time()
+    # Offline cost accounting: also track CPU-seconds (user+sys of this
+    # process) so `main` can sum TOTAL CPU across parallel workers, not just
+    # per-shard wall-clock. Each worker runs at cpu=1.0 so cpu~=wall, but CPU
+    # time is the hardware-independent quantity the cost table needs.
+    cpu_t0 = time.process_time()
     for n in range(n_min, n_max + 1):
         for base_idx in range(count_per_shard):
             rng = random.Random(base_seed + n * 1000 + base_idx * 100)
@@ -227,8 +237,12 @@ def gen_shard(
                 })
 
     elapsed = time.time() - t0
-    print(f"shard {shard_id}: generated {len(records)} puzzles in {elapsed:.1f}s",
-          flush=True)
+    cpu_secs = time.process_time() - cpu_t0
+    # Per-order CPU breakdown is not tracked per-record (CVC5 solve time
+    # dominates and grows with n); the (n_min, n_max) span is recorded so the
+    # consolidation can attribute cost to the order range this shard covered.
+    print(f"shard {shard_id}: generated {len(records)} puzzles in {elapsed:.1f}s "
+          f"(cpu={cpu_secs:.1f}s, orders {n_min}-{n_max})", flush=True)
 
     # Write parquet shard.
     shards_dir = Path(DATA_MOUNT) / SHARDS_DIR
@@ -246,6 +260,7 @@ def gen_shard(
     pq.write_table(table, str(out_path), compression="zstd")
     data_volume.commit()
     return {"shard_id": shard_id, "n_records": len(records), "elapsed_s": elapsed,
+            "cpu_secs": cpu_secs, "n_min": n_min, "n_max": n_max,
             "path": str(out_path)}
 
 
@@ -370,12 +385,25 @@ def main(
         for i in range(n_shards)
     ]
     total = 0
+    total_cpu_secs = 0.0
+    total_wall_secs = 0.0
     for result in gen_shard.starmap(args):
         total += result["n_records"]
+        total_cpu_secs += float(result.get("cpu_secs", 0.0))
+        total_wall_secs += float(result.get("elapsed_s", 0.0))
         print(f"  shard {result['shard_id']:>3d}: {result['n_records']} puzzles  "
-              f"({result['elapsed_s']:.1f}s)  → {result['path']}",
+              f"(wall={result['elapsed_s']:.1f}s cpu={result.get('cpu_secs', 0.0):.1f}s)  "
+              f"→ {result['path']}",
               flush=True)
-    print(f"\nGenerated {total} puzzles across {n_shards} shards. Consolidating…",
+    # Offline cost accounting: TOTAL CPU-seconds summed across the parallel
+    # workers (not wall-clock). This is the hardware-independent CVC5 generation
+    # cost for the cost table. Also feeds E4's order 9-10 generation cost.
+    cpu_per_puzzle = total_cpu_secs / max(total, 1)
+    print(f"\nGenerated {total} puzzles across {n_shards} shards "
+          f"(orders {n_min}-{n_max}).", flush=True)
+    print(f"OFFLINE CPU COST (summed across {n_shards} workers): "
+          f"{total_cpu_secs:.1f} CPU-s ({total_cpu_secs / 3600:.3f} CPU-h); "
+          f"{cpu_per_puzzle * 1000:.2f} CPU-ms/puzzle. Consolidating…",
           flush=True)
 
     summary = consolidate.remote(

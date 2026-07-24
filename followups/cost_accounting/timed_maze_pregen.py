@@ -1,29 +1,12 @@
-"""Parallel pregen of maze canonical pool + K-solutions on Modal CPU
-workers, written as parquet shards on the shared data volume so subsequent
-training runs hit the cache via `MazeDataset._build_or_load_pregen`.
+"""Timed maze pregen wrapper for offline cost accounting.
 
-Usage:
-    uv run modal run experiments/maze/pregen.py \
-        --dataset synthetic --grid-size 30 --n-puzzles 10000 \
-        --k-solutions 256 --seed 42 --workers 100
-
-Each worker generates a deterministic chunk of puzzles, runs the K-paths
-sampler, and writes its shard directly to a parquet file on the data volume.
-The driver only writes the manifest — never holds full data in memory.
-
-Layout under `/data/maze_pregen/`:
-  {cache_key}.manifest.json          — list of shard paths + counts + meta
-  {cache_key}_shards/shard_0000.parquet
-  {cache_key}_shards/shard_0001.parquet
-  ...
-
-Parquet schema (one row per puzzle):
-  x:         binary   (raw float32 bytes, shape [S, C])
-  y:         binary   (raw float32 bytes, shape [S, C])
-  solutions: binary   (raw float32 bytes, shape [K, S, C])
+Same generation as ``experiments/maze/pregen.py``, plus CPU/wall timing in
+shard metadata for the cost table. Prefer this entrypoint when measuring
+offline CPU cost; leave the shared generator free of study instrumentation.
 """
 
 import json
+import time
 from pathlib import Path
 
 import modal
@@ -42,7 +25,7 @@ from lattice_diffusion.modal.image import (
 )
 
 
-app = modal.App("maze-pregen")
+app = modal.App("cost-accounting-maze-pregen")
 
 
 @app.function(
@@ -54,7 +37,16 @@ app = modal.App("maze-pregen")
 def pregen_chunk_shard(spec: dict, chunk_idx: int, chunk_size: int, shard_path: str) -> dict:
     """Generate `chunk_size` puzzles + K-solutions on a single worker, write
     parquet shard to `shard_path` on the data volume, and return shard meta.
+
+    Also reports this worker's CPU time (Offline cost accounting). We report
+    CPU-seconds (time.process_time = user+sys CPU of THIS process, summed across
+    the worker's threads) alongside wall-clock; the driver sums CPU-seconds
+    across all workers to get total offline CPU-cost (not wall-clock, which
+    collapses under parallelism). This is reporting only — generation behaviour
+    is unchanged.
     """
+    _cpu_t0 = time.process_time()
+    _wall_t0 = time.perf_counter()
     cfg = MazeConfig(
         dataset=spec["dataset"],
         cache_dir=DATA_MOUNT,
@@ -95,8 +87,12 @@ def pregen_chunk_shard(spec: dict, chunk_idx: int, chunk_size: int, shard_path: 
     })
     Path(shard_path).parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(table, shard_path, compression="zstd")
-    print(f"  [shard {chunk_idx}] wrote {n} puzzles → {shard_path}", flush=True)
-    return {"path": shard_path, "n": n, "chunk_idx": chunk_idx}
+    cpu_secs = time.process_time() - _cpu_t0
+    wall_secs = time.perf_counter() - _wall_t0
+    print(f"  [shard {chunk_idx}] wrote {n} puzzles → {shard_path}  "
+          f"(cpu={cpu_secs:.1f}s wall={wall_secs:.1f}s)", flush=True)
+    return {"path": shard_path, "n": n, "chunk_idx": chunk_idx,
+            "cpu_secs": cpu_secs, "wall_secs": wall_secs}
 
 
 @app.function(
@@ -128,6 +124,18 @@ def driver(
     parts = list(pregen_chunk_shard.starmap(args))
     print(f"[driver] all {n_chunks} shards complete", flush=True)
 
+    # Offline cost accounting: TOTAL CPU-seconds summed across parallel
+    # workers (not wall-clock, which hides the real compute under fan-out).
+    # Older shards may predate the cpu_secs field — treat missing as 0.
+    total_cpu_secs = sum(float(p.get("cpu_secs", 0.0)) for p in parts)
+    total_wall_secs = sum(float(p.get("wall_secs", 0.0)) for p in parts)
+    total_puzzles = sum(p["n"] for p in parts)
+    cpu_per_puzzle = total_cpu_secs / max(total_puzzles, 1)
+    print(f"[driver] OFFLINE CPU COST: total_cpu={total_cpu_secs:.1f}s "
+          f"({total_cpu_secs / 3600:.3f} CPU-h) across {n_chunks} workers; "
+          f"{cpu_per_puzzle * 1000:.2f} CPU-ms/puzzle "
+          f"(K={spec['K']}, n={total_puzzles})", flush=True)
+
     manifest = {
         "version": PREGEN_VERSION,
         "format": "parquet_shards",
@@ -140,8 +148,12 @@ def driver(
             "K": spec["K"],
             "H": spec["H"],
             "W": spec["W"],
-            "n_puzzles": sum(p["n"] for p in parts),
+            "n_puzzles": total_puzzles,
             "n_shards": n_chunks,
+            # Offline cost accounting (summed across parallel workers).
+            "total_cpu_secs": total_cpu_secs,
+            "total_wall_secs": total_wall_secs,
+            "cpu_secs_per_puzzle": cpu_per_puzzle,
         },
     }
     with open(manifest_path, "w") as f:
@@ -150,7 +162,9 @@ def driver(
     print(f"[driver] manifest at {manifest_path} "
           f"(total {manifest['meta']['n_puzzles']} puzzles across "
           f"{n_chunks} shards)", flush=True)
-    return {"manifest_path": manifest_path, "n_puzzles": manifest["meta"]["n_puzzles"]}
+    return {"manifest_path": manifest_path, "n_puzzles": manifest["meta"]["n_puzzles"],
+            "total_cpu_secs": total_cpu_secs, "total_wall_secs": total_wall_secs,
+            "cpu_secs_per_puzzle": cpu_per_puzzle}
 
 
 @app.local_entrypoint()
@@ -219,3 +233,8 @@ def entrypoint(
 
     result = driver.remote(spec, n_puzzles, workers, cache_key, spec_dict)
     print(f"\n[entrypoint] driver returned: {result}", flush=True)
+    if "total_cpu_secs" in result:
+        print(f"[entrypoint] OFFLINE CPU COST (summed across workers): "
+              f"{result['total_cpu_secs']:.1f} CPU-s "
+              f"({result['total_cpu_secs'] / 3600:.3f} CPU-h) for K={k_solutions}, "
+              f"n={result['n_puzzles']}", flush=True)

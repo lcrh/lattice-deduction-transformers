@@ -28,10 +28,13 @@ Maze-Hard comparison needs. What remains:
    the reader-friendly one; report both.
 3. **Offline α-operator / data costs.** The wall-clock tables start at
    training; the pipeline doesn't. Measure and report:
-   - Maze K-path sampling (`experiments/maze/pregen.py`) CPU-time at
-     K ∈ {1, 512} for the 1K-puzzle split,
-   - Snowflake CVC5 generation cost per order (instrument
-     `experiments/snowflake/gen_data.py`; also feeds E4's order 9–10 gen),
+   - Maze K-path sampling (`followups/cost_accounting/timed_maze_pregen.py`)
+     CPU-time at K ∈ {1, 512} for the 1K-puzzle split (shared
+     `experiments/maze/pregen.py` stays uninstrumented),
+   - Snowflake CVC5 generation cost per order
+     (`followups/cost_accounting/timed_snowflake_gen.py`; shared
+     `experiments/snowflake/gen_data.py` stays clean; also feeds E4's
+     order 9–10 gen),
    - Sudoku: trivial (unique solutions ship with the dataset) — state it.
    Report alongside: HRM/TRM's own offline costs on the same tasks
    (dataset build + augmentation expansion) so the comparison stays
@@ -56,9 +59,9 @@ samples, pregen timing): well under 1 B200-hour + some CPU-hours.
 - [ ] `flops.py`: analytic per-step FLOPs for the four architectures from
       their configs; unit-test against LDT measured wall-clock (MFU in a
       plausible 20–60% band, else the formula is wrong).
-- [ ] Instrument `pregen.py` and `gen_data.py` with total CPU-seconds
-      reporting (they run on parallel workers — sum worker time, don't
-      report wall-clock).
+- [x] Timed wrappers `timed_maze_pregen.py` / `timed_snowflake_gen.py`
+      report total CPU-seconds across workers (not wall-clock); shared
+      generators remain uninstrumented.
 - [ ] `cost_table.py`: assemble `results/cost_table.csv` + a
       markdown/LaTeX table emitter.
 - [ ] Keep every author-reported (non-measured) number flagged in a

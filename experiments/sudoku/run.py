@@ -8,8 +8,6 @@ Usage:
 import dataclasses
 import json
 import time
-from dataclasses import asdict
-
 import modal
 import torch
 from torch import nn
@@ -53,13 +51,6 @@ _RUN_PARAMS: tuple[tuple[str, object], ...] = (
     ("pre_norm",                 True),
     ("supervise",                "all"),
     ("eval_every",               100),
-    ("eval_n_loops",             0),
-    ("cell_policy",              "uniform"),
-    ("digit_policy",             "softmax"),
-    ("backtrack",                "root"),
-    ("geometric_p",              0.5),
-    ("learn_negation",           False),
-    ("snapshot_max_depth",       64),
 )
 
 
@@ -97,6 +88,7 @@ from lattice_diffusion.training.utils.checkpoint import load_checkpoint
 
 from experiments.sudoku.dpll import StepConfig
 from experiments.sudoku.ema import swap_in_ema_if_present
+from experiments.sudoku.hooks import public_asdict
 from experiments.sudoku.solve import SolveConfig, solve
 from experiments.sudoku.train import TrainConfig, train
 
@@ -147,18 +139,6 @@ def run(
     pre_norm: bool = True,
     supervise: str = "all",
     eval_every: int = 100,
-    eval_n_loops: int = 0,
-    # ---- E2 additions (all default-off / no-op at defaults) ----
-    # cell_policy / digit_policy feed BOTH the training-time dpll_step (via
-    # step_cfg, so matched-training S2 induces the policy's state distribution)
-    # AND the final eval. backtrack / geometric_p / learn_negation feed the
-    # eval solve and (for pool-matched training S3-phase-2) the trainer pool.
-    cell_policy: str = "uniform",
-    digit_policy: str = "softmax",
-    backtrack: str = "root",
-    geometric_p: float = 0.5,
-    learn_negation: bool = False,
-    snapshot_max_depth: int = 64,
     ckpt_name: str = "",
     ckpt_subdir: str = "",
     overwrite: bool = False,
@@ -209,8 +189,6 @@ def run(
         temp_decide=temp_decide,
         cls_threshold=cls_threshold,
         augment=augment,
-        cell_policy=cell_policy,
-        digit_policy=digit_policy,
     )
     model_cfg = LoopedTransformerConfig(
         cls_token=conflict_loss_weight > 0,
@@ -220,7 +198,7 @@ def run(
         pre_norm=pre_norm,
     )
 
-    # Checkpoint path routing. When `ckpt_name` is set, a followup launcher
+    # Checkpoint path routing. When `ckpt_name` is set, a launcher
     # requests a deterministic (timestamp-free) path at
     # `{CHECKPOINT_MOUNT}/{ckpt_subdir}/{ckpt_name}.pt` (e.g.
     # /checkpoints/followups/e1/<config>_seed<N>.pt). When empty, everything
@@ -257,11 +235,6 @@ def run(
             ema_decay=ema_decay,
             supervise=supervise,
             eval_every=eval_every,
-            # E2 pool-side backtrack matching (default "root" = legacy byte-identical).
-            backtrack=backtrack,
-            geometric_p=geometric_p,
-            learn_negation=learn_negation,
-            pool_snapshot_max_depth=snapshot_max_depth,
             model=model_cfg,
             data=SudokuExtremeConfig(
                 cache_dir=DATA_MOUNT, batch_size=batch_size, seed=42,
@@ -281,19 +254,7 @@ def run(
     print("=" * 60, flush=True)
 
     ckpt = load_checkpoint(str(ckpt_path))
-    # Eval-time loop override (E3-O1). The backbone is a weight-tied loop, so a
-    # checkpoint trained at n_loops evals at any n_loops by rebuilding the
-    # config with a different n_loops BEFORE load_state_dict — the state dict
-    # shape is loop-invariant. Default 0 = keep the checkpoint's native
-    # n_loops (rebuilt config byte-identical to the saved one; sanity gate:
-    # --eval-n-loops <native> reproduces the no-flag result).
-    _saved_model_cfg = dict(ckpt["model_cfg"])
-    if eval_n_loops and eval_n_loops > 0:
-        _native = _saved_model_cfg.get("n_loops")
-        _saved_model_cfg["n_loops"] = eval_n_loops
-        print(f"  [eval-n-loops] overriding n_loops {_native} -> {eval_n_loops} "
-              f"(weight-tied loop; state dict unchanged)", flush=True)
-    cfg_loaded = LoopedTransformerConfig(**_saved_model_cfg)
+    cfg_loaded = LoopedTransformerConfig(**ckpt["model_cfg"])
     model = PowersetModel(cfg_loaded)
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device).eval()
@@ -372,10 +333,6 @@ def run(
         seq_drain_max_rounds=seq_drain_max_rounds,
         eval_max_timeouts=_max_to,
         already_done=(already_done or None),
-        backtrack=backtrack,
-        geometric_p=geometric_p,
-        learn_negation=learn_negation,
-        snapshot_max_depth=snapshot_max_depth,
     )
 
     # Streaming callback: append+flush each puzzle as it completes. No per-puzzle
@@ -492,7 +449,7 @@ def run(
         "avg_rounds_solved": avg_rounds_solved,
         "avg_resets": avg_resets,
         "avg_puzzle_calls": avg_puzzle_calls,
-        "step_cfg": asdict(step_cfg),
+        "step_cfg": public_asdict(step_cfg),
         "max_rounds": eval_max_rounds,
         "train_wallclock": train_wallclock,
         "diag": {
@@ -506,22 +463,7 @@ def run(
             "conflict_precision": cls_p,
             "conflict_recall": cls_r,
             "active_chain_rounds": res.diag_active_chain_rounds,
-            # E2 backtracking diagnostics (nonzero only for non-root policies).
-            "backtrack_policy": res.backtrack_policy,
-            "n_negations": res.n_negations,
-            "n_unsound_negations": res.n_unsound_negations,
-            "unsound_negation_rate": (
-                res.n_unsound_negations / max(res.n_negations, 1)),
-            "n_conflicts_recorded": len(res.conflict_depths),
-            "conflict_depth_mean": (
-                sum(res.conflict_depths) / len(res.conflict_depths)
-                if res.conflict_depths else 0.0),
-            "backtrack_target_mean": (
-                sum(res.backtrack_targets) / len(res.backtrack_targets)
-                if res.backtrack_targets else 0.0),
         },
-        "conflict_depths": res.conflict_depths,
-        "backtrack_targets": res.backtrack_targets,
     }, indent=2))
 
     # Per-puzzle JSONL dump for downstream analysis. First line is a metadata
@@ -536,7 +478,7 @@ def run(
             "n_eval_puzzles": n,
             "n_chains": res.n_chains,
             "max_rounds": eval_max_rounds,
-            "step_cfg": asdict(step_cfg),
+            "step_cfg": public_asdict(step_cfg),
             "run_args": {name: _arg_values[name] for name, _ in _RUN_PARAMS},
             "train_wallclock": train_wallclock,
             "summary": {
@@ -572,7 +514,7 @@ def run(
                 "wrong": is_wrong,
                 "timeout": is_timeout,
                 "round_solved": rs,
-                "n_resets": int(o.get("n_resets", res.n_resets[i].item())),
+                "n_resets": int(o.get("n_resets", 0)),
                 "n_givens": int(n_givens_per_puzzle[i]),
                 "puzzle_calls": int(o["puzzle_calls"]),
                 "forwards_unbatched": forwards_unbatched,
@@ -631,13 +573,6 @@ def entrypoint(
     pre_norm: bool = True,
     supervise: str = "all",
     eval_every: int = 100,
-    eval_n_loops: int = 0,
-    cell_policy: str = "uniform",
-    digit_policy: str = "softmax",
-    backtrack: str = "root",
-    geometric_p: float = 0.5,
-    learn_negation: bool = False,
-    snapshot_max_depth: int = 64,
     ckpt_name: str = "",
     ckpt_subdir: str = "",
     overwrite: bool = False,
@@ -675,13 +610,6 @@ def entrypoint(
         pre_norm=pre_norm,
         supervise=supervise,
         eval_every=eval_every,
-        eval_n_loops=eval_n_loops,
-        cell_policy=cell_policy,
-        digit_policy=digit_policy,
-        backtrack=backtrack,
-        geometric_p=geometric_p,
-        learn_negation=learn_negation,
-        snapshot_max_depth=snapshot_max_depth,
         ckpt_name=ckpt_name,
         ckpt_subdir=ckpt_subdir,
         overwrite=overwrite,

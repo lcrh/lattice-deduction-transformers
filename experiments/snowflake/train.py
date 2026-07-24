@@ -251,7 +251,7 @@ def train(cfg: TrainConfig):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     out_dir = Path(cfg.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     if cfg.no_timestamp:
-        # Deterministic path used by the followup launchers so downstream
+        # Deterministic path used by launchers so downstream
         # experiments can find checkpoints at a fixed location.
         ckpt_path = out_dir / f"{cfg.name}.pt"
         if ckpt_path.exists() and not cfg.overwrite:

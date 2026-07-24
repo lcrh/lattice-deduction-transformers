@@ -75,20 +75,6 @@ class TrainConfig:
     max_age: int = 100  # age = train steps since backfill (counts up regardless of sampling)
     compile: bool = True
 
-    # ----- E2 S3-phase-2: pool-side backtrack-matched training -----
-    # Default "root" reproduces the legacy discard-and-backfill on true-positive
-    # conflict (BYTE-IDENTICAL). Non-root policies instead RESTORE the pool
-    # entry to a rolled-back snapshot on true-positive conflict (the entry
-    # survives with its rolled-back state; age keeps ticking so max_age still
-    # bounds residency; `solved` and `max_age` still discard+backfill). This is
-    # what changes the training state distribution to match an inference-time
-    # partial-backtracking solver. `geometric_p` / `learn_negation` mirror
-    # SolveConfig. `pool_snapshot_max_depth` sizes the pool's own snapshot stack.
-    backtrack: str = "root"
-    geometric_p: float = 0.5
-    learn_negation: bool = False
-    pool_snapshot_max_depth: int = 64
-
     # EMA of trainable params, evaluated at eval time. TRM paper recommends
     # decay=0.999. Shadow + live state are both saved — eval (in run.py)
     # auto-swaps EMA into the live model if `ema_state_dict` is present in
@@ -115,6 +101,11 @@ class TrainConfig:
     # timestamped `{name}_{ts}.pt` behavior.
     no_timestamp: bool = False
     overwrite: bool = False
+
+    # Optional pool strategy. None => legacy discard+backfill on
+    # true-positive conflict.
+    _pool_strategy: object | None = field(default=None, repr=False, compare=False,
+                                          metadata={"public": False})
 
     model: LoopedTransformerConfig = field(default_factory=LoopedTransformerConfig)
     data: SudokuExtremeConfig = field(default_factory=SudokuExtremeConfig)
@@ -246,7 +237,7 @@ def train(cfg: TrainConfig):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     out_dir = Path(cfg.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     if cfg.no_timestamp:
-        # Deterministic path used by the followup launchers so downstream
+        # Deterministic path used by launchers so downstream
         # experiments can find checkpoints at a fixed location.
         ckpt_path = out_dir / f"{cfg.name}.pt"
         if ckpt_path.exists() and not cfg.overwrite:
@@ -260,7 +251,7 @@ def train(cfg: TrainConfig):
     # In-train mini-solve curve, one JSON object per eval point, written
     # incrementally next to the checkpoint. Truncated fresh at train start so
     # a killed run still leaves partial (but valid) curve data. Only emitted
-    # for followup runs (deterministic `no_timestamp` path, where collect.py
+    # for deterministic `no_timestamp` runs (where collect.py
     # reads it) — plain benchmark runs keep their original side-effect-free
     # output. `None` disables the incremental writes below.
     if cfg.no_timestamp and cfg.eval_every > 0:
@@ -350,29 +341,12 @@ def train(cfg: TrainConfig):
     # cell is multi-alive on all GT bits). α-of-surviving = OR over K.
     pool_last_alpha = pool_solutions.bool().any(dim=1).float()  # [P, S, C]
     pool_age = torch.zeros(pool_size, dtype=torch.long, device=device)
+    pool_strategy = getattr(cfg, "_pool_strategy", None)
+    _S, _C = pool_state.shape[1], pool_state.shape[2]
+    pool_handle = (pool_strategy.attach(pool_size, _S, _C, device)
+                   if pool_strategy is not None else None)
     print(f"Pool size: {pool_size}  (= bs={cfg.batch_size})  "
           f"augment={cfg.step.augment}", flush=True)
-
-    # ----- E2 S3-phase-2: pool-side decision snapshot stack. -----
-    # Only maintained when a non-root backtrack policy is active; the default
-    # "root" trainer never allocates it and keeps discard+backfill byte-
-    # identical. Same layout as the solver's stack, indexed by pool entry.
-    pool_use_snap = (cfg.backtrack != "root")
-    pool_negate = (cfg.backtrack == "last+negate") or cfg.learn_negation
-    D_max_pool = cfg.pool_snapshot_max_depth
-    S_dim, C_dim = pool_state.shape[1], pool_state.shape[2]
-    vd_pool = cfg.step.vocab_dim if cfg.step.vocab_dim is not None else C_dim
-    if pool_use_snap:
-        pool_snap_state = torch.zeros(
-            pool_size, D_max_pool, S_dim, C_dim, dtype=torch.uint8, device=device)
-        pool_snap_cell = torch.zeros(pool_size, D_max_pool, dtype=torch.long, device=device)
-        pool_snap_digit = torch.zeros(pool_size, D_max_pool, dtype=torch.long, device=device)
-        pool_depth = torch.zeros(pool_size, dtype=torch.long, device=device)
-        print(f"E2 pool-backtrack matching: backtrack={cfg.backtrack} "
-              f"negate={pool_negate} D_max={D_max_pool}", flush=True)
-    else:
-        pool_snap_state = pool_snap_cell = pool_snap_digit = pool_depth = None
-    n_pool_restore_total = 0
 
     # Sudoku-specific dihedral cell permutations for spatial aug — built
     # once and reused by both `aug_forward` (grad path) and `dpll_step`
@@ -471,88 +445,21 @@ def train(cfg: TrainConfig):
         new_age = age + 1
         age_exceeded = new_age > cfg.max_age
         true_positive_conflict = detected_conflict & gt_conflict_post
+        vd = cfg.step.vocab_dim if cfg.step.vocab_dim is not None else new_state.shape[-1]
+        if pool_strategy is None:
+            discard = solved | true_positive_conflict | age_exceeded
+        else:
+            new_state, _restored, discard = pool_strategy.after_step(
+                pool=pool_handle, sample_idx=sample_idx,
+                state=state, new_state=new_state,
+                detected_conflict=detected_conflict,
+                true_positive_conflict=true_positive_conflict,
+                solved=solved, info=info, vd=vd,
+                age_exceeded=age_exceeded,
+            )
 
         n_solved_total += int(solved.sum().item())
         n_tp_conflict_total += int(true_positive_conflict.sum().item())
-
-        # ---- E2 pool-side snapshot push + backtrack-restore (non-root only) --
-        # Mirrors the solver's per-chain snapshot machinery, indexed by pool
-        # entry. On a true-positive conflict we RESTORE the entry to a rolled-
-        # back snapshot (keeping it in the pool) instead of discarding it, so
-        # the training state distribution matches an inference-time partial-
-        # backtracking solver. Default backtrack="root" skips this entirely and
-        # discard = solved | tp_conflict | age_exceeded (byte-identical legacy).
-        restored = torch.zeros_like(true_positive_conflict)
-        if pool_use_snap:
-            # Gather this batch's snapshot stacks from the pool.
-            b_depth = pool_depth[sample_idx].clone()                      # [B]
-            b_snap_state = pool_snap_state[sample_idx]                    # [B,D,S,C]
-            b_snap_cell = pool_snap_cell[sample_idx]                      # [B,D]
-            b_snap_digit = pool_snap_digit[sample_idx]                   # [B,D]
-            # Detect this step's decision per entry (post-deduce vs new_state).
-            dmask = info["deduce_mask"]                                  # [B,S,C]
-            state_post_deduce = state.masked_fill(dmask, 0.0)
-            pre_alive = (state_post_deduce[..., :vd_pool] > 0.5).sum(dim=-1)  # [B,S]
-            post_alive = (new_state[..., :vd_pool] > 0.5).sum(dim=-1)         # [B,S]
-            decided_cell_mask = (pre_alive > 1) & (post_alive == 1)          # [B,S]
-            made_decision = (
-                decided_cell_mask.any(dim=-1) & ~detected_conflict & ~solved)
-            has_room = b_depth < D_max_pool
-            push_rows = (made_decision & has_room).nonzero(as_tuple=True)[0]
-            if push_rows.numel() > 0:
-                cell_of = decided_cell_mask[push_rows].float().argmax(dim=-1)
-                depth_of = b_depth[push_rows]
-                b_snap_state[push_rows, depth_of] = (
-                    state_post_deduce[push_rows] > 0.5).to(torch.uint8)
-                b_snap_cell[push_rows, depth_of] = cell_of
-                b_snap_digit[push_rows, depth_of] = new_state[
-                    push_rows, cell_of, :vd_pool].argmax(dim=-1)
-                b_depth[push_rows] = depth_of + 1
-            overflow_rows = (made_decision & ~has_room)
-            if overflow_rows.any():
-                b_depth[overflow_rows] = b_depth[overflow_rows] + 1
-
-            # Restore true-positive-conflict entries to a rolled-back snapshot
-            # (unless overflowed / depth 0 -> those fall through to discard).
-            tp_rows = (true_positive_conflict).nonzero(as_tuple=True)[0]
-            for jj in range(tp_rows.numel()):
-                b = int(tp_rows[jj].item())
-                d = int(b_depth[b].item())
-                if d <= 0 or d > D_max_pool:
-                    continue  # no snapshot -> leave for discard+backfill
-                if cfg.backtrack in ("last", "last+negate"):
-                    keep = d - 1
-                elif cfg.backtrack == "geometric":
-                    j = max(1, int(torch.empty(1, device=device).geometric_(
-                        cfg.geometric_p).item()))
-                    keep = max(0, d - j)
-                elif cfg.backtrack == "uniform_depth":
-                    keep = int(torch.rand(1, device=device).item() * d)
-                else:
-                    keep = d - 1
-                restored_state = b_snap_state[b, keep].float()
-                ok = True
-                if pool_negate:
-                    nc = int(b_snap_cell[b, keep].item())
-                    nd = int(b_snap_digit[b, keep].item())
-                    restored_state[nc, nd] = 0.0
-                    if float(restored_state[nc, :vd_pool].sum().item()) < 0.5:
-                        ok = False  # cell emptied -> escalate to discard
-                if ok:
-                    new_state = new_state.clone()
-                    new_state[b] = restored_state
-                    b_depth[b] = keep
-                    restored[b] = True
-                    n_pool_restore_total += 1
-            # Scatter the (updated) snapshot stacks back to the pool.
-            pool_snap_state[sample_idx] = b_snap_state
-            pool_snap_cell[sample_idx] = b_snap_cell
-            pool_snap_digit[sample_idx] = b_snap_digit
-            pool_depth[sample_idx] = b_depth
-
-        # Restored entries survive (NOT discarded); solved / age / non-restored
-        # tp-conflicts still discard+backfill.
-        discard = solved | (true_positive_conflict & ~restored) | age_exceeded
 
         # ---- backfill discarded sampled entries ----
         # Pool tensors are CANONICAL; new_state is canonical (dpll_step
@@ -579,17 +486,17 @@ def train(cfg: TrainConfig):
             new_orig_x = orig_x
             new_solutions = solutions
 
+        if pool_strategy is not None:
+            pool_strategy.on_backfill(
+                pool=pool_handle, sample_idx=sample_idx, discard=discard,
+            )
+
         # Write the sampled batch's evolution back into the pool at sample_idx.
         pool_state[sample_idx] = new_state
         pool_orig_x[sample_idx] = new_orig_x
         pool_solutions[sample_idx] = new_solutions
         pool_last_alpha[sample_idx] = new_last_alpha
         pool_age[sample_idx] = new_age
-        if pool_use_snap and n_to_replace > 0:
-            # Backfilled (discarded) entries start with an empty decision stack.
-            reset_depth = pool_depth[sample_idx]
-            reset_depth[discard] = 0
-            pool_depth[sample_idx] = reset_depth
 
         # ---- in-train eval (mini-solve on held-out SAT puzzles) ----
         if cfg.eval_every > 0 and step % cfg.eval_every == 0:
@@ -720,22 +627,10 @@ def train(cfg: TrainConfig):
                 f"pool_sat={sat_frac:.2f}",
                 flush=True,
             )
-            if pool_use_snap:
-                # E2 pool health under backtrack-matched training: decision-
-                # depth distribution across the pool + cumulative restores.
-                dep = pool_depth.float()
-                d_p50 = int(pool_depth.median().item())
-                d_p90 = int(torch.quantile(dep, 0.9).item())
-                d_max = int(pool_depth.max().item())
-                age_p50 = int(pool_age.median().item())
-                age_p90 = int(torch.quantile(pool_age.float(), 0.9).item())
-                print(
-                    f"    [e2-pool bt={cfg.backtrack}] "
-                    f"depth(p50/p90/max)={d_p50}/{d_p90}/{d_max}  "
-                    f"age(p50/p90)={age_p50}/{age_p90}  "
-                    f"restores_total={n_pool_restore_total}",
-                    flush=True,
-                )
+            if pool_strategy is not None:
+                extra = pool_strategy.log_extra(pool=pool_handle)
+                if extra:
+                    print(f"    [{extra}]", flush=True)
             if cls_msg or cls_hi_msg:
                 print(
                     f"    {cls_msg}  {cls_hi_msg}",

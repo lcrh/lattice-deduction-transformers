@@ -29,10 +29,13 @@ DATA PROVENANCE
       a committed number exists here we mark it TBD-measure (no wall-clock is
       committed in the repo yet). Its FLOPs are known regardless.
     - Sotaku: REPORTED only (no config in repo); B200-equiv TBD-measure.
-* offline_cpu_h: from the instrumented generators (pregen.py / gen_data.py print
-  total CPU-seconds summed across workers). Sudoku ships unique solutions -> ~0
-  offline cost (stated). Numbers here are TBD-measure until those jobs run and
-  their printed CPU-h is pasted into OFFLINE_CPU_H.
+* offline_cpu_h: from timed wrappers
+  (`followups/cost_accounting/timed_maze_pregen.py` /
+  `timed_snowflake_gen.py` print total CPU-seconds summed across workers).
+  Shared `experiments/maze/pregen.py` and `experiments/snowflake/gen_data.py`
+  stay uninstrumented. Sudoku ships unique solutions -> ~0 offline cost
+  (stated). Numbers here are TBD-measure until those jobs run and their
+  printed CPU-h is pasted into OFFLINE_CPU_H.
 * inference_cost_per_puzzle: LDT has it today (sudoku/run.py writes
   forwards_unbatched / model_calls per puzzle into .eval.jsonl). TRM/HRM
   per-puzzle inference = (recurrent forward passes) * per-forward B200 cost from

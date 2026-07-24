@@ -8,10 +8,10 @@ different decision / backtracking policies.
 
 Two run kinds, encoded in each config's `kind`:
 
-  kind="train"  -> `experiments/sudoku/run.py`, writes
+  kind="train"  -> `followups/search_process/modal_train.py`, writes
                    /checkpoints/followups/e2/<config>_seed<N>.pt
                    (via --ckpt-subdir followups/e2 --ckpt-name <config>_seed<N>).
-  kind="eval"   -> `experiments/sudoku/eval_only.py`, re-evaluates a FROZEN
+  kind="eval"   -> `followups/search_process/modal_eval.py`, re-evaluates a FROZEN
                    checkpoint (referenced by its fixed volume path) under a new
                    operating point. Output lands at
                    /checkpoints/followups/e2/<config>__on__<input>_seed<N>.eval.json
@@ -56,8 +56,8 @@ from followups import _common
 # Constants.
 # --------------------------------------------------------------------------
 
-RUN_ENTRYPOINT = "experiments/sudoku/run.py"
-EVAL_ENTRYPOINT = "experiments/sudoku/eval_only.py"
+RUN_ENTRYPOINT = "followups/search_process/modal_train.py"
+EVAL_ENTRYPOINT = "followups/search_process/modal_eval.py"
 CKPT_SUBDIR = "followups/e2"        # where E2 checkpoints + eval artifacts land
 E1_SUBDIR = "followups/e1"          # E1 baseline (consumed by S1/S3/S4)
 VOLUME_NAME = _common.VOLUME_NAME
