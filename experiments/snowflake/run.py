@@ -435,6 +435,7 @@ def run(
             "wrong": bool(res.wrong[i].item()),
             "timeout": bool(res.timeouts[i].item()),
             "round_solved": int(res.round_solved[i].item()),
+            "n_resets": int(res.n_resets[i].item()),
             "puzzle_calls": int(res.puzzle_calls[i].item()),
         }
 
@@ -451,11 +452,20 @@ def run(
         print(f"  [prefix] gap-free prefix length n={n} "
               f"(aborted={res.aborted}, resumed={bool(already_done)}, "
               f"outcomes={len(outcomes)}/{P_total})", flush=True)
-    avg_rounds_solved = float(
-        res.round_solved[res.solved].float().mean().item()
-        if int(res.solved.sum().item()) > 0 else 0.0
+    # Prefix-scoped means so abort/resume reporting matches the clean sample
+    # (never-filled / already_done slots stay 0 in `res` and would dilute).
+    prefix_correct_rounds = [
+        int(outcomes[i]["round_solved"]) for i in prefix_idxs
+        if outcomes[i]["correct"] and int(outcomes[i]["round_solved"]) >= 0
+    ]
+    avg_rounds_solved = (
+        float(sum(prefix_correct_rounds) / len(prefix_correct_rounds))
+        if prefix_correct_rounds else 0.0
     )
-    avg_resets = float(res.n_resets.float().mean().item())
+    avg_resets = (
+        float(sum(int(outcomes[i].get("n_resets", 0)) for i in prefix_idxs) / n)
+        if n > 0 else 0.0
+    )
 
     # Diagnostics
     den = max(res.diag_total_deduced, 1)
@@ -598,7 +608,7 @@ def run(
                 "wrong": is_wrong,
                 "timeout": is_timeout,
                 "round_solved": rs,
-                "n_resets": int(res.n_resets[i].item()),
+                "n_resets": int(o.get("n_resets", res.n_resets[i].item())),
                 "puzzle_calls": int(o["puzzle_calls"]),
                 "forwards_unbatched": forwards_unbatched,
             }) + "\n")
