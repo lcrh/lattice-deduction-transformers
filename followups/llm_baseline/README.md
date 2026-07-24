@@ -74,6 +74,9 @@ scored 0 on pass@1/2/4/8/16/32.
 The controlled-blank sweep (`--n-blanks {1,2,4,8,16,32}`) shows the pipeline
 can learn. At 3 epochs, 1–2 blanks reach 100% pass@32 and 32 blanks stay at 0.
 The 16-epoch even-eval rerun lifts the mid/hard band (best pass@32: 16 blanks
-84%, 32 blanks 38%) and peaks around epoch 6–10 for several settings. See
-[`results/blanks_sweep_summary.csv`](results/blanks_sweep_summary.csv) and
-[`results/blanks_ep16_sweep_summary.csv`](results/blanks_ep16_sweep_summary.csv).
+84%, 32 blanks 38%) and peaks around epoch 6–10 for several settings. The
+matching **natural-blank** 16-epoch baseline remains **0%** at every evaluated
+checkpoint. See
+[`results/blanks_sweep_summary.csv`](results/blanks_sweep_summary.csv),
+[`results/blanks_ep16_sweep_summary.csv`](results/blanks_ep16_sweep_summary.csv),
+and [`results/natural_ep16_eval_all_epochs.json`](results/natural_ep16_eval_all_epochs.json).
