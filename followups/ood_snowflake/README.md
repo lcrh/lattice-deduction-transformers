@@ -18,15 +18,23 @@ orders 4–8; larger orders just need more CVC5 generation.
 | `e4_leq6` | {4, 5, 6} | {7, 8} (+ 9, 10) |
 | `e4_all` (control) | {4–8} | {4–8} held-out split (the standard setting, re-run) |
 | `e4_shift95` | {4–8}, 95% of examples from {4, 5} | {4–8} balanced held-out split |
+| sparse-support grid | 1K puzzles; H∈{3,6,12,25,50} higher-order; steps∈{1K,4K}; {abs,RoPE} | {4–8} balanced held-out; **1 seed** |
+| `e4_shift1k_h{12,25}_s8k` / `e4_shift95_1k_8k` | H∈{12,25,50}, 8K steps, absolute (1 seed each) | {4–8} |
 
-- Match `--n-train-puzzles 500` and hyperparameters to the standard
-  Snowflake config (`experiments/snowflake/run.py` defaults); only the
-  order filter varies. 3 seeds.
+- The original E4 transfer runs use `--n-train-puzzles 500` and the current
+  `run.py` default of 4K steps. This is **not** the Table 2 paper budget:
+  its reproduction command uses 500 puzzles and **1K** steps.
 - The 500-puzzle limit is total, not per order. `e4_shift95` uses the exact
   mixture `{4: 238, 5: 237, 6: 9, 7: 8, 8: 8}`: every order remains in the
   training support, but 475/500 examples come from orders 4–5. Comparing its
   balanced per-order evaluation against `e4_all` separates a severe
   distribution shift from the strict support shift in `e4_leq5`.
+- The sparse-support **grid** (1 seed per cell) fixes 1K total puzzles and
+  varies (a) higher-order count H over `{3, 6, 12, 25, 50}`, (b) steps over
+  `{1000, 4000}`, and (c) position encoding over `{absolute, RoPE}`. Counts
+  are split evenly across orders 6–8; H=3 is the minimum that keeps every
+  evaluated order in support. Extra 8K absolute probes are only at H∈{12,25,50}
+  (1 seed each) to test whether compute rescues sparse support.
 - **Positional confound — must be fixed before any transfer run.**
   Snowflake placement is deterministic and hub-centered
   (`cell_to_grid_idx` in `experiments/snowflake/data.py`), and snowflake
