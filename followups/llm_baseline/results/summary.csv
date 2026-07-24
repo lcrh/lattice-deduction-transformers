@@ -1,0 +1,6 @@
+config,seed,epoch,n_train,n_eval,samples_per_puzzle,pass_at_1,pass_at_2,pass_at_4,pass_at_8,pass_at_16,pass_at_32,puzzles_passed,correct_samples,malformed_samples,total_samples,train_seconds,checkpoint
+qwen3_5_0_8b,0,1,1000,32,32,0.0,0.0,0.0,0.0,0.0,0.0,0,0,344,1024,182.08403253555298,checkpoint-32
+qwen3_5_0_8b,0,2,1000,32,32,0.0,0.0,0.0,0.0,0.0,0.0,0,0,178,1024,182.08403253555298,checkpoint-64
+qwen3_5_0_8b,0,3,1000,32,32,0.0,0.0,0.0,0.0,0.0,0.0,0,0,249,1024,182.08403253555298,checkpoint-96
+qwen3_5_0_8b,0,4,1000,32,32,0.0,0.0,0.0,0.0,0.0,0.0,0,0,275,1024,182.08403253555298,checkpoint-128
+qwen3_5_0_8b,0,5,1000,32,32,0.0,0.0,0.0,0.0,0.0,0.0,0,0,270,1024,182.08403253555298,checkpoint-160

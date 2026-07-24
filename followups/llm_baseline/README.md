@@ -52,3 +52,10 @@ that model loading, checkpointing, and generation work end to end.
 trusting the sweep. If no checkpoint can solve any training example when
 sampled, debug the prompt/label masking rather than increasing the epoch
 count.
+
+## Results
+
+Seed-0 default run recorded in [`results/`](results/) and summarized in
+[`../RESULTS.md`](../RESULTS.md). Every epoch checkpoint scored 0 on
+pass@1/2/4/8/16/32; the model mostly emits 81-digit strings that are not
+correct solutions.

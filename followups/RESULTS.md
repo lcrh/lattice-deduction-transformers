@@ -3,7 +3,7 @@
 Snapshot: 2026-07-23. E1 has 81/81 evaluation summaries. E4 has the original
 transfer runs plus the sparse-support grid (H × {1K,4K} × {abs,RoPE}, 1 seed
 per cell; some 4K-abs cells also have 3 seeds) and 8K absolute probes at
-H∈{12,25,50}.
+H∈{12,25,50}. E5 has the first Qwen3.5-0.8B seed-0 epoch sweep.
 
 Pass rates below are means of the per-seed percentages. Most evaluations use
 1,000 puzzles per seed. Low-performing reruns can stop after 50 timeouts and
@@ -310,3 +310,37 @@ Thus the catastrophic transfer failure is mainly an **out-of-support
 extrapolation failure**, not fragility to a large change in order frequencies.
 Tens of higher-order examples plus enough optimization steps recover nearly all
 accuracy; a handful of examples do not.
+
+## E5 — Fine-tuned Qwen3.5-0.8B baseline
+
+### Does task-trained direct-answer SFT close the Sudoku-Extreme gap?
+
+**Experiment.** Fully fine-tune `Qwen/Qwen3.5-0.8B` in BF16 on the fixed
+1,000-puzzle LDT train subset (subset seed 42), with no augmentation and no
+search-trace supervision. Save a checkpoint after every epoch for five epochs
+(~3 minutes total train on one B200). Evaluate each checkpoint on 32 held-out
+test puzzles (subset seed 200) with 32 samples per puzzle and the unbiased
+HumanEval pass@k curve for `k ∈ {1, 2, 4, 8, 16, 32}`. Artifacts live under
+`followups/llm_baseline/results/` and on the Modal volume at
+`/checkpoints/followups/llm_baseline/qwen3_5_0_8b_seed0/`.
+
+**Results (seed 0).**
+
+| epoch | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | pass@32 | malformed / 1024 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0% | 0% | 0% | 0% | 0% | 0% | 344 |
+| 2 | 0% | 0% | 0% | 0% | 0% | 0% | 178 |
+| 3 | 0% | 0% | 0% | 0% | 0% | 0% | 249 |
+| 4 | 0% | 0% | 0% | 0% | 0% | 0% | 275 |
+| 5 | 0% | 0% | 0% | 0% | 0% | 0% | 270 |
+
+At epoch 5, 754/1024 samples are well-formed 81-digit strings with digits
+`1`–`9`, but none match the reference solution. Wrong well-formed grids
+average only ~15/81 cells correct (max 31), so the model mostly learns the
+output format rather than the puzzle.
+
+**Interpretation.** Under this direct-answer SFT setup, five epochs of
+Qwen3.5-0.8B on the same 1K train set do not produce any correct held-out
+Sudoku-Extreme solutions even at pass@32. That turns the zero-shot LLM
+comparison into a stronger negative: task training alone, without lattice
+search, is not enough for this model/data budget.
