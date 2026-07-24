@@ -1,8 +1,8 @@
 """E2 (search_process) run matrix — the single source of truth.
 
 E2 ablates the DECIDE and BACKTRACK halves of LDT's DPLL search loop. It has
-BOTH a small set of TRAINING configs it owns (the weak 1K-step checkpoint and a
-4K checkpoint for the model-strength figure, plus the S2 matched-policy trainer)
+BOTH a small set of TRAINING configs it owns (the weak 1K-step checkpoint
+plus the S2 matched-policy trainer)
 AND a large set of EVAL-ONLY configs that re-evaluate frozen checkpoints under
 different decision / backtracking policies.
 
@@ -20,7 +20,6 @@ Two run kinds, encoded in each config's `kind`:
 Consumed inputs (read-only):
   * E1 baseline (2K steps):  /checkpoints/followups/e1/baseline_seed<N>.pt
   * E2 base_1k  (1K steps):  /checkpoints/followups/e2/base_1k_seed<N>.pt  (owned)
-  * E2 base_4k  (4K steps):  /checkpoints/followups/e2/base_4k_seed<N>.pt  (owned)
 
 Sub-studies (see README):
   S1  decision-policy scan (~10 selected combos) x {baseline, base_1k}, eval.
@@ -28,7 +27,7 @@ Sub-studies (see README):
       x eval-P0 & eval-P*.
   S3  backtracking policy list, eval on baseline + base_1k (phase 1) and the
       matched-training trainer (phase 2).
-  S4  2-3 best (policy, backtrack) combos + baseline x {1K, 2K, 4K} checkpoints.
+  S4  2-3 best (policy, backtrack) combos + baseline x {1K, 2K} checkpoints.
 
 CLI:
     uv run python followups/search_process/configs.py list          # all
@@ -62,16 +61,16 @@ CKPT_SUBDIR = "followups/e2"        # where E2 checkpoints + eval artifacts land
 E1_SUBDIR = "followups/e1"          # E1 baseline (consumed by S1/S3/S4)
 VOLUME_NAME = _common.VOLUME_NAME
 
-# 1,000-puzzle eval subsample used across E2 (matches E1/E3 n_eval).
-N_EVAL = 1000
+# 200-puzzle eval subsample used across E2 (matches E3; lighter than E1's 1000).
+N_EVAL = 200
 
 DROP = "__DROP__"
 
 # --------------------------------------------------------------------------
 # Training-config defaults (kind="train"). These mirror the E1 ablation
-# baseline EXCEPT `steps`, which each training config pins. base_1k / base_4k
-# train the weak / strong checkpoints this experiment owns; train_pstar is the
-# S2 matched-policy run (trains with P*).
+# baseline EXCEPT `steps`, which each training config pins. base_1k trains
+# the weak checkpoint this experiment owns; train_pstar is the S2
+# matched-policy run.
 # --------------------------------------------------------------------------
 TRAIN_DEFAULTS: dict[str, object] = {
     "steps": 2000,
@@ -142,20 +141,19 @@ CONFIGS: dict[str, dict] = {}
 INPUT_SUBDIR = {
     "baseline": E1_SUBDIR,
     "base_1k": CKPT_SUBDIR,
-    "base_4k": CKPT_SUBDIR,
     # S2 matched-policy trainers (trained below):
     "train_pstar_1k": CKPT_SUBDIR,
 }
 
 
-def _add_train(name, study, overrides, n_seeds=3, note=""):
+def _add_train(name, study, overrides, n_seeds=2, note=""):
     CONFIGS[name] = {
         "kind": "train", "study": study, "n_seeds": n_seeds,
         "overrides": dict(overrides), "note": note,
     }
 
 
-def _add_eval(name, study, input_cfg, eval_flags, n_seeds=1, note=""):
+def _add_eval(name, study, input_cfg, eval_flags, n_seeds=2, note=""):
     CONFIGS[name] = {
         "kind": "eval", "study": study, "input": input_cfg,
         "n_seeds": n_seeds, "eval_flags": dict(eval_flags), "note": note,
@@ -168,14 +166,8 @@ def _add_eval(name, study, input_cfg, eval_flags, n_seeds=1, note=""):
 # base_1k: weak-deduction checkpoint (1K steps) — policy effects should be
 # LARGE here. Consumed by S1/S3/S4 and the S4 model-strength figure.
 _add_train(
-    "base_1k", "TRAIN", {"steps": 1000, "eval_every": 50}, n_seeds=3,
+    "base_1k", "TRAIN", {"steps": 1000, "eval_every": 50}, n_seeds=2,
     note="Weak 1K-step checkpoint E2 owns (lots of search). ~7 B200-min.",
-)
-# base_4k: strong checkpoint for the S4 budget axis (1K/2K/4K). 2K already
-# exists as the E1 baseline; 4K trained here.
-_add_train(
-    "base_4k", "TRAIN", {"steps": 4000}, n_seeds=3,
-    note="Strong 4K-step checkpoint for the S4 budget axis. ~15 B200-min.",
 )
 # --------------------------------------------------------------------------
 # P0 / P* — the two S2 policies, defined ONCE here (single source of truth used
@@ -201,7 +193,7 @@ _add_train(
     "train_pstar_1k", "S2", {
         "steps": 1000, "eval_every": 50,
         **PSTAR,
-    }, n_seeds=3,
+    }, n_seeds=2,
     note=f"S2 matched-training: train WITH P*={PSTAR}. PLACEHOLDER P* — "
          "re-point to the S1 winner before running. Eval both P0 and P* below.",
 )
@@ -209,7 +201,7 @@ _add_train(
 
 # --------------------------------------------------------------------------
 # S1 — decision-policy scan (~10 selected combos, NOT the full cross).
-# Eval-only on {baseline (2K), base_1k}. 1 seed (exploratory). The first combo
+# Eval-only on {baseline (2K), base_1k}. 2 seeds per operating point. The first combo
 # (uniform/softmax) is the SANITY GATE: it must reproduce the frozen ckpt's
 # no-flag eval. Cell axis: uniform|mrv|min_entropy|max_entropy; digit axis:
 # softmax|argmax|rank_k. Selected combos probe each axis + the greedy corner
@@ -231,13 +223,12 @@ S1_COMBOS: list[tuple[str, str, str]] = [
 
 for base in ("baseline", "base_1k"):
     for tag, cp, dp in S1_COMBOS:
-        is_gate = (tag == "baseline_pol")
         _add_eval(
             f"s1_{base}_{tag}", "S1", base,
             {"cell_policy": cp, "digit_policy": dp},
-            n_seeds=(3 if is_gate else 1),
+            n_seeds=2,
             note=("SANITY GATE: uniform/softmax must reproduce the frozen "
-                  f"{base} no-flag eval." if is_gate
+                  f"{base} no-flag eval." if tag == "baseline_pol"
                   else f"cell={cp} digit={dp} on {base}."),
         )
 
@@ -246,24 +237,24 @@ for base in ("baseline", "base_1k"):
 # S2 — matched vs mismatched 2x2. train-P0 = base_1k (already trained above,
 # eval it under P0 and P*); train-P* = train_pstar_1k (eval under P0 and P*).
 # P0 and P* are defined once above (train_pstar_1k derives from the same dicts).
-# 3 seeds (table rows). The train-P0/eval-P0 and train-P0/eval-P* cells reuse
+# 2 seeds per cell. The train-P0/eval-P0 and train-P0/eval-P* cells reuse
 # the base_1k checkpoint under the two policies; the train-P*/eval-* cells use
 # train_pstar_1k.
 # --------------------------------------------------------------------------
-_add_eval("s2_trainP0_evalP0", "S2", "base_1k", dict(P0), n_seeds=3,
+_add_eval("s2_trainP0_evalP0", "S2", "base_1k", dict(P0), n_seeds=2,
           note="train P0 / eval P0 (the baseline cell of the 2x2).")
-_add_eval("s2_trainP0_evalPstar", "S2", "base_1k", dict(PSTAR), n_seeds=3,
+_add_eval("s2_trainP0_evalPstar", "S2", "base_1k", dict(PSTAR), n_seeds=2,
           note="train P0 / eval P* (mismatch control — bolt P* onto a P0 model).")
-_add_eval("s2_trainPstar_evalP0", "S2", "train_pstar_1k", dict(P0), n_seeds=3,
+_add_eval("s2_trainPstar_evalP0", "S2", "train_pstar_1k", dict(P0), n_seeds=2,
           note="train P* / eval P0 (mismatch control — other direction).")
-_add_eval("s2_trainPstar_evalPstar", "S2", "train_pstar_1k", dict(PSTAR), n_seeds=3,
+_add_eval("s2_trainPstar_evalPstar", "S2", "train_pstar_1k", dict(PSTAR), n_seeds=2,
           note="train P* / eval P* (the MATCHED run).")
 
 
 # --------------------------------------------------------------------------
 # S3 — backtracking policies. Eval-only (phase 1) on {baseline, base_1k}.
 # root (sanity gate) | last | geometric(0.5) | uniform_depth | last+negate.
-# 3 seeds on the table rows; the S3 table reports unsound_negation_rate.
+# 2 seeds on the table rows; the S3 table reports unsound_negation_rate.
 # --------------------------------------------------------------------------
 S3_POLICIES: list[tuple[str, dict]] = [
     ("root", {"backtrack": "root"}),                     # SANITY GATE
@@ -277,7 +268,7 @@ for base in ("baseline", "base_1k"):
         is_gate = (tag == "root")
         _add_eval(
             f"s3_{base}_{tag}", "S3", base, dict(flags),
-            n_seeds=3,
+            n_seeds=2,
             note=("SANITY GATE: backtrack=root must reproduce the frozen "
                   f"{base} no-flag eval." if is_gate
                   else f"backtrack={flags['backtrack']} on {base}."),
@@ -286,12 +277,13 @@ for base in ("baseline", "base_1k"):
 
 # --------------------------------------------------------------------------
 # S4 — policy gain vs model strength. 2-3 best (policy, backtrack) combos +
-# baseline policy, evaluated across the training-budget axis {1K, 2K, 4K}.
-#   1K = base_1k (E2), 2K = baseline (E1), 4K = base_4k (E2).
+# baseline policy, evaluated across the training-budget axis {1K, 2K}.
+#   1K = base_1k (E2), 2K = baseline (E1) — same 2K checkpoint family used
+# elsewhere in E2, so no extra training job.
 # Combos (PLACEHOLDER best set — re-point after S1/S3): P0/root (baseline
-# reference), P*/root, P*/last, P0/last. 1 seed each (figure, exploratory).
+# reference), P*/root, P*/last, P0/last. 2 seeds each.
 # --------------------------------------------------------------------------
-S4_CKPTS = [("1k", "base_1k"), ("2k", "baseline"), ("4k", "base_4k")]
+S4_CKPTS = [("1k", "base_1k"), ("2k", "baseline")]
 S4_COMBOS: list[tuple[str, dict]] = [
     ("p0_root", {**P0, "backtrack": "root"}),
     ("pstar_root", {**PSTAR, "backtrack": "root"}),
@@ -302,7 +294,7 @@ for budget, base in S4_CKPTS:
     for tag, flags in S4_COMBOS:
         _add_eval(
             f"s4_{budget}_{tag}", "S4", base, dict(flags),
-            n_seeds=1,
+            n_seeds=2,
             note=f"S4 budget={budget} combo={tag} on {base}.",
         )
 
@@ -312,11 +304,11 @@ for budget, base in S4_CKPTS:
 # --------------------------------------------------------------------------
 STUDY_ORDER = ["TRAIN", "S1", "S2", "S3", "S4"]
 STUDY_LABEL = {
-    "TRAIN": "TRAIN  checkpoints E2 owns (base_1k / base_4k / matched-policy)",
+    "TRAIN": "TRAIN  checkpoints E2 owns (base_1k / matched-policy)",
     "S1": "S1  decision-policy scan (eval-only; uniform/softmax is the gate)",
     "S2": "S2  matched-vs-mismatched 2x2 (train P0/P* x eval P0/P*)",
     "S3": "S3  backtracking policies (eval-only; root is the gate)",
-    "S4": "S4  policy gain vs model strength (1K/2K/4K x best combos)",
+    "S4": "S4  policy gain vs model strength (1K/2K x best combos)",
 }
 
 
@@ -447,7 +439,7 @@ def _print_list(prefix: str = "") -> None:
     print("# PREREQUISITES:", flush=True)
     print("#   - E1 baseline at /checkpoints/followups/e1/baseline_seed<N>.pt", flush=True)
     print("#   - Train E2's own checkpoints FIRST (TRAIN group: base_1k /", flush=True)
-    print("#     base_4k / train_pstar_1k) before the eval-only S1/S2/S3/S4.", flush=True)
+    print("#     train_pstar_1k) before the eval-only S1/S2/S3/S4.", flush=True)
     print("#", flush=True)
     print("# 1. SANITY GATES FIRST: s1_*_baseline_pol (uniform/softmax) and", flush=True)
     print("#    s3_*_root (backtrack=root) must reproduce the frozen ckpt's", flush=True)

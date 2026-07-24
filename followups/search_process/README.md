@@ -82,7 +82,7 @@ reporting the sequential-cost estimate) is how we make the greedy
 comparison fair rather than trivially bad.
 
 Scan: ~10 selected combos (not the full cross) × {baseline ckpt, 1K ckpt}
-× 1000-puzzle eval. Eval-only, ~2–4 B200-min each.
+× 200-puzzle eval. Eval-only, ~2–4 B200-min each.
 
 ## Sub-study S2 — Matched vs. mismatched training
 
@@ -102,7 +102,7 @@ all four cells:
 Training with a policy means: the no-grad `dpll_step` inside `train.py`
 uses that policy, so the pool's state distribution is the one the policy
 induces. 2 new training configs (train-P* is the only new one, but re-run
-baseline under identical eval protocol) × 3 seeds × ~7 B200-min.
+baseline under identical eval protocol) × 2 seeds × ~7 B200-min.
 
 Hypothesis worth falsifying: cell policy changes *which* states the model
 sees (e.g. MRV visits low-branching states) → training matched to the
@@ -161,14 +161,13 @@ How much can smarter search compensate for a weaker, cheaper-trained
 model?
 
 Take the 2–3 best (policy, backtrack) combos + baseline and evaluate each
-across the training-budget axis: checkpoints at 1K / 2K / 4K steps (1K
-and 2K already exist at the fixed paths above; train a `base_4k` into
-`/checkpoints/followups/e2/` — it's ~15 B200-min).
+across the training-budget axis: checkpoints at 1K / 2K steps (E2
+`base_1k` and the E1 `baseline`).
 
 **Figure S4**: x = train steps, y = sequential forwards/solve (log), one
-line per search config. Expectation: lines converge as deduction gets
-strong (search barely happens at 4K) and fan out at 1K — quantifying "how
-much can search quality compensate for training compute".
+line per search config. Expectation: lines fan out at 1K (search matters
+more when deduction is weak) and converge toward the 2K baseline as the
+model strengthens.
 
 ---
 
@@ -187,7 +186,7 @@ much can search quality compensate for training compute".
 ## Run budget
 
 S1 + S3-phase-1 are eval-only: ~30 evals × ~3 B200-min ≈ 1.5 B200-h.
-S2 + S3-phase-2: ~4 training configs × 3 seeds × 7 B200-min ≈ 1.5 B200-h.
+S2 + S3-phase-2: ~4 training configs × 2 seeds × 7 B200-min ≈ 1 B200-h.
 S4: eval-only over existing checkpoints, ~1 B200-h.
 
 ## TODO(worker) — implementation checklist

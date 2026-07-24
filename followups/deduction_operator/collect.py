@@ -162,7 +162,7 @@ def _write_o3_per_pass_table(by_config: dict[str, list[dict]]) -> None:
 
     One row per (config, pass_index) for the multi-pass O3 configs. Columns:
     deduced / unsound / unsound_rate at that pass index, summed over seeds
-    (element-wise; configs run 1 seed each so this is just the value).
+    (element-wise across the two configured seeds).
     Degrades gracefully: configs with no per-pass data (single-pass or older
     evals) are simply absent from the table.
     """

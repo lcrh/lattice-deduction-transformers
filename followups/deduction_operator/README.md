@@ -41,10 +41,10 @@ can be *evaluated* at any `L_eval` (the model docstring notes stability to
   vs. total forward-FLOPs per puzzle, so "more loops" competes fairly
   against "more search rounds".
 - **Transfer matrix:** `L_train ∈ {1, 2, 4, 8, 16, 32}` × `L_eval ∈ {1, 2,
-  4, 8, 16, 32, 64, 128}` on the 1,000-puzzle subsample (48 evals × ~1–4
-  B200-min). Hypothesis: deep supervision trains every iteration to be a
+  4, 8, 16, 32, 64, 128}` on the 200-puzzle subsample (48 cells × 2 seeds
+  = 96 eval jobs). Hypothesis: deep supervision trains every iteration to be a
   valid readout, so transfer should be broad — and should *break* on the
-  `d2_final_only` checkpoint (8 extra evals), which ties this study back
+  `d2_final_only` checkpoint (8 cells × 2 seeds = 16 extra eval jobs), which ties this study back
   to E1-D2.
 
 **Figure O1a**: solve rate + unsound rate vs `L_eval` (log-x) for the

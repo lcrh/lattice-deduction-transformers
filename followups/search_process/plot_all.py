@@ -211,8 +211,8 @@ def _import_plt():
 
 
 def fig_s4(data: dict, plt) -> None:
-    # x = train steps (1K/2K/4K), y = seq forwards/solve (log), line per combo.
-    budgets = {"base_1k": 1000, "baseline": 2000, "base_4k": 4000}
+    # x = train steps (1K/2K), y = seq forwards/solve (log), line per combo.
+    budgets = {"base_1k": 1000, "baseline": 2000}
     fig, ax = plt.subplots(figsize=(8.5, 5.5))
     fig.patch.set_facecolor("white")
     colors = ["#c0563b", "#2f6f9f", "#4a8b5c", "#8a5fb0"]

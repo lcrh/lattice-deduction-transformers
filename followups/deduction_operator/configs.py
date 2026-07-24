@@ -72,8 +72,8 @@ L_TRAIN_AXIS = (1, 2, 4, 8, 16, 32)
 THETA_ELIM_AXIS = (0.02, 0.05, 0.1, 0.2, 0.3, 0.5)
 THETA_CLS_AXIS = (0.5, 0.55, 0.6, 0.7, 0.8)
 
-# The 1,000-puzzle subsample used across E3 (matches E1's n_eval_puzzles=1000).
-N_EVAL = 1000
+# 200-puzzle subsample used across E3 (lighter than E1's n_eval_puzzles=1000).
+N_EVAL = 200
 
 # E1 native loop counts (documented for the eval_n_loops == native sanity gate
 # and for collect.py to know each input's L_train). d1_L<L> trains at L loops;
@@ -120,7 +120,7 @@ DROP = "__DROP__"
 CONFIGS: dict[str, dict] = {}
 
 
-def _add(name, study, input_cfg, eval_flags, n_seeds=1, note=""):
+def _add(name, study, input_cfg, eval_flags, n_seeds=2, note=""):
     CONFIGS[name] = {
         "study": study,
         "input": input_cfg,
@@ -132,30 +132,30 @@ def _add(name, study, input_cfg, eval_flags, n_seeds=1, note=""):
 
 # --------------------------------------------------------------------------
 # O1 — baseline loop-scaling. L_eval sweep on the E1 baseline (2K).
-# 1 seed (exploratory scan) except L_eval=16 which is the SANITY GATE (== the
-# baseline's native operating point) and gets 3 seeds to anchor the curve.
+# 2 seeds per operating point; L_eval=16 is the SANITY GATE (== the
+# baseline's native operating point).
 # --------------------------------------------------------------------------
 for L in L_EVAL_AXIS:
     is_native = (L == 16)
     _add(
         f"o1_scale_L{L}", "O1-scale", "baseline",
         {"eval_n_loops": L},
-        n_seeds=3 if is_native else 1,
+        n_seeds=2,
         note=("SANITY GATE: L_eval=16 == baseline native n_loops -> must "
               "reproduce the no-flag baseline eval." if is_native
               else f"loop-scaling probe at L_eval={L}."),
     )
 
 # --------------------------------------------------------------------------
-# O1 — transfer matrix: L_train (E1 d1_L*) x L_eval. 48 cells, 1 seed each
-# (exploratory heatmap). Consumes /checkpoints/followups/e1/d1_L<Ltrain>_seed0.pt.
+# O1 — transfer matrix: L_train (E1 d1_L*) x L_eval. 48 cells, 2 seeds each.
+# Consumes /checkpoints/followups/e1/d1_L<Ltrain>_seed<N>.pt.
 # --------------------------------------------------------------------------
 for Lt in L_TRAIN_AXIS:
     for Le in L_EVAL_AXIS:
         _add(
             f"o1_xfer_Lt{Lt}_Le{Le}", "O1-transfer", f"d1_L{Lt}",
             {"eval_n_loops": Le},
-            n_seeds=1,
+            n_seeds=2,
             note=(f"transfer: train L={Lt}, eval L={Le}."
                   + (" (eval_n_loops==native diagonal)" if Le == Lt else "")),
         )
@@ -169,38 +169,38 @@ for Le in L_EVAL_AXIS:
     _add(
         f"o1_d2fo_Le{Le}", "O1-transfer-d2", "d2_final_only",
         {"eval_n_loops": Le},
-        n_seeds=1,
+        n_seeds=2,
         note=f"d2_final_only unrolled to L_eval={Le} (expected to degrade "
              "off the trained depth).",
     )
 
 # --------------------------------------------------------------------------
-# O3 — deduce-to-fixpoint before branching, on the baseline. 3 seeds (table
+# O3 — deduce-to-fixpoint before branching, on the baseline. 2 seeds (table
 # rows). o3_d4_noaug is the augmentation-ensembling control (same passes, aug
 # off) to separate iterated-deduction from the implicit test-time aug ensemble.
 # --------------------------------------------------------------------------
 _add(
     "o3_d2", "O3", "baseline",
     {"deduce_passes": 2},
-    n_seeds=3,
+    n_seeds=2,
     note="2 deduction passes per round before deciding.",
 )
 _add(
     "o3_d4", "O3", "baseline",
     {"deduce_passes": 4},
-    n_seeds=3,
+    n_seeds=2,
     note="4 deduction passes per round.",
 )
 _add(
     "o3_fix", "O3", "baseline",
     {"deduce_passes": 0, "deduce_pass_cap": 16},
-    n_seeds=3,
+    n_seeds=2,
     note="deduce to fixpoint (passes=0), safety cap 16.",
 )
 _add(
     "o3_d4_noaug", "O3", "baseline",
     {"deduce_passes": 4, "augment": False},
-    n_seeds=3,
+    n_seeds=2,
     note="4 passes with eval-time aug OFF — control isolating iterated "
          "deduction from the aug-ensembling effect.",
 )
@@ -209,7 +209,7 @@ _add(
 # O4 — operating-point sensitivity.
 #   theta_elim sweep on baseline AND d4_sym (symmetric-BCE checkpoint).
 #   theta_CLS sweep on baseline.
-# 1 seed each (exploratory sensitivity scans). The tuned points
+# 2 seeds each. The tuned points
 # (theta_elim=0.1, theta_CLS=0.6) are the operating point already covered by
 # the O1 baseline native gate, but re-emitted here so each sweep is a complete
 # self-contained curve.
@@ -223,21 +223,21 @@ for th in THETA_ELIM_AXIS:
     _add(
         f"o4_elim_base_{_fmt(th)}", "O4-elim-baseline", "baseline",
         {"threshold": th},
-        n_seeds=1,
+        n_seeds=2,
         note=f"theta_elim={th} on baseline.",
     )
 for th in THETA_ELIM_AXIS:
     _add(
         f"o4_elim_sym_{_fmt(th)}", "O4-elim-d4sym", "d4_sym",
         {"threshold": th},
-        n_seeds=1,
+        n_seeds=2,
         note=f"theta_elim={th} on d4_sym (symmetric BCE).",
     )
 for th in THETA_CLS_AXIS:
     _add(
         f"o4_cls_base_{_fmt(th)}", "O4-cls-baseline", "baseline",
         {"cls_threshold": th},
-        n_seeds=1,
+        n_seeds=2,
         note=f"theta_CLS={th} on baseline.",
     )
 
