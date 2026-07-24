@@ -181,6 +181,10 @@ def random_translate(
 class SnowflakeConfig:
     data_path: str = "data/snowflake_train.parquet"
     n_puzzles: int | None = None        # subset size, None = all
+    # Optional exact per-order composition for a fixed distribution-shift
+    # subset, e.g. {4: 238, 5: 237, 6: 9, 7: 8, 8: 8}. When set, the counts
+    # must sum to n_puzzles (if n_puzzles is also set).
+    order_counts: dict[int, int] | None = None
     seed: int = 42
     batch_size: int = 512
     # Mirror the sudoku-extreme sample-type weights so CLS gets UNSAT signal.
@@ -290,7 +294,37 @@ class SnowflakeDataset:
         if cfg.orders is not None:
             allowed = set(int(o) for o in cfg.orders)
             self.puzzles = [r for r in self.puzzles if int(r["n"]) in allowed]
-        if cfg.n_puzzles is not None and cfg.n_puzzles < len(self.puzzles):
+        if cfg.order_counts is not None:
+            requested = {int(order): int(count)
+                         for order, count in cfg.order_counts.items()}
+            if not requested or any(count <= 0 for count in requested.values()):
+                raise ValueError(
+                    f"order_counts must contain positive counts, got {requested!r}"
+                )
+            n_requested = sum(requested.values())
+            if cfg.n_puzzles is not None and cfg.n_puzzles != n_requested:
+                raise ValueError(
+                    f"order_counts sum to {n_requested}, but n_puzzles="
+                    f"{cfg.n_puzzles}; these must match"
+                )
+            rng_init = np.random.default_rng(cfg.seed)
+            by_order: dict[int, list[dict]] = {}
+            for rec in self.puzzles:
+                by_order.setdefault(int(rec["n"]), []).append(rec)
+            selected: list[dict] = []
+            for order, count in sorted(requested.items()):
+                pool = by_order.get(order, [])
+                if count > len(pool):
+                    raise ValueError(
+                        f"order_counts requests {count} puzzles of order {order}, "
+                        f"but only {len(pool)} are available"
+                    )
+                idx = rng_init.choice(len(pool), count, replace=False)
+                selected.extend(pool[i] for i in idx)
+            # Avoid presenting long same-order blocks to the epoch sampler.
+            perm = rng_init.permutation(len(selected))
+            self.puzzles = [selected[i] for i in perm]
+        elif cfg.n_puzzles is not None and cfg.n_puzzles < len(self.puzzles):
             rng_init = np.random.default_rng(cfg.seed)
             idx = rng_init.choice(len(self.puzzles), cfg.n_puzzles, replace=False)
             self.puzzles = [self.puzzles[i] for i in idx]

@@ -263,7 +263,7 @@ SUMMARY_COLUMNS = [
 
 def _write_csv(path: Path, columns: list[str], rows: list[dict]) -> None:
     with path.open("w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=columns)
+        w = csv.DictWriter(fh, fieldnames=columns, lineterminator="\n")
         w.writeheader()
         for r in rows:
             w.writerow(r)
