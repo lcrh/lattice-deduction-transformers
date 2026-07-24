@@ -15,9 +15,9 @@ LLM on the identical 1K-puzzle training set isolates this.
 - **Training data:** exactly 1,000 examples from the
   `sapientinc/sudoku-extreme` train split, selected with the LDT loader's
   fixed subset seed 42. No data augmentation is used in this first experiment.
-- **Epoch sweep:** one run trains for three epochs by default and saves a
-  resumable Hugging Face checkpoint after every epoch. Those checkpoints are
-  the 1-, 2-, and 3-epoch conditions; `--epochs` changes the sweep ceiling.
+- **Epoch sweep:** one run trains for 16 epochs by default and saves a
+  resumable Hugging Face checkpoint after every epoch. Evaluation runs only
+  at epochs 2, 4, ..., 16 by default (`--eval-every-epochs 2`).
 - **Hint / blank control:** `--n-blanks K` rebuilds every train and eval
   puzzle from its solution with exactly `K` missing cells (`0`s). Natural
   Sudoku-Extreme puzzles average ~56 blanks; omit the flag to keep the natural
@@ -41,24 +41,19 @@ share the same tokenizer, chat template, and checkpoint format.
 ## Run
 
 ```bash
-# Default: 3 epochs, 1,000 train puzzles, natural blanks, 32 eval puzzles.
+# Default: 16 epochs, eval at 2/4/.../16, natural blanks.
 uv run modal run --detach followups/llm_baseline/run.py
 
-# Controlled-blank sweep (same train/eval regime, K missing cells).
+# Controlled-blank sweep (same 16-epoch/even-epoch-eval regime).
 uv run modal run --detach followups/llm_baseline/run.py --n-blanks 1
 uv run modal run --detach followups/llm_baseline/run.py --n-blanks 2
 uv run modal run --detach followups/llm_baseline/run.py --n-blanks 4
 uv run modal run --detach followups/llm_baseline/run.py --n-blanks 8
 uv run modal run --detach followups/llm_baseline/run.py --n-blanks 16
 uv run modal run --detach followups/llm_baseline/run.py --n-blanks 32
-
-# Short smoke test before spending the full evaluation budget.
-uv run modal run followups/llm_baseline/run.py \
-    --epochs 1 --n-train 32 --n-eval 2 --samples-per-puzzle 2 --n-blanks 2
 ```
 
-The default run is the experiment of record. The reduced command only checks
-that model loading, checkpointing, and generation work end to end.
+The default run is the experiment of record.
 
 **Sanity gate.** Inspect the training loss and the one-epoch eval before
 trusting the sweep. If no checkpoint can solve any training example when

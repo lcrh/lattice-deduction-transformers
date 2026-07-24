@@ -191,6 +191,21 @@ def _checkpoint_dirs(run_dir: Path) -> list[Path]:
     return sorted(checkpoints, key=_checkpoint_epoch)
 
 
+def _select_eval_checkpoints(
+    checkpoints: list[Path],
+    eval_every_epochs: int,
+) -> list[Path]:
+    """Keep checkpoints whose rounded epoch is a positive multiple of the stride."""
+    if eval_every_epochs < 1:
+        raise ValueError("eval_every_epochs must be at least 1")
+    selected: list[Path] = []
+    for checkpoint in checkpoints:
+        epoch = int(round(_checkpoint_epoch(checkpoint)))
+        if epoch >= eval_every_epochs and epoch % eval_every_epochs == 0:
+            selected.append(checkpoint)
+    return selected
+
+
 app = modal.App("qwen35-sudoku-finetune")
 
 
@@ -202,7 +217,7 @@ app = modal.App("qwen35-sudoku-finetune")
     volumes={DATA_MOUNT: data_volume, CHECKPOINT_MOUNT: checkpoint_volume},
 )
 def train_and_evaluate(
-    epochs: int = 3,
+    epochs: int = 16,
     n_train: int = 1000,
     n_eval: int = 32,
     samples_per_puzzle: int = 32,
@@ -215,6 +230,7 @@ def train_and_evaluate(
     top_p: float = 0.95,
     seed: int = 0,
     n_blanks: int | None = None,
+    eval_every_epochs: int = 2,
     resume: bool = False,
 ) -> dict[str, Any]:
     import os
@@ -236,13 +252,15 @@ def train_and_evaluate(
         raise ValueError("dataset sizes, sample counts, and batch sizes must be positive")
     if n_blanks is not None and not (0 <= n_blanks <= 81):
         raise ValueError("n_blanks must be in [0, 81]")
+    if eval_every_epochs < 1:
+        raise ValueError("eval_every_epochs must be at least 1")
 
     os.environ["HF_HOME"] = f"{DATA_MOUNT}/huggingface"
     set_seed(seed)
     blanks_tag = "natural" if n_blanks is None else f"blanks{n_blanks}"
     run_dir = Path(
         f"{CHECKPOINT_MOUNT}/followups/llm_baseline/"
-        f"{DEFAULT_RUN_NAME}_{blanks_tag}_seed{seed}"
+        f"{DEFAULT_RUN_NAME}_{blanks_tag}_ep{epochs}_seed{seed}"
     )
     run_dir.mkdir(parents=True, exist_ok=True)
     existing = _checkpoint_dirs(run_dir)
@@ -269,6 +287,7 @@ def train_and_evaluate(
         "top_p": top_p,
         "seed": seed,
         "n_blanks": n_blanks,
+        "eval_every_epochs": eval_every_epochs,
         "train_subset_seed": 42,
         "eval_subset_seed": 200,
         "train_digest_sha256": _dataset_digest(train_rows),
@@ -469,7 +488,18 @@ def train_and_evaluate(
         raise RuntimeError(
             f"Expected at least {epochs} epoch checkpoints, found {len(checkpoints)}"
         )
-    summaries = [evaluate_checkpoint(checkpoint) for checkpoint in checkpoints]
+    eval_checkpoints = _select_eval_checkpoints(checkpoints, eval_every_epochs)
+    if not eval_checkpoints:
+        raise RuntimeError(
+            f"No checkpoints matched eval_every_epochs={eval_every_epochs} "
+            f"among {len(checkpoints)} saved epochs"
+        )
+    print(
+        f"Evaluating {len(eval_checkpoints)}/{len(checkpoints)} checkpoints "
+        f"(every {eval_every_epochs} epoch(s))...",
+        flush=True,
+    )
+    summaries = [evaluate_checkpoint(checkpoint) for checkpoint in eval_checkpoints]
     all_epochs = {
         "run_config": run_config,
         "train_seconds": train_seconds,
@@ -483,7 +513,7 @@ def train_and_evaluate(
 
 @app.local_entrypoint()
 def entrypoint(
-    epochs: int = 3,
+    epochs: int = 16,
     n_train: int = 1000,
     n_eval: int = 32,
     samples_per_puzzle: int = 32,
@@ -496,6 +526,7 @@ def entrypoint(
     top_p: float = 0.95,
     seed: int = 0,
     n_blanks: int | None = None,
+    eval_every_epochs: int = 2,
     resume: bool = False,
 ) -> None:
     result = train_and_evaluate.remote(
@@ -512,6 +543,7 @@ def entrypoint(
         top_p=top_p,
         seed=seed,
         n_blanks=n_blanks,
+        eval_every_epochs=eval_every_epochs,
         resume=resume,
     )
     print(json.dumps(result, indent=2), flush=True)

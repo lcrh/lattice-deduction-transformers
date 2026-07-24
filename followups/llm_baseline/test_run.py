@@ -5,6 +5,7 @@ from pathlib import Path
 
 from followups.llm_baseline.run import (
     _checkpoint_dirs,
+    _select_eval_checkpoints,
     apply_n_blanks,
     estimate_pass_at_k,
     make_messages,
@@ -66,6 +67,21 @@ class QwenSudokuExperimentTest(unittest.TestCase):
             self.assertTrue(q == "0" or q == a)
         self.assertEqual(puzzle, apply_n_blanks(answer, n_blanks=2, seed=7, puzzle_index=3))
         self.assertNotEqual(puzzle, apply_n_blanks(answer, n_blanks=2, seed=7, puzzle_index=4))
+
+    def test_select_eval_checkpoints_keeps_even_epochs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for step, epoch in [(10, 1.0), (20, 2.0), (30, 3.0), (40, 4.0)]:
+                checkpoint = root / f"checkpoint-{step}"
+                checkpoint.mkdir()
+                (checkpoint / "trainer_state.json").write_text(
+                    json.dumps({"epoch": epoch})
+                )
+            selected = _select_eval_checkpoints(_checkpoint_dirs(root), eval_every_epochs=2)
+            self.assertEqual(
+                [path.name for path in selected],
+                ["checkpoint-20", "checkpoint-40"],
+            )
 
 
 if __name__ == "__main__":
