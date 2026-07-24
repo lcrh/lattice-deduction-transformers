@@ -1,9 +1,11 @@
 # Follow-up experiment results
 
-Snapshot: 2026-07-23. E1 has 81/81 evaluation summaries. E4 has the original
-transfer runs plus the sparse-support grid (H × {1K,4K} × {abs,RoPE}, 1 seed
-per cell; some 4K-abs cells also have 3 seeds) and 8K absolute probes at
-H∈{12,25,50}. E5 has the first Qwen3.5-0.8B seed-0 epoch sweep.
+Snapshot: 2026-07-24. E1 has 81/81 evaluation summaries. E2 is complete
+(88/88: TRAIN + S1–S4). E3 has the full loop/threshold/deduction grid at
+`L_eval ≤ 32` (138/138). E4 has the original transfer runs plus the
+sparse-support grid (H × {1K,4K} × {abs,RoPE}, 1 seed per cell; some 4K-abs
+cells also have 3 seeds) and 8K absolute probes at H∈{12,25,50}. E5 has the
+first Qwen3.5-0.8B seed-0 epoch sweep.
 
 Pass rates below are means of the per-seed percentages. Most evaluations use
 1,000 puzzles per seed. Low-performing reruns can stop after 50 timeouts and
@@ -221,6 +223,160 @@ ratio-2, and 97.8% → 96.2% for ratio-32). The independently trained companions
 agree qualitatively. The original ordering is therefore not an artifact of
 using θ_elim=0.1; stronger BCE asymmetry genuinely produced a much more useful
 deduction operator under the tested operating points.
+
+## E2 — Search process (decision + backtracking)
+
+**Status.** Complete (88/88). `P* = uniform + argmax` from S1. Artifacts:
+`search_process/results/summary.csv`. Eval uses 200 puzzles / seed (or a
+shorter gap-free prefix after the 50-timeout abort).
+
+### S1: Decision-policy scan
+
+**Experiment.** Ten (cell, digit) policies on the E1 2K baseline and the E2
+1K checkpoint. Key cost metrics: solve rate, batched calls/solve, sequential
+forwards p50.
+
+**Results (mean over 2 seeds).**
+
+| policy | baseline solve | baseline calls/solve | baseline seq p50 | base_1k solve | base_1k calls/solve | base_1k seq p50 |
+|---|---:|---:|---:|---:|---:|---:|
+| uniform/argmax | 100% | 4.6 | 395 | 99.8% | 9.3 | 1.3k |
+| MRV/softmax | 100% | 6.5 | 732 | 96.8% | 21.6 | 2.6k |
+| min-ent/softmax | 99.8% | 11.2 | 1.1k | 96.0% | 24.0 | 3.2k |
+| uniform/softmax (P0) | 99.2% | 12.5 | 1.4k | 83.3% | 57.9 | 12k |
+| MRV/argmax | 96.5% | 14.2 | 624 | 94.8% | 22.8 | 1.4k |
+| max-ent/softmax | 90.7% | 34.1 | 5.9k | 45.1% | 184 | ≥64k |
+| min-ent/argmax | 78.7% | 49.6 | 1.3k | 77.2% | 53.4 | 2.1k |
+| */rank-k (best) | 70.9% | 85 | 23k | 46.2% | 180 | ≥64k |
+
+**Interpretation.** `uniform + argmax` is the S1 winner on both strengths:
+ceiling accuracy at the lowest sequential cost. Softmax digit policies are
+generally safer than argmax except for that uniform/argmax corner. Rank-k and
+max-entropy are clearly harmful. Policy gaps widen sharply on the weak 1K
+model — search quality matters more when deduction is weak. S2 therefore
+sets `P* = uniform + argmax`.
+
+### S3: Backtracking policies
+
+**Experiment.** `{root, last, geometric(0.5), uniform_depth, last+negate}` on
+baseline and `base_1k`.
+
+**Results (mean over 2 seeds).**
+
+| backtrack | baseline solve | baseline calls/solve | baseline unsound | base_1k solve | base_1k calls/solve | base_1k unsound |
+|---|---:|---:|---:|---:|---:|---:|
+| root | 99.5% | 10.6 | 0.83% | 81.2% | 58.3 | 1.7% |
+| uniform_depth | 99.8% | 14.7 | 9.0% | 90.7% | 46.3 | 16.8% |
+| geometric | 99.8% | 25.9 | 13.9% | 93.2% | 49.8 | 20.0% |
+| last+negate | 98.8% | 27.4 | 12.8% | 84.5% | 66.1 | 20.0% |
+| last | 75.6% | 68.9 | 17.3% | 54.0% | 143 | 22.0% |
+
+`last+negate` records ~31% unsound negations wherever negation fires.
+
+**Interpretation.** On the strong model, root is already excellent; partial
+backtracks do not buy enough accuracy to justify much higher unsound
+deduction. On the weak model, geometric / uniform_depth raise solve rate vs
+root but with ~10× higher unsound. `last` is harmful on both. S4 therefore
+crosses `{P0, P*}` with `{root, geometric}` over the 1K/2K budget axis.
+
+### S2: Matched vs mismatched 2×2
+
+**Experiment.** Train under P0 (`base_1k`, uniform/softmax) or P*
+(`train_pstar_1k`, uniform/argmax), then eval under each policy. Tests whether
+policy gains require matched training-state distributions.
+
+**Results (mean over 2 seeds).**
+
+| train → eval | solve | calls/solve | seq forwards p50 | unsound |
+|---|---:|---:|---:|---:|
+| P0 → P0 | 80.2% | 59.1 | 10k | 1.7% |
+| P0 → P* | 98.8% | 10.9 | 1.2k | 4.2% |
+| P* → P0 | 88.8% | 41.7 | 6.7k | 2.4% |
+| P* → P* | 99.8% | 10.9 | 1.1k | 4.4% |
+
+`train_pstar_1k`'s own train-time eval is 99.2% (9.4 calls/solve).
+
+**Interpretation.** Almost all of the S1 gain is an **eval-policy** effect:
+bolting P* onto a P0-trained 1K model jumps 80% → 99% and cuts cost ~5×.
+Matched P* training adds only a small further lift on the matched cell
+(98.8% → 99.8%) and helps somewhat when evaluating under P0 (80% → 89%).
+Distribution matching is real but secondary; the practical recommendation is
+to use P* at inference even on P0-trained checkpoints.
+
+### S4: Policy gain vs model strength
+
+**Experiment.** `{P0, P*} × {root, geometric}` on the 1K (`base_1k`) and 2K
+(E1 `baseline`) checkpoints.
+
+**Results (mean over 2 seeds).**
+
+| combo | 1K solve | 1K calls/solve | 1K unsound | 2K solve | 2K calls/solve | 2K unsound |
+|---|---:|---:|---:|---:|---:|---:|
+| P0 / root | 79.5% | 62.8 | 1.7% | 99.8% | 10.5 | 0.9% |
+| P* / root | 99.5% | 10.7 | 4.3% | 100% | 3.9 | 1.7% |
+| P0 / geometric | 92.5% | 53.1 | 20.1% | 99.2% | 26.8 | 14.0% |
+| P* / geometric | 95.5% | 41.0 | 21.1% | 99.5% | 25.5 | 16.4% |
+
+**Interpretation.** On the weak 1K model, switching P0→P* under root recovers
+nearly all of the 2K solve rate (79.5% → 99.5%) and cuts cost ~6× —
+policy is a larger lever than an extra 1K training steps under P0. On the
+strong 2K model accuracy is saturated; P* mainly buys cost (10.5 → 3.9
+calls/solve). Geometric helps P0 on 1K vs root, but **hurts** once P* is in
+play (99.5% → 95.5% on 1K) and everywhere raises unsound ~10×. Best operating
+point across budgets: **P* + root**.
+
+## E3 — Deduction operator (loops, multi-pass, thresholds)
+
+**Status.** 138/138 complete with `L_eval ∈ {1,2,4,8,16,32}` (64/128 dropped
+after reliable CUDA failures on B200). Artifacts:
+`deduction_operator/results/summary.csv`, `o3_table.csv`, `o3_per_pass.csv`.
+
+### O1: Loop scaling and transfer
+
+**Baseline L_eval sweep (mean over 2 seeds).**
+
+| L_eval | solve | calls/solve | unsound |
+|---:|---:|---:|---:|
+| 1 | 0% | — | 0.20% |
+| 2 | 2.5% | 2571 | 0.37% |
+| 4 | 40.3% | 221 | 0.72% |
+| 8 | 82.8% | 55 | 0.74% |
+| 16 | 99.5% | 11.2 | 0.82% |
+| 32 | 99.8% | 5.3 | 1.06% |
+
+**Transfer.** Deep-supervised `d1_L*` checkpoints transfer **upward** in
+`L_eval` once `L_train ≥ 4` (near-ceiling on/above the diagonal). Evaluating
+far below train depth collapses. `L_train=1` stays near floor off-native.
+`d2_final_only` still reaches 95.8% at native L=16 and 100% at L=32, but is
+much weaker than deep-supervised transfer at mid depths (e.g. L=8: 41% vs
+76–100%).
+
+**Interpretation.** Recurrence saturates by L=16 on the baseline; L=32 mainly
+buys cheaper search. Deep supervision makes intermediate readouts transferable
+upward; final-only supervision does not match that transfer band.
+
+### O3: Multi-pass deduction before branching
+
+| operating point | solve | calls/solve | avg resets | unsound |
+|---|---:|---:|---:|---:|
+| baseline (1 pass) | 99.5% | 11.2 | 662 | 0.82% |
+| 2 passes | 100% | 13.0 | 388 | 1.30% |
+| 4 passes | 100% | 21.8 | 307 | 1.95% |
+| fixpoint (cap 16) | 99.0% | 57.9 | 172 | 3.46% |
+| 4 passes, no aug | 99.5% | 30.4 | 424 | 1.54% |
+
+Per-pass unsound stays ~0.6–0.7% on pass 0, then jumps to ~14–21% on later
+passes. Extra passes buy fewer resets at the cost of compute and compounding
+unsound eliminations.
+
+### O4: Threshold sensitivity
+
+On baseline, `θ_elim=0.10` remains best (99.8% solve, 10.7 calls/solve).
+Tighter thresholds waste search; looser ones raise unsound and eventually
+wrong answers (`θ=0.50`: 77% solve, 14.5 wrong). `θ_CLS=0.50` is too
+aggressive (early abort, ~43% prefix); `≥0.55` restores ~99% solve as recall
+falls. The `d4_sym` elimination sweep is not interpretable under this
+protocol (~20–29% solve with early abort on every cell).
 
 ## E4 — Snowflake out-of-distribution order transfer
 

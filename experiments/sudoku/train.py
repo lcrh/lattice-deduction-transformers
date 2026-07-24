@@ -102,6 +102,11 @@ class TrainConfig:
     no_timestamp: bool = False
     overwrite: bool = False
 
+    # Optional pool strategy. None => legacy discard+backfill on
+    # true-positive conflict.
+    _pool_strategy: object | None = field(default=None, repr=False, compare=False,
+                                          metadata={"public": False})
+
     model: LoopedTransformerConfig = field(default_factory=LoopedTransformerConfig)
     data: SudokuExtremeConfig = field(default_factory=SudokuExtremeConfig)
 
@@ -232,7 +237,7 @@ def train(cfg: TrainConfig):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     out_dir = Path(cfg.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     if cfg.no_timestamp:
-        # Deterministic path used by the followup launchers so downstream
+        # Deterministic path used by launchers so downstream
         # experiments can find checkpoints at a fixed location.
         ckpt_path = out_dir / f"{cfg.name}.pt"
         if ckpt_path.exists() and not cfg.overwrite:
@@ -246,7 +251,7 @@ def train(cfg: TrainConfig):
     # In-train mini-solve curve, one JSON object per eval point, written
     # incrementally next to the checkpoint. Truncated fresh at train start so
     # a killed run still leaves partial (but valid) curve data. Only emitted
-    # for followup runs (deterministic `no_timestamp` path, where collect.py
+    # for deterministic `no_timestamp` runs (where collect.py
     # reads it) — plain benchmark runs keep their original side-effect-free
     # output. `None` disables the incremental writes below.
     if cfg.no_timestamp and cfg.eval_every > 0:
@@ -336,6 +341,10 @@ def train(cfg: TrainConfig):
     # cell is multi-alive on all GT bits). α-of-surviving = OR over K.
     pool_last_alpha = pool_solutions.bool().any(dim=1).float()  # [P, S, C]
     pool_age = torch.zeros(pool_size, dtype=torch.long, device=device)
+    pool_strategy = getattr(cfg, "_pool_strategy", None)
+    _S, _C = pool_state.shape[1], pool_state.shape[2]
+    pool_handle = (pool_strategy.attach(pool_size, _S, _C, device)
+                   if pool_strategy is not None else None)
     print(f"Pool size: {pool_size}  (= bs={cfg.batch_size})  "
           f"augment={cfg.step.augment}", flush=True)
 
@@ -436,7 +445,18 @@ def train(cfg: TrainConfig):
         new_age = age + 1
         age_exceeded = new_age > cfg.max_age
         true_positive_conflict = detected_conflict & gt_conflict_post
-        discard = solved | true_positive_conflict | age_exceeded
+        vd = cfg.step.vocab_dim if cfg.step.vocab_dim is not None else new_state.shape[-1]
+        if pool_strategy is None:
+            discard = solved | true_positive_conflict | age_exceeded
+        else:
+            new_state, _restored, discard = pool_strategy.after_step(
+                pool=pool_handle, sample_idx=sample_idx,
+                state=state, new_state=new_state,
+                detected_conflict=detected_conflict,
+                true_positive_conflict=true_positive_conflict,
+                solved=solved, info=info, vd=vd,
+                age_exceeded=age_exceeded,
+            )
 
         n_solved_total += int(solved.sum().item())
         n_tp_conflict_total += int(true_positive_conflict.sum().item())
@@ -465,6 +485,11 @@ def train(cfg: TrainConfig):
         else:
             new_orig_x = orig_x
             new_solutions = solutions
+
+        if pool_strategy is not None:
+            pool_strategy.on_backfill(
+                pool=pool_handle, sample_idx=sample_idx, discard=discard,
+            )
 
         # Write the sampled batch's evolution back into the pool at sample_idx.
         pool_state[sample_idx] = new_state
@@ -602,6 +627,10 @@ def train(cfg: TrainConfig):
                 f"pool_sat={sat_frac:.2f}",
                 flush=True,
             )
+            if pool_strategy is not None:
+                extra = pool_strategy.log_extra(pool=pool_handle)
+                if extra:
+                    print(f"    [{extra}]", flush=True)
             if cls_msg or cls_hi_msg:
                 print(
                     f"    {cls_msg}  {cls_hi_msg}",

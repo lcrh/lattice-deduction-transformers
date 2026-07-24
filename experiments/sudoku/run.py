@@ -8,8 +8,6 @@ Usage:
 import dataclasses
 import json
 import time
-from dataclasses import asdict
-
 import modal
 import torch
 from torch import nn
@@ -90,6 +88,7 @@ from lattice_diffusion.training.utils.checkpoint import load_checkpoint
 
 from experiments.sudoku.dpll import StepConfig
 from experiments.sudoku.ema import swap_in_ema_if_present
+from experiments.sudoku.hooks import public_asdict
 from experiments.sudoku.solve import SolveConfig, solve
 from experiments.sudoku.train import TrainConfig, train
 
@@ -199,7 +198,7 @@ def run(
         pre_norm=pre_norm,
     )
 
-    # Checkpoint path routing. When `ckpt_name` is set, a followup launcher
+    # Checkpoint path routing. When `ckpt_name` is set, a launcher
     # requests a deterministic (timestamp-free) path at
     # `{CHECKPOINT_MOUNT}/{ckpt_subdir}/{ckpt_name}.pt` (e.g.
     # /checkpoints/followups/e1/<config>_seed<N>.pt). When empty, everything
@@ -371,6 +370,7 @@ def run(
             "wrong": bool(res.wrong[i].item()),
             "timeout": bool(res.timeouts[i].item()),
             "round_solved": int(res.round_solved[i].item()),
+            "n_resets": int(res.n_resets[i].item()),
             "puzzle_calls": int(res.puzzle_calls[i].item()),
         }
 
@@ -387,11 +387,23 @@ def run(
         print(f"  [prefix] gap-free prefix length n={n} "
               f"(aborted={res.aborted}, resumed={bool(already_done)}, "
               f"outcomes={len(outcomes)}/{P_total})", flush=True)
-    avg_rounds_solved = float(
-        res.round_solved[res.solved].float().mean().item()
-        if int(res.solved.sum().item()) > 0 else 0.0
+    # Prefix-scoped means so abort/resume reporting matches the clean sample.
+    prefix_correct_rounds = [
+        int(outcomes[i]["round_solved"]) for i in prefix_idxs
+        if outcomes[i]["correct"] and int(outcomes[i]["round_solved"]) >= 0
+    ]
+    avg_rounds_solved = (
+        float(sum(prefix_correct_rounds) / len(prefix_correct_rounds))
+        if prefix_correct_rounds else 0.0
     )
-    avg_resets = float(res.n_resets.float().mean().item())
+    avg_resets = (
+        float(sum(int(outcomes[i].get("n_resets", 0)) for i in prefix_idxs) / n)
+        if n > 0 else 0.0
+    )
+    avg_puzzle_calls = (
+        float(sum(int(outcomes[i]["puzzle_calls"]) for i in prefix_idxs) / n)
+        if n > 0 else -1.0
+    )
 
     # Diagnostics
     den = max(res.diag_total_deduced, 1)
@@ -436,7 +448,8 @@ def run(
         "model_calls_total": res.model_calls,
         "avg_rounds_solved": avg_rounds_solved,
         "avg_resets": avg_resets,
-        "step_cfg": asdict(step_cfg),
+        "avg_puzzle_calls": avg_puzzle_calls,
+        "step_cfg": public_asdict(step_cfg),
         "max_rounds": eval_max_rounds,
         "train_wallclock": train_wallclock,
         "diag": {
@@ -465,7 +478,7 @@ def run(
             "n_eval_puzzles": n,
             "n_chains": res.n_chains,
             "max_rounds": eval_max_rounds,
-            "step_cfg": asdict(step_cfg),
+            "step_cfg": public_asdict(step_cfg),
             "run_args": {name: _arg_values[name] for name, _ in _RUN_PARAMS},
             "train_wallclock": train_wallclock,
             "summary": {
@@ -473,6 +486,7 @@ def run(
                 "model_calls_total": res.model_calls,
                 "avg_rounds_solved": avg_rounds_solved,
                 "avg_resets": avg_resets,
+                "avg_puzzle_calls": avg_puzzle_calls,
                 "unsound_rate": unsound_rate,
                 "conflict_p": cls_p, "conflict_r": cls_r,
             },
@@ -500,7 +514,7 @@ def run(
                 "wrong": is_wrong,
                 "timeout": is_timeout,
                 "round_solved": rs,
-                "n_resets": int(res.n_resets[i].item()),
+                "n_resets": int(o.get("n_resets", 0)),
                 "n_givens": int(n_givens_per_puzzle[i]),
                 "puzzle_calls": int(o["puzzle_calls"]),
                 "forwards_unbatched": forwards_unbatched,

@@ -25,7 +25,6 @@ The benchmark code these experiments build on lives in
 | E5 | [`llm_baseline/`](llm_baseline/) | Does a directly fine-tuned Qwen3.5-0.8B close the gap, or is the architecture + lattice doing the work? | Sudoku-Extreme | one B200 run plus pass@32 eval |
 | E6 | [`latent_carry/`](latent_carry/) | Does carrying a TRM-style latent across solve steps help, or is the lattice a sufficient state? | Sudoku-Extreme | ~15 runs ≈ 2 B200-h |
 | E7 | [`maze_soundness/`](maze_soundness/) | Why does Maze-Hard emit valid-but-suboptimal paths instead of abstaining, and does a verification step restore soundness? | Maze-Hard | mostly eval/analysis |
-| E8 | [`cost_accounting/`](cost_accounting/) | Normalized training-cost comparison (GPU-hours / FLOPs) + offline α-operator cost | all | bookkeeping + small benchmarks |
 
 ## Priority & ordering
 
@@ -44,26 +43,23 @@ contention):
 
 **Tier 2 — cheap, start as Tier 1 capacity frees up:**
 
-3. **E8 `cost_accounting/`** — mostly bookkeeping on top of `repro/`
-   measurements; fully independent; delivers the normalized cost table
-   early.
-4. **E2 `search_process/`** phase 1 — the eval-only policy scans run on
+3. **E2 `search_process/`** phase 1 — the eval-only policy scans run on
    existing benchmark checkpoints today; only the matched-training phase
    waits on S1 results.
-5. **E3 `deduction_operator/`** — eval-only throughout. O1-scaling, O3
+4. **E3 `deduction_operator/`** — eval-only throughout. O1-scaling, O3
    fixpoint, and O4 thresholds run on the baseline checkpoint immediately;
    the transfer matrix and `d4_sym`/`d2_final_only` rows wait on E1.
 
 **Tier 3 — independent but each needs its own new machinery:**
 
-6. **E5 `llm_baseline/`** — separate SFT/eval stack; no dependency on the
+5. **E5 `llm_baseline/`** — separate SFT/eval stack; no dependency on the
    LDT runs, schedule opportunistically.
-7. **E7 `maze_soundness/`** — forensics + verifier eval first; its
+6. **E7 `maze_soundness/`** — forensics + verifier eval first; its
    training-side part is conditional on what the forensics show.
 
 **Tier 4 — stretch:**
 
-8. **E6 `latent_carry/`** — the most invasive change to shared model/
+7. **E6 `latent_carry/`** — the most invasive change to shared model/
    trainer/solver code. Start only once E1–E3 have stabilized that code,
    so the carry plumbing doesn't churn under active ablation runs.
 

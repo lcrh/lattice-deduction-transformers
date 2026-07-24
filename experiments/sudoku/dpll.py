@@ -35,7 +35,7 @@ Augmentation (`cfg.augment`):
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -78,6 +78,11 @@ class StepConfig:
     # `augment=False`.
     permute_digits: bool = True
 
+    # Optional step implementation (callable). When set, `dpll_step`
+    # delegates entirely to it. Not serialized into eval JSON.
+    _extension: object | None = field(default=None, repr=False, compare=False,
+                                      metadata={"public": False})
+
 
 # Cache of per-(n, device) cell permutations so we don't rebuild them on
 # every dpll_step call. Keyed by (n, device.type, device.index).
@@ -102,6 +107,7 @@ def dpll_step(
     orig_y: torch.Tensor | None = None,   # [B, S, C] one-hot GT; train-only; CANONICAL
     in_puzzle_mask: torch.Tensor | None = None,   # [B, S] bool, CANONICAL — cells active in this puzzle
     want_stats: bool = True,
+    decide_rank: torch.Tensor | None = None,
 ):
     """One unified DPLL-style step (unit propagation + branching +
     conflict detection). Returns (new_state, conflict, solved, out, info).
@@ -126,6 +132,12 @@ def dpll_step(
     diagnostics on every call (e.g. `solve()` per chain-round, training steps
     that aren't on `log_every`).
     """
+    if getattr(cfg, "_extension", None) is not None:
+        return cfg._extension(
+            model, state, given_mask, cfg,
+            orig_y=orig_y, in_puzzle_mask=in_puzzle_mask,
+            want_stats=want_stats, decide_rank=decide_rank,
+        )
     B, S, C = state.shape
     device = state.device
     vd = cfg.vocab_dim if cfg.vocab_dim is not None else C
@@ -264,11 +276,14 @@ def dpll_step(
             "n_conflict_cls": int(cls_fires.sum().item()),
             "n_solved": int(solved.sum().item()),
             "deduce_mask": deduce_mask,
+            "n_passes": 1,
+            "per_pass_deduce_masks": [],
         }
     else:
         # Skip the 6 .item() calls entirely. `deduce_mask` is a tensor and
         # free to include; `solve()` reads it for soundness diagnostics.
-        info = {"deduce_mask": deduce_mask}
+        # `n_passes` is always 1 on the legacy path (honest forward accounting).
+        info = {"deduce_mask": deduce_mask, "n_passes": 1, "per_pass_deduce_masks": []}
     # Always expose aug params and aug-frame inputs alongside info — the
     # trainer's grad forward typically uses `aug_forward()` directly to
     # get its own aug, but exposing the no-grad aug here keeps the

@@ -34,7 +34,7 @@ The toggle lives at `cfg.step.augment` (StepConfig.augment).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -106,6 +106,10 @@ class SolveConfig:
     # so existing eval pipelines are unchanged.
     log_per_round_fill: bool = False
 
+    # Optional search strategy. None => legacy root-reset on conflict.
+    _search: object | None = field(default=None, repr=False, compare=False,
+                                   metadata={"public": False})
+
     def __post_init__(self):
         if self.step is None:
             self.step = StepConfig()
@@ -161,6 +165,14 @@ class SolveResult:
                                  # unbiased prefix, not a fast-puzzle subsample.
     n_evaluated: int = 0         # # puzzles with a real outcome this run
                                  # (excludes already_done and never-filled).
+    # Optional search-strategy diagnostics (populated when cfg._search is set).
+    per_pass_deduced_total: list[int] = field(default_factory=list)
+    per_pass_unsound_total: list[int] = field(default_factory=list)
+    backtrack_policy: str = "root"
+    conflict_depths: list[int] = field(default_factory=list)
+    backtrack_targets: list[int] = field(default_factory=list)
+    n_negations: int = 0
+    n_unsound_negations: int = 0
 
 
 def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
@@ -284,6 +296,10 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
     slot_calls_start = torch.zeros(M, dtype=torch.long, device=device)
     puzzle_calls_out = torch.full((P,), -1, dtype=torch.long, device=device)
 
+    search = getattr(cfg, "_search", None)
+    snap = search.attach(B, S, C, device) if search is not None else None
+    decide_rank = search.decide_rank(B, K, device) if search is not None else None
+
     # Diagnostic accumulators (counted only over active chain-rows).
     diag_total_deduced = 0
     diag_total_unsound_deductions = 0
@@ -329,6 +345,8 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         if in_puzzle_mask_b is not None:
             in_puzzle_mask_b[rows] = in_puzzle_mask[p].unsqueeze(0).expand(K, -1)
         chain_done[rows] = False
+        if search is not None:
+            search.on_fill(rows, snap=snap)
         if log_fill:
             # Reset this slot's per-round buffers — we re-use buffers across
             # puzzle generations and indexing is by slot_round which restarts.
@@ -365,6 +383,7 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                 "wrong": bool(wrong_out[p].item()),
                 "timeout": bool((~solved_out[p]).item()),
                 "round_solved": int(round_solved_out[p].item()),
+                "n_resets": int(n_resets_out[p].item()),
                 "puzzle_calls": int(puzzle_calls_out[p].item()),
             })
 
@@ -383,8 +402,9 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         new_state, conflict, just_solved_chain, _, info = dpll_step(
             model, state, given_mask_b, cfg.step,
             in_puzzle_mask=in_puzzle_mask_b, want_stats=False,
+            decide_rank=decide_rank,
         )
-        total_calls += 1
+        total_calls += int(info.get("n_passes", 1))
 
         # ----- Diagnostics on this round (active rows only) -----
         active_rows = ~chain_done                                              # [B]
@@ -428,6 +448,11 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
             diag_conflict_tp += int(tp); diag_conflict_fp += int(fp)
             diag_conflict_fn += int(fn); diag_conflict_tn += int(tn)
             diag_active_chain_rounds += int(active_rows.sum().item())
+            if search is not None:
+                search.accumulate_step_diagnostics(
+                    info=info, active_rows=active_rows, state=state,
+                    gt_one_hot=gt_one_hot, acc={},
+                )
 
         # ----- Per-round trajectory measurements (active rows only) -----
         # Computed pre-freeze so `new_state` here is post-decide for all
@@ -469,6 +494,13 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                 decision_fills_buf[idx_b, idx_r] = row_decision_fills[active]
                 deduce_bits_buf[idx_b, idx_r] = row_deduce_bits[active]
                 decision_bits_buf[idx_b, idx_r] = row_decision_bits[active]
+
+        if search is not None:
+            search.after_step(
+                snap=snap, state=state, new_state=new_state,
+                conflict=conflict, just_solved=just_solved_chain,
+                chain_done=chain_done, info=info, vd=vd,
+            )
 
         # Freeze wrong-singleton-frozen and empty-slot rows: don't let their
         # state mutate.
@@ -547,21 +579,32 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                     _record_attempts(slot_solved.nonzero(as_tuple=True)[0])
                     chain_done[lo:hi] = chain_done[lo:hi] | slot_solved
 
-            # Reset conflict chains in this slot to its puzzle's original.
+            # Reset conflict chains in this slot (legacy root, or strategy).
             still_conflict = slot_conflict & ~chain_done[lo:hi]
             if still_conflict.any():
                 local_reset = still_conflict.nonzero(as_tuple=True)[0]
                 idx = local_reset + lo
-                new_state[idx] = original[idx]
                 slot_resets[slot] += int(still_conflict.sum().item())
-                if seq:
-                    _record_attempts(local_reset)
-                    n_new = int(local_reset.numel())
-                    chain_attempt_idx[idx] = (
-                        slot_next_attempt_idx[slot] + torch.arange(n_new, device=device)
+                if search is None:
+                    new_state[idx] = original[idx]
+                    root_reset_local = local_reset
+                else:
+                    root_reset_local = search.resolve_conflicts(
+                        snap=snap, idx=idx, local_reset=local_reset,
+                        new_state=new_state, original=original,
+                        slot_gt_idx=slot_gt_idx[slot], vd=vd, device=device,
                     )
-                    chain_attempt_start[idx] = slot_round[slot] + 1
-                    slot_next_attempt_idx[slot] += n_new
+                if seq:
+                    root_idx = root_reset_local + lo
+                    _record_attempts(root_reset_local)
+                    n_new = int(root_reset_local.numel())
+                    if n_new > 0:
+                        chain_attempt_idx[root_idx] = (
+                            slot_next_attempt_idx[slot]
+                            + torch.arange(n_new, device=device)
+                        )
+                        chain_attempt_start[root_idx] = slot_round[slot] + 1
+                        slot_next_attempt_idx[slot] += n_new
 
             slot_round[slot] += 1
 
@@ -652,6 +695,7 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
     # this run's evaluated set). This keeps `~solved` from mislabeling them.
     filled_this_run = puzzle_calls_out >= 0
     timeouts = (~solved_out) & filled_this_run
+    extras = search.result_extras() if search is not None else {}
     return SolveResult(
         solved=solved_out.clone(),
         correct=correct_out.clone(),
@@ -681,4 +725,5 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         aborted=aborted,
         dispatched_hi=dispatched_hi,
         n_evaluated=n_evaluated,
+        **extras,
     )

@@ -8,6 +8,8 @@ image = (
     .uv_sync()
     .add_local_python_source("lattice_diffusion")
     .add_local_python_source("experiments")
+    # E2/E3 Modal entrypoints import strategy hooks from this package.
+    .add_local_python_source("followups")
 )
 
 # For caching the sudoku-extreme HF download across runs
