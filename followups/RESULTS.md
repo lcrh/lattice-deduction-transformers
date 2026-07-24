@@ -1,11 +1,11 @@
 # Follow-up experiment results
 
-Snapshot: 2026-07-24. E1 has 81/81 evaluation summaries. E2 has TRAIN + S1 +
-S3 complete (62/62); S2/S4 are the matched-policy follow-through. E3 has the
-full loop/threshold/deduction grid at `L_eval ≤ 32` (138/138). E4 has the
-original transfer runs plus the sparse-support grid (H × {1K,4K} × {abs,RoPE},
-1 seed per cell; some 4K-abs cells also have 3 seeds) and 8K absolute probes at
-H∈{12,25,50}. E5 has the first Qwen3.5-0.8B seed-0 epoch sweep.
+Snapshot: 2026-07-24. E1 has 81/81 evaluation summaries. E2 is complete
+(88/88: TRAIN + S1–S4). E3 has the full loop/threshold/deduction grid at
+`L_eval ≤ 32` (138/138). E4 has the original transfer runs plus the
+sparse-support grid (H × {1K,4K} × {abs,RoPE}, 1 seed per cell; some 4K-abs
+cells also have 3 seeds) and 8K absolute probes at H∈{12,25,50}. E5 has the
+first Qwen3.5-0.8B seed-0 epoch sweep.
 
 Pass rates below are means of the per-seed percentages. Most evaluations use
 1,000 puzzles per seed. Low-performing reruns can stop after 50 timeouts and
@@ -226,10 +226,9 @@ deduction operator under the tested operating points.
 
 ## E2 — Search process (decision + backtracking)
 
-**Status.** TRAIN + S1 + S3 complete (62/62). S2 matched-vs-mismatched and S4
-budget interaction are the next tranche, with `P* = uniform + argmax` from S1.
-Artifacts: `search_process/results/summary.csv`. Eval uses 200 puzzles / seed
-(or a shorter gap-free prefix after the 50-timeout abort).
+**Status.** Complete (88/88). `P* = uniform + argmax` from S1. Artifacts:
+`search_process/results/summary.csv`. Eval uses 200 puzzles / seed (or a
+shorter gap-free prefix after the 50-timeout abort).
 
 ### S1: Decision-policy scan
 
@@ -279,6 +278,52 @@ backtracks do not buy enough accuracy to justify much higher unsound
 deduction. On the weak model, geometric / uniform_depth raise solve rate vs
 root but with ~10× higher unsound. `last` is harmful on both. S4 therefore
 crosses `{P0, P*}` with `{root, geometric}` over the 1K/2K budget axis.
+
+### S2: Matched vs mismatched 2×2
+
+**Experiment.** Train under P0 (`base_1k`, uniform/softmax) or P*
+(`train_pstar_1k`, uniform/argmax), then eval under each policy. Tests whether
+policy gains require matched training-state distributions.
+
+**Results (mean over 2 seeds).**
+
+| train → eval | solve | calls/solve | seq forwards p50 | unsound |
+|---|---:|---:|---:|---:|
+| P0 → P0 | 80.2% | 59.1 | 10k | 1.7% |
+| P0 → P* | 98.8% | 10.9 | 1.2k | 4.2% |
+| P* → P0 | 88.8% | 41.7 | 6.7k | 2.4% |
+| P* → P* | 99.8% | 10.9 | 1.1k | 4.4% |
+
+`train_pstar_1k`'s own train-time eval is 99.2% (9.4 calls/solve).
+
+**Interpretation.** Almost all of the S1 gain is an **eval-policy** effect:
+bolting P* onto a P0-trained 1K model jumps 80% → 99% and cuts cost ~5×.
+Matched P* training adds only a small further lift on the matched cell
+(98.8% → 99.8%) and helps somewhat when evaluating under P0 (80% → 89%).
+Distribution matching is real but secondary; the practical recommendation is
+to use P* at inference even on P0-trained checkpoints.
+
+### S4: Policy gain vs model strength
+
+**Experiment.** `{P0, P*} × {root, geometric}` on the 1K (`base_1k`) and 2K
+(E1 `baseline`) checkpoints.
+
+**Results (mean over 2 seeds).**
+
+| combo | 1K solve | 1K calls/solve | 1K unsound | 2K solve | 2K calls/solve | 2K unsound |
+|---|---:|---:|---:|---:|---:|---:|
+| P0 / root | 79.5% | 62.8 | 1.7% | 99.8% | 10.5 | 0.9% |
+| P* / root | 99.5% | 10.7 | 4.3% | 100% | 3.9 | 1.7% |
+| P0 / geometric | 92.5% | 53.1 | 20.1% | 99.2% | 26.8 | 14.0% |
+| P* / geometric | 95.5% | 41.0 | 21.1% | 99.5% | 25.5 | 16.4% |
+
+**Interpretation.** On the weak 1K model, switching P0→P* under root recovers
+nearly all of the 2K solve rate (79.5% → 99.5%) and cuts cost ~6× —
+policy is a larger lever than an extra 1K training steps under P0. On the
+strong 2K model accuracy is saturated; P* mainly buys cost (10.5 → 3.9
+calls/solve). Geometric helps P0 on 1K vs root, but **hurts** once P* is in
+play (99.5% → 95.5% on 1K) and everywhere raises unsound ~10×. Best operating
+point across budgets: **P* + root**.
 
 ## E3 — Deduction operator (loops, multi-pass, thresholds)
 
