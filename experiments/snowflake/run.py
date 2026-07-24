@@ -47,6 +47,7 @@ _RUN_PARAMS: tuple[tuple[str, object], ...] = (
     ("eval_dropout_p",           0.05),
     ("n_train_puzzles",          None),
     ("train_orders",             ""),
+    ("train_order_counts",       ""),
     ("eval_orders",              ""),
     ("translate_aug",            False),
     ("use_rope",                 False),
@@ -133,6 +134,7 @@ def run(
     eval_dropout_p: float = 0.05,
     n_train_puzzles: int | None = None,
     train_orders: str = "",
+    train_order_counts: str = "",
     eval_orders: str = "",
     translate_aug: bool = False,
     use_rope: bool = False,
@@ -156,7 +158,33 @@ def run(
             return None
         return [int(tok) for tok in s.split(",") if tok.strip() != ""]
 
+    def _parse_order_counts(s: str) -> dict[int, int] | None:
+        """Comma-separated order:count pairs, or None when unset."""
+        s = (s or "").strip()
+        if not s:
+            return None
+        counts: dict[int, int] = {}
+        for pair in s.split(","):
+            order_text, sep, count_text = pair.partition(":")
+            if not sep:
+                raise ValueError(
+                    f"invalid --train-order-counts item {pair!r}; "
+                    "expected ORDER:COUNT"
+                )
+            order, count = int(order_text), int(count_text)
+            if order in counts:
+                raise ValueError(
+                    f"duplicate order {order} in --train-order-counts"
+                )
+            if count <= 0:
+                raise ValueError(
+                    f"count for order {order} must be positive, got {count}"
+                )
+            counts[order] = count
+        return counts
+
     train_orders_list = _parse_orders(train_orders)
+    train_order_counts_dict = _parse_order_counts(train_order_counts)
     eval_orders_list = _parse_orders(eval_orders)
 
     ts = time.strftime("%Y%m%d_%H%M%S")
@@ -245,6 +273,7 @@ def run(
             batch_size=batch_size, seed=42,
             n_puzzles=n_train_puzzles,
             orders=train_orders_list,          # E4: restrict train to these orders
+            order_counts=train_order_counts_dict,  # E4: exact soft-shift mixture
             translate_aug=translate_aug,       # E4: positional-confound mitigation (train only)
         ),
         eval_data=SnowflakeConfig(
@@ -620,6 +649,7 @@ def entrypoint(
     eval_dropout_p: float = 0.05,
     n_train_puzzles: int | None = None,
     train_orders: str = "",
+    train_order_counts: str = "",
     eval_orders: str = "",
     translate_aug: bool = False,
     use_rope: bool = False,
@@ -654,6 +684,7 @@ def entrypoint(
         eval_dropout_p=eval_dropout_p,
         n_train_puzzles=n_train_puzzles,
         train_orders=train_orders,
+        train_order_counts=train_order_counts,
         eval_orders=eval_orders,
         translate_aug=translate_aug,
         use_rope=use_rope,

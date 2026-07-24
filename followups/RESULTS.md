@@ -1,6 +1,6 @@
 # Follow-up experiment results
 
-Snapshot: 2026-07-23. E1 has 81/81 evaluation summaries; E4 has 12/12.
+Snapshot: 2026-07-23. E1 has 81/81 evaluation summaries; E4 has 15/15.
 All planned training runs have landed, plus nine paired same-weight D4
 eval-only scans.
 
@@ -223,12 +223,15 @@ deduction operator under the tested operating points.
 
 ## E4 — Snowflake out-of-distribution order transfer
 
-### Does LDT transfer learned constraint semantics to unseen puzzle sizes?
+### Does LDT transfer learned constraint semantics across order shifts?
 
 **Experiment.** Train Snowflake models on orders 4–5 or 4–6 and evaluate on
 strictly larger orders. Translation augmentation addresses the absolute
 position confound; a RoPE condition provides a relative-position control.
 Models trained on all orders 4–8 form the in-distribution sanity control.
+A support-preserving distribution-shift condition (`e4_shift95`) also trains
+on all orders, but allocates 475/500 training puzzles to orders 4–5 and only
+25/500 to orders 6–8 (exact counts: 238, 237, 9, 8, 8).
 
 **Results.**
 
@@ -241,6 +244,10 @@ Models trained on all orders 4–8 form the in-distribution sanity control.
   answers, and 600 timeouts.
 - Trained on orders 4–5 with RoPE and evaluated on 6–8: 0/600 correct, zero
   wrong answers, and 600 timeouts.
+- Trained on the 95% lower-order mixture and evaluated evenly across orders
+  4–8: **587/600 correct (97.8%)**, 13 wrong answers, and zero timeouts
+  (1.02 calls/solve). Per-order pass rates are 100%, 100%, 96.6%, 96.7%, and
+  96.8% for orders 4 through 8, respectively.
 
 **Interpretation.** Local same-weight probing on `e4_leq5_seed0` /
 `e4_leq6_seed0` / `e4_all_seed0` (MPS, 2026-07-23) shows the failure is
@@ -253,4 +260,14 @@ unsound-elimination puzzles ≈ 83–90%). The in-distribution control stays cle
 ~17–21%, still with zero wrong answers and mostly timeouts driven by empty-cell
 resets. Making θ_elim more conservative down to 10⁻⁴ also does not help: on
 OOD, ground-truth digit scores sit near 10⁻⁸–10⁻¹⁰, so they remain eliminated.
-The weights do not transfer a sound deduction operator to larger orders.
+The weights do not transfer a sound deduction operator to completely unseen
+larger orders.
+
+The soft-shift result sharply qualifies that failure. Giving orders 6–8 only
+25 total training examples raises higher-order performance from 0% under
+strict omission to 96.7% (380/393) under sparse support. Thus the catastrophic
+result is mainly an **out-of-support extrapolation failure**, not fragility to
+a large change in order frequencies. Sparse exposure is enough to recover
+nearly all accuracy, although the 13 wrong answers (versus zero for the
+balanced control) show a small residual soundness cost under the 95/5
+distribution shift.

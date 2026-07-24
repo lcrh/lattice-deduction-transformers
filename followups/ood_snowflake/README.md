@@ -17,10 +17,16 @@ orders 4–8; larger orders just need more CVC5 generation.
 | `e4_leq5` | {4, 5} | {6, 7, 8} (+ 9, 10 stretch) |
 | `e4_leq6` | {4, 5, 6} | {7, 8} (+ 9, 10) |
 | `e4_all` (control) | {4–8} | {4–8} held-out split (the standard setting, re-run) |
+| `e4_shift95` | {4–8}, 95% of examples from {4, 5} | {4–8} balanced held-out split |
 
 - Match `--n-train-puzzles 500` and hyperparameters to the standard
   Snowflake config (`experiments/snowflake/run.py` defaults); only the
   order filter varies. 3 seeds.
+- The 500-puzzle limit is total, not per order. `e4_shift95` uses the exact
+  mixture `{4: 238, 5: 237, 6: 9, 7: 8, 8: 8}`: every order remains in the
+  training support, but 475/500 examples come from orders 4–5. Comparing its
+  balanced per-order evaluation against `e4_all` separates a severe
+  distribution shift from the strict support shift in `e4_leq5`.
 - **Positional confound — must be fixed before any transfer run.**
   Snowflake placement is deterministic and hub-centered
   (`cell_to_grid_idx` in `experiments/snowflake/data.py`), and snowflake

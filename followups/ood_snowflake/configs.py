@@ -1,18 +1,16 @@
 """E4 (ood_snowflake) run matrix — the single source of truth.
 
 Order-transfer OOD generalization on Snowflake Sudoku: train on small orders,
-evaluate on strictly larger, never-seen orders. The README's design table
-(e4_leq5 / e4_leq6 / e4_all + an optional RoPE control) is encoded here as
-data: config-name -> {flag overrides} + n_seeds.
+evaluate on strictly larger, never-seen orders. A soft distribution-shift
+condition retains sparse training support on every order. The README's design
+table is encoded here as data: config-name -> {flag overrides} + n_seeds.
 
 Every config matches the standard Snowflake config
 (`experiments/snowflake/run.py` defaults) EXCEPT the order filter, the reduced
 train-set size (`--n-train-puzzles 500`), and translation augmentation
 (`--translate-aug`) — which is ON for ALL configs, including the in-distribution
-control e4_all, so the control shares the same aug regime as the transfer runs
-(README: "Run the in-distribution control e4_all under the same aug regime as
-the transfer runs"). `--steps` is left at the run.py default (4000); only the
-knobs above vary.
+control e4_all. `e4_shift95` additionally fixes the per-order composition of
+that 500-puzzle subset. `--steps` is left at the run.py default (4000).
 
 Each run is a Modal entrypoint launched with:
 
@@ -125,6 +123,19 @@ _add(
     note="Transfer from orders <=6. Test 7,8 + stretch 9,10.",
 )
 
+# --- e4_shift95: all orders, but 95% of train examples at orders 4-5 -------
+# Exact 500-example mixture: 475 lower-order and 25 higher-order puzzles.
+# This distinguishes a severe support-preserving order-distribution shift from
+# strict unseen-order extrapolation.
+_add(
+    "e4_shift95", "4,5,6,7,8", "4,5,6,7,8",
+    overrides={"train_order_counts": "4:238,5:237,6:9,7:8,8:8"},
+    n_seeds=3,
+    note="Soft order-distribution shift: all orders remain in support, but "
+         "95% (475/500) of training puzzles are orders 4-5 and only 5% "
+         "(25/500) are orders 6-8. Evaluate on the balanced held-out split.",
+)
+
 # --- e4_leq5_rope: relative-position control (OPTIONAL) --------------------
 # e4_leq5 + RoPE, to compare learned-absolute + translation-aug vs. relative
 # encodings on the same transfer split.
@@ -139,7 +150,9 @@ _add(
 
 
 # Ordered grouping for `list` output (comment headers).
-CONFIG_ORDER = ["e4_all", "e4_leq5", "e4_leq6", "e4_leq5_rope"]
+CONFIG_ORDER = [
+    "e4_all", "e4_leq5", "e4_leq6", "e4_shift95", "e4_leq5_rope",
+]
 
 
 # --------------------------------------------------------------------------
@@ -181,7 +194,9 @@ def launch_command(config_name: str, seed: int) -> str:
     parts.append(f"{_flag('train_orders')} {cfg['train_orders']}")
     parts.append(f"{_flag('eval_orders')} {cfg['eval_orders']}")
     # Remaining effective flags in a stable, readable order.
-    for name in ("n_train_puzzles", "translate_aug", "use_rope"):
+    for name in (
+        "n_train_puzzles", "train_order_counts", "translate_aug", "use_rope",
+    ):
         if name not in eff:
             continue
         val = eff[name]
