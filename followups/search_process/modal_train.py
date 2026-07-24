@@ -638,7 +638,9 @@ def entrypoint(
     overwrite: bool = False,
     skip_if_done: bool = False,
 ):
-    result = run.remote(
+    # spawn (not remote): --detach mass-launches must not block the client on
+    # the full GPU job. Artifacts land via --ckpt-name / --skip-if-done.
+    call = run.spawn(
         steps=steps, batch_size=batch_size,
         n_eval_puzzles=n_eval_puzzles, n_train_puzzles=n_train_puzzles, seed=seed,
         bce_pos_mult=bce_pos_mult, bce_neg_mult=bce_neg_mult,
@@ -681,4 +683,4 @@ def entrypoint(
         overwrite=overwrite,
         skip_if_done=skip_if_done,
     )
-    print(f"\nFinal: {result}", flush=True)
+    print(f"spawned {call.object_id}", flush=True)

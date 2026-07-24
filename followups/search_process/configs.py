@@ -184,7 +184,10 @@ _add_train(
 # below derives from these two dicts.
 # --------------------------------------------------------------------------
 P0 = {"cell_policy": "uniform", "digit_policy": "softmax"}
-PSTAR = {"cell_policy": "mrv", "digit_policy": "argmax"}
+# S1 winner on both baseline and base_1k: uniform cell + argmax digit.
+# Lowest sequential cost at ceiling accuracy; chosen over the earlier
+# MRV+argmax placeholder.
+PSTAR = {"cell_policy": "uniform", "digit_policy": "argmax"}
 
 # S2 matched-policy trainer: trains WITH P* so the pool's state distribution
 # matches the inference policy. Trained at 1K steps to pair with the base_1k
@@ -194,8 +197,8 @@ _add_train(
         "steps": 1000, "eval_every": 50,
         **PSTAR,
     }, n_seeds=2,
-    note=f"S2 matched-training: train WITH P*={PSTAR}. PLACEHOLDER P* — "
-         "re-point to the S1 winner before running. Eval both P0 and P* below.",
+    note=f"S2 matched-training: train WITH P*={PSTAR} (S1 winner). "
+         "Eval both P0 and P* below.",
 )
 
 
@@ -276,19 +279,19 @@ for base in ("baseline", "base_1k"):
 
 
 # --------------------------------------------------------------------------
-# S4 — policy gain vs model strength. 2-3 best (policy, backtrack) combos +
-# baseline policy, evaluated across the training-budget axis {1K, 2K}.
-#   1K = base_1k (E2), 2K = baseline (E1) — same 2K checkpoint family used
-# elsewhere in E2, so no extra training job.
-# Combos (PLACEHOLDER best set — re-point after S1/S3): P0/root (baseline
-# reference), P*/root, P*/last, P0/last. 2 seeds each.
+# S4 — policy gain vs model strength. Best (policy, backtrack) combos from
+# S1/S3 + P0 reference, evaluated across {1K, 2K}.
+#   1K = base_1k (E2), 2K = baseline (E1).
+# Combos: P0/root, P*/root, P*/geometric, P0/geometric.
+# geometric is the S3 accuracy winner on the weak checkpoint; last was dropped
+# after S3 (harmful on both strengths). 2 seeds each.
 # --------------------------------------------------------------------------
 S4_CKPTS = [("1k", "base_1k"), ("2k", "baseline")]
 S4_COMBOS: list[tuple[str, dict]] = [
     ("p0_root", {**P0, "backtrack": "root"}),
     ("pstar_root", {**PSTAR, "backtrack": "root"}),
-    ("pstar_last", {**PSTAR, "backtrack": "last"}),
-    ("p0_last", {**P0, "backtrack": "last"}),
+    ("pstar_geom", {**PSTAR, "backtrack": "geometric", "geometric_p": 0.5}),
+    ("p0_geom", {**P0, "backtrack": "geometric", "geometric_p": 0.5}),
 ]
 for budget, base in S4_CKPTS:
     for tag, flags in S4_COMBOS:

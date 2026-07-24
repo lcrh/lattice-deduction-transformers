@@ -65,7 +65,9 @@ E1_SUBDIR = "followups/e1"            # where the consumed input checkpoints liv
 VOLUME_NAME = _common.VOLUME_NAME
 
 # The full L_eval axis reused by every loop-scaling study (O1).
-L_EVAL_AXIS = (1, 2, 4, 8, 16, 32, 64, 128)
+# Cap at 32 — deeper unrolls (64/128) were CUDA-unstable on B200 and not
+# needed for the scaling/transfer claim.
+L_EVAL_AXIS = (1, 2, 4, 8, 16, 32)
 # The L_train axis for the transfer matrix — E1's d1_L* tied-loop checkpoints.
 L_TRAIN_AXIS = (1, 2, 4, 8, 16, 32)
 # Thresholds swept in O4.

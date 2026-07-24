@@ -42,6 +42,9 @@ def _enrich_e2(out, res, ctx):
     image=image, gpu="B200", timeout=7200,
     secrets=[hf_secret],
     volumes={DATA_MOUNT: data_volume, CHECKPOINT_MOUNT: checkpoint_volume},
+    # Cap concurrency — a full-grid spawn (~100+ B200s) produced CUDA
+    # unknown-error crashloops under fleet pressure.
+    max_containers=12,
 )
 def run(
     checkpoint: str,
@@ -162,7 +165,7 @@ def entrypoint(
     ckpt_subdir: str = "",
     skip_if_done: bool = False,
 ):
-    result = run.remote(
+    call = run.spawn(
         checkpoint=checkpoint, n_eval=n_eval,
         threshold=threshold, temp_decide=temp_decide,
         cls_threshold=cls_threshold,
@@ -181,4 +184,4 @@ def entrypoint(
         ckpt_name=ckpt_name, ckpt_subdir=ckpt_subdir,
         skip_if_done=skip_if_done,
     )
-    print(f"\nFinal: {result}", flush=True)
+    print(f"spawned {call.object_id}", flush=True)

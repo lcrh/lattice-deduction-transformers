@@ -162,7 +162,8 @@ model?
 
 Take the 2–3 best (policy, backtrack) combos + baseline and evaluate each
 across the training-budget axis: checkpoints at 1K / 2K steps (E2
-`base_1k` and the E1 `baseline`).
+`base_1k` and the E1 `baseline`). After S1/S3, the combos are
+`{P0, P*=uniform/argmax} × {root, geometric}`.
 
 **Figure S4**: x = train steps, y = sequential forwards/solve (log), one
 line per search config. Expectation: lines fan out at 1K (search matters
