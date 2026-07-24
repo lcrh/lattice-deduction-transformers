@@ -205,6 +205,13 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
     M = max(1, cfg.batch_size // K)
     B = M * K
     device = puzzle.device
+    carry_policy = cfg.step.carry_latent
+    if carry_policy not in {"off", "h", "z", "zero_z"}:
+        raise ValueError(f"unknown carry_latent policy {carry_policy!r}")
+    if carry_policy != "off" and cfg.step.augment:
+        raise ValueError("latent-carry solving requires per-step augment=False")
+    if carry_policy != "off" and getattr(cfg, "_search", None) is not None:
+        raise ValueError("latent carry does not compose with search backtracking strategies")
 
     # Eval never passes `orig_y` to dpll_step → deduction is always
     # deterministic threshold, training-only stochastic kill is off.
@@ -219,6 +226,17 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
     state = torch.zeros(B, S, C, device=device)
     original = torch.zeros(B, S, C, device=device)
     given_mask_b = torch.zeros(B, S, dtype=torch.bool, device=device)
+    base_model = getattr(model, "_orig_mod", model)
+    model_cfg = getattr(base_model, "cfg", None)
+    if carry_policy in {"h", "z"}:
+        if model_cfg is None:
+            raise ValueError("carry-enabled solve requires model.cfg")
+        carry = torch.zeros(
+            B, S, model_cfg.dim, device=device, dtype=state.dtype,
+        )
+    else:
+        # zero_z intentionally supplies no carry at every boundary.
+        carry = None
     if in_puzzle_mask is not None:
         in_puzzle_mask_b = torch.zeros(B, S, dtype=torch.bool, device=device)
     else:
@@ -342,6 +360,8 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         state[rows] = puz
         original[rows] = puz
         given_mask_b[rows] = given_mask[p].unsqueeze(0).expand(K, -1)
+        if carry is not None:
+            carry[rows] = 0
         if in_puzzle_mask_b is not None:
             in_puzzle_mask_b[rows] = in_puzzle_mask[p].unsqueeze(0).expand(K, -1)
         chain_done[rows] = False
@@ -401,9 +421,12 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         # `new_state` and `info["deduce_mask"]` come back in canonical frame.
         new_state, conflict, just_solved_chain, _, info = dpll_step(
             model, state, given_mask_b, cfg.step,
+            orig_x=original if carry_policy != "off" else None,
+            carry=carry,
             in_puzzle_mask=in_puzzle_mask_b, want_stats=False,
             decide_rank=decide_rank,
         )
+        new_carry = info.get("carry_out") if carry is not None else None
         total_calls += int(info.get("n_passes", 1))
 
         # ----- Diagnostics on this round (active rows only) -----
@@ -505,6 +528,10 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         # Freeze wrong-singleton-frozen and empty-slot rows: don't let their
         # state mutate.
         new_state = torch.where(chain_done.view(-1, 1, 1), state, new_state)
+        if new_carry is not None:
+            new_carry = torch.where(
+                chain_done.view(-1, 1, 1), carry, new_carry,
+            )
 
         evictions: list[int] = []
         for slot in range(M):
@@ -594,6 +621,8 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                         new_state=new_state, original=original,
                         slot_gt_idx=slot_gt_idx[slot], vd=vd, device=device,
                     )
+                if new_carry is not None:
+                    new_carry[idx] = 0
                 if seq:
                     root_idx = root_reset_local + lo
                     _record_attempts(root_reset_local)
@@ -675,6 +704,8 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                           flush=True)
 
         state = new_state
+        if new_carry is not None:
+            carry = new_carry
 
         # Refill evicted slots with the next queued puzzles (or mark empty).
         # When aborted, we DON'T refill — the loop then drains as in-flight

@@ -77,6 +77,10 @@ class StepConfig:
     # semantics and shuffling them would break the data. Inert when
     # `augment=False`.
     permute_digits: bool = True
+    # Continuous state carried between outer solve steps. Architecture is
+    # selected separately by LoopedTransformerConfig.carry_mode; zero_z uses
+    # the z architecture while deliberately discarding every written carry.
+    carry_latent: str = "off"  # off | h | z | zero_z
 
     # Optional step implementation (callable). When set, `dpll_step`
     # delegates entirely to it. Not serialized into eval JSON.
@@ -104,6 +108,8 @@ def dpll_step(
     given_mask: torch.Tensor,   # [B, S], bool, CANONICAL (cells pinned by puzzle givens)
     cfg: StepConfig,
     *,
+    orig_x: torch.Tensor | None = None,   # immutable puzzle, CANONICAL
+    carry: torch.Tensor | None = None,    # [B, S, dim], fixed embedding frame
     orig_y: torch.Tensor | None = None,   # [B, S, C] one-hot GT; train-only; CANONICAL
     in_puzzle_mask: torch.Tensor | None = None,   # [B, S] bool, CANONICAL — cells active in this puzzle
     want_stats: bool = True,
@@ -132,6 +138,18 @@ def dpll_step(
     diagnostics on every call (e.g. `solve()` per chain-round, training steps
     that aren't on `log_every`).
     """
+    if cfg.carry_latent not in {"off", "h", "z", "zero_z"}:
+        raise ValueError(
+            "carry_latent must be one of off|h|z|zero_z, "
+            f"got {cfg.carry_latent!r}"
+        )
+    if cfg.carry_latent != "off" and cfg.augment:
+        raise ValueError(
+            "carried latents require a fixed embedding frame; disable "
+            "per-step augmentation (dataset augmentation may remain enabled)"
+        )
+    if cfg.carry_latent != "off" and getattr(cfg, "_extension", None) is not None:
+        raise ValueError("latent carry does not compose with dpll step extensions")
     if getattr(cfg, "_extension", None) is not None:
         return cfg._extension(
             model, state, given_mask, cfg,
@@ -177,7 +195,18 @@ def dpll_step(
         orig_y_aug = orig_y
         ip_aug = in_puzzle_mask
 
-    out = model(state_aug, use_final=True)
+    if cfg.carry_latent == "off":
+        out = model(state_aug, use_final=True)
+    else:
+        if cfg.carry_latent in {"z", "zero_z"} and orig_x is None:
+            raise ValueError(f"carry_latent={cfg.carry_latent!r} requires orig_x")
+        model_carry = None if cfg.carry_latent == "zero_z" else carry
+        out = model(
+            state_aug,
+            use_final=True,
+            orig_x=orig_x,
+            carry=model_carry,
+        )
     bce_logits = out["bce"]
     sm_logits = out["softmax"]
 
@@ -294,4 +323,11 @@ def dpll_step(
     info["aug_given_mask"] = gm_aug
     info["aug_orig_y"] = orig_y_aug
     info["aug_in_puzzle_mask"] = ip_aug
+    if cfg.carry_latent != "off":
+        carry_out = out.get("carry_out")
+        if carry_out is None:
+            raise RuntimeError(
+                f"model did not return carry_out for policy {cfg.carry_latent!r}"
+            )
+        info["carry_out"] = carry_out.detach()
     return new_state, conflict, solved, out, info

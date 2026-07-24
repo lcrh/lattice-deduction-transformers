@@ -62,7 +62,13 @@ def launch_command(
     for name in ordered:
         if name in emitted or name not in eff_flags:
             continue
-        parts.append(f"{flag(name)} {eff_flags[name]}")
+        value = eff_flags[name]
+        if isinstance(value, bool):
+            # Modal exposes Python bool parameters as Click-style dual flags
+            # (`--augment / --no-augment`), not value-taking options.
+            parts.append(flag(name) if value else "--no-" + name.replace("_", "-"))
+        else:
+            parts.append(f"{flag(name)} {value}")
         emitted.add(name)
     if skip_if_done:
         parts.append("--skip-if-done")

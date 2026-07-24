@@ -42,4 +42,5 @@ packages = [
     "followups/ood_snowflake",
     "followups/deduction_operator",
     "followups/search_process",
+    "followups/latent_carry",
 ]

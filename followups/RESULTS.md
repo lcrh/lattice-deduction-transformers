@@ -5,7 +5,8 @@ Snapshot: 2026-07-24. E1 has 81/81 evaluation summaries. E2 is complete
 `L_eval ≤ 32` (138/138). E4 has the original transfer runs plus the
 sparse-support grid (H × {1K,4K} × {abs,RoPE}, 1 seed per cell; some 4K-abs
 cells also have 3 seeds) and 8K absolute probes at H∈{12,25,50}. E5 has the
-first Qwen3.5-0.8B seed-0 epoch sweep.
+first Qwen3.5-0.8B seed-0 epoch sweep. E6 is complete (12/12: 4 arms × 3
+seeds).
 
 Pass rates below are means of the per-seed percentages. Most evaluations use
 1,000 puzzles per seed. Low-performing reruns can stop after 50 timeouts and
@@ -559,3 +560,81 @@ Sudoku-Extreme blank pattern (~56 blanks; `.` normalized to `0`). Artifact:
 on pass@1/2/4/8/16/32. Malformed outputs improve early (344 → 6 by epoch 6)
 then worsen again (538 by epoch 16), so longer training does not unlock
 natural-difficulty Sudoku-Extreme for this model/data budget.
+
+## E6 — Carrying latents across solve steps
+
+**Status.** Complete (12/12). Artifacts: `latent_carry/results/summary.csv`,
+`latent_carry/plots/learning_curves.png`. Regime differs from E1: dataset
+digit/dihedral aug stays on, but per-step re-augmentation is off
+(`--no-augment`), so each solve chain keeps a fixed embedding frame for the
+lifetime of its pool entry. Budget is the E1 below-ceiling setting (2K steps,
+1K train / 1K eval). Carry arms that collapse early-abort after ~50 timeouts
+and report the gap-free evaluated prefix (`n < 1000`).
+
+**Experiment.** Four arms × 3 seeds. Baseline keeps the ordinary one-stream
+recurrent model and carries nothing beyond the lattice. `carry_h` carries the
+final head-feeding hidden `h` into the next solve step. `carry_z` splits the
+forward into a TRM-style answer stream `y` (heads read this; re-embedded from
+the lattice each step) and an opaque scratchpad `z` (carried; never read by
+heads). `zero_carry_z` uses that same `y`/`z` architecture but zeros `z` at
+every step boundary. Backbone applications are matched at `n_loops=16`; the
+`z` arms spend those as 8 `(z update + y refine)` cycles, so they get **8
+supervised answer readouts vs 16** on baseline/`carry_h` — a residual
+supervision-density gap, reported honestly below.
+
+**Results (mean over 3 seeds).**
+
+| arm | mean pass rate | wrong (sum) | calls/solve | avg rounds | unsound | conflict P / R |
+|---|---:|---:|---:|---:|---:|---|
+| baseline | 97.9% | 0 | 12.8 | 76 | 0.92% | 0.999 / 0.158 |
+| carry_h | 31.7%† | 0 | 311 | 123 | 0.07% | 0.771 / 0.803 |
+| carry_z | 38.8%† | 0 | 265 | 150 | 0.09% | 0.813 / 0.726 |
+| zero_carry_z | 74.9%† | 413 | 37.3 | 126 | 2.46% | 0.998 / 0.097 |
+
+†Prefix rates after early abort on ≥2/3 seeds (`carry_h` n≈79–89;
+`carry_z` n≈77–124; `zero_carry_z` seeds 0/1 aborted at n=321/602; seed 2
+finished all 1000 at 61.7% with 363 wrongs). Full per-seed rows are in
+`latent_carry/results/summary.csv`.
+
+Per-seed solve counts: baseline 977/980/979; `carry_h` 32/89, 24/80, 23/79;
+`carry_z` 20/77, 32/88, 67/124; `zero_carry_z` 247/321, 518/602, 617/1000.
+
+**Interpretation.**
+
+**Q1 — Is the lattice a sufficient outer-loop state?** Under this outer loop,
+yes for continuous carry: giving the model either a recycled activation
+(`carry_h`) or a dedicated scratchpad (`carry_z`) collapses search. Failures
+are almost all timeouts, not wrong answers — the model stops making progress
+rather than inventing bad fills. Solved puzzles also become ~20× more
+expensive. So carrying a continuous latent across LDT solve steps does **not**
+help here; the discrete lattice already appears to be a sufficient (and much
+cheaper) outer-loop state. Caveat from the plan still applies: this is a
+null for *this* hybrid (hard lattice + optional continuous carry with
+no cross-step BPTT), not an information-theoretic proof that the lattice
+captures everything.
+
+**Q2 — Recycled activation vs dedicated scratchpad?** Neither works.
+`carry_h` and `carry_z` both abort near the floor with the same timeout
+signature. Separating `y`/`z` does not rescue the carry; if anything,
+`carry_z` is in the same collapsed band as `carry_h` (with more seed
+variance). Conflict-head recall rises on both collapsed arms while precision
+falls — consistent with a model that fires conflict often because search is
+stuck, not with useful counterfactual memory from the carry.
+
+**Q3 — Carry, or just architecture?** The architecture alone is already
+harmful, and in a different way. `zero_carry_z` sits between baseline and the
+carry collapses (~75% prefix / 62% on the completed seed) but **breaks
+soundness**: hundreds of wrong answers and ~2.5% unsound deduction vs ~0
+wrongs and <1% unsound on baseline. So
+`baseline → zero_carry_z` is a clear architecture regression (TRM-style
+x-inclusion asymmetry + halved answer readouts + restructured update
+schedule), and `zero_carry_z → carry_z` is a further collapse when that
+scratchpad is actually carried. Attribution: the carry itself hurts on top of
+an already worse forward; any future `z`-style redesign should fix the
+architecture/supervision match before revisiting carry.
+
+**Bottom line.** Continuous cross-step latents are not a cheap upgrade path
+for LDT under the tested regime. Keep the lattice; do not carry `h` or `z`.
+The most interesting residual finding is negative too: a TRM-faithful
+within-step `y`/`z` split, even with carry forced to zero, degrades both
+accuracy and soundness relative to the ordinary one-stream model.

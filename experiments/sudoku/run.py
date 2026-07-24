@@ -38,6 +38,7 @@ _RUN_PARAMS: tuple[tuple[str, object], ...] = (
     ("eval_batch_size",          512),
     ("eval_max_timeouts",        50),
     ("augment",                  True),
+    ("carry_latent",             "off"),
     ("data_augment_digit_perm",  True),
     ("data_augment_dihedral",    True),
     ("use_ema",                  False),
@@ -126,6 +127,7 @@ def run(
     eval_batch_size: int = 512,
     eval_max_timeouts: int = 50,
     augment: bool = True,
+    carry_latent: str = "off",
     data_augment_digit_perm: bool = True,
     data_augment_dihedral: bool = True,
     use_ema: bool = False,
@@ -184,11 +186,28 @@ def run(
     ts = time.strftime("%Y%m%d_%H%M%S")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    carry_mode = {
+        "off": "off",
+        "h": "h",
+        "z": "z",
+        "zero_z": "z",
+    }.get(carry_latent)
+    if carry_mode is None:
+        raise ValueError(
+            f"carry_latent must be off|h|z|zero_z, got {carry_latent!r}"
+        )
+    if carry_latent != "off" and augment:
+        raise ValueError(
+            "latent carry requires --no-augment (dataset augmentation flags "
+            "remain enabled for fixed-frame diversity)"
+        )
+
     step_cfg = StepConfig(
         threshold=threshold,
         temp_decide=temp_decide,
         cls_threshold=cls_threshold,
         augment=augment,
+        carry_latent=carry_latent,
     )
     model_cfg = LoopedTransformerConfig(
         cls_token=conflict_loss_weight > 0,
@@ -196,6 +215,7 @@ def run(
         num_layers=num_layers,
         dim=dim,
         pre_norm=pre_norm,
+        carry_mode=carry_mode,
     )
 
     # Checkpoint path routing. When `ckpt_name` is set, a launcher
@@ -560,6 +580,7 @@ def entrypoint(
     eval_batch_size: int = 512,
     eval_max_timeouts: int = 50,
     augment: bool = True,
+    carry_latent: str = "off",
     data_augment_digit_perm: bool = True,
     data_augment_dihedral: bool = True,
     use_ema: bool = False,
@@ -597,6 +618,7 @@ def entrypoint(
         eval_batch_size=eval_batch_size,
         eval_max_timeouts=eval_max_timeouts,
         augment=augment,
+        carry_latent=carry_latent,
         data_augment_digit_perm=data_augment_digit_perm,
         data_augment_dihedral=data_augment_dihedral,
         use_ema=use_ema,
