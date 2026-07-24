@@ -86,7 +86,32 @@ def _dataset_digest(rows: list[dict[str, str]]) -> str:
     return hashlib.sha256(payload.encode("ascii")).hexdigest()
 
 
-def _load_rows(split: str, n: int, seed: int) -> list[dict[str, str]]:
+def _normalize_question(question: str) -> str:
+    """Map HF '.' blanks to the prompt's '0' blank token."""
+    return question.replace(".", "0")
+
+
+def apply_n_blanks(answer: str, n_blanks: int, seed: int, puzzle_index: int) -> str:
+    """Build a puzzle with exactly n_blanks missing cells filled from the answer."""
+    if not (0 <= n_blanks <= 81):
+        raise ValueError(f"n_blanks must be in [0, 81], got {n_blanks}")
+    if len(answer) != 81 or any(ch not in "123456789" for ch in answer):
+        raise ValueError("answer must be an 81-digit Sudoku solution")
+    cells = list(answer)
+    if n_blanks > 0:
+        rng = __import__("numpy").random.default_rng(seed + 1_000_003 * puzzle_index)
+        blank_idx = rng.choice(81, size=n_blanks, replace=False)
+        for idx in blank_idx:
+            cells[int(idx)] = "0"
+    return "".join(cells)
+
+
+def _load_rows(
+    split: str,
+    n: int,
+    seed: int,
+    n_blanks: int | None = None,
+) -> list[dict[str, str]]:
     import numpy as np
     from datasets import load_dataset
 
@@ -98,9 +123,15 @@ def _load_rows(split: str, n: int, seed: int) -> list[dict[str, str]]:
     indices = np.random.default_rng(seed).choice(len(dataset), size=n, replace=False)
     dataset = dataset.select(sorted(indices.tolist()))
     rows = [{"question": row["question"], "answer": row["answer"]} for row in dataset]
-    for row in rows:
+    for i, row in enumerate(rows):
         if len(row["question"]) != 81 or len(row["answer"]) != 81:
             raise ValueError(f"Malformed {split} row in sapientinc/sudoku-extreme")
+        if n_blanks is None:
+            row["question"] = _normalize_question(row["question"])
+        else:
+            row["question"] = apply_n_blanks(row["answer"], n_blanks, seed, i)
+            if row["question"].count("0") != n_blanks:
+                raise ValueError("failed to materialize requested blank count")
     return rows
 
 
@@ -171,7 +202,7 @@ app = modal.App("qwen35-sudoku-finetune")
     volumes={DATA_MOUNT: data_volume, CHECKPOINT_MOUNT: checkpoint_volume},
 )
 def train_and_evaluate(
-    epochs: int = 5,
+    epochs: int = 3,
     n_train: int = 1000,
     n_eval: int = 32,
     samples_per_puzzle: int = 32,
@@ -183,6 +214,7 @@ def train_and_evaluate(
     temperature: float = 0.8,
     top_p: float = 0.95,
     seed: int = 0,
+    n_blanks: int | None = None,
     resume: bool = False,
 ) -> dict[str, Any]:
     import os
@@ -202,11 +234,15 @@ def train_and_evaluate(
         raise ValueError("epochs must be at least 1")
     if min(n_train, n_eval, samples_per_puzzle, train_batch_size, eval_batch_puzzles) < 1:
         raise ValueError("dataset sizes, sample counts, and batch sizes must be positive")
+    if n_blanks is not None and not (0 <= n_blanks <= 81):
+        raise ValueError("n_blanks must be in [0, 81]")
 
     os.environ["HF_HOME"] = f"{DATA_MOUNT}/huggingface"
     set_seed(seed)
+    blanks_tag = "natural" if n_blanks is None else f"blanks{n_blanks}"
     run_dir = Path(
-        f"{CHECKPOINT_MOUNT}/followups/llm_baseline/{DEFAULT_RUN_NAME}_seed{seed}"
+        f"{CHECKPOINT_MOUNT}/followups/llm_baseline/"
+        f"{DEFAULT_RUN_NAME}_{blanks_tag}_seed{seed}"
     )
     run_dir.mkdir(parents=True, exist_ok=True)
     existing = _checkpoint_dirs(run_dir)
@@ -216,8 +252,8 @@ def train_and_evaluate(
         )
 
     print("Loading deterministic train/test subsets...", flush=True)
-    train_rows = _load_rows("train", n_train, 42)
-    eval_rows = _load_rows("test", n_eval, 200)
+    train_rows = _load_rows("train", n_train, 42, n_blanks=n_blanks)
+    eval_rows = _load_rows("test", n_eval, 200, n_blanks=n_blanks)
     run_config = {
         "model_id": MODEL_ID,
         "epochs": epochs,
@@ -232,6 +268,7 @@ def train_and_evaluate(
         "temperature": temperature,
         "top_p": top_p,
         "seed": seed,
+        "n_blanks": n_blanks,
         "train_subset_seed": 42,
         "eval_subset_seed": 200,
         "train_digest_sha256": _dataset_digest(train_rows),
@@ -446,7 +483,7 @@ def train_and_evaluate(
 
 @app.local_entrypoint()
 def entrypoint(
-    epochs: int = 5,
+    epochs: int = 3,
     n_train: int = 1000,
     n_eval: int = 32,
     samples_per_puzzle: int = 32,
@@ -458,6 +495,7 @@ def entrypoint(
     temperature: float = 0.8,
     top_p: float = 0.95,
     seed: int = 0,
+    n_blanks: int | None = None,
     resume: bool = False,
 ) -> None:
     result = train_and_evaluate.remote(
@@ -473,6 +511,7 @@ def entrypoint(
         temperature=temperature,
         top_p=top_p,
         seed=seed,
+        n_blanks=n_blanks,
         resume=resume,
     )
     print(json.dumps(result, indent=2), flush=True)

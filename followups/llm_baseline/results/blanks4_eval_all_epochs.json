@@ -1,0 +1,88 @@
+{
+  "run_config": {
+    "model_id": "Qwen/Qwen3.5-0.8B",
+    "epochs": 3,
+    "n_train": 1000,
+    "n_eval": 32,
+    "samples_per_puzzle": 32,
+    "train_batch_size": 32,
+    "eval_batch_puzzles": 4,
+    "learning_rate": 2e-05,
+    "max_length": 512,
+    "max_new_tokens": 128,
+    "temperature": 0.8,
+    "top_p": 0.95,
+    "seed": 0,
+    "n_blanks": 4,
+    "train_subset_seed": 42,
+    "eval_subset_seed": 200,
+    "train_digest_sha256": "f3c40a066d2569430d6e0e4a8e62498a476ab25dd897773d28a05a675c3de116",
+    "eval_digest_sha256": "b785b57ba5baf1303db22e9d136ac64a42d6236674f2d5ac6576fe9b0a9257dc"
+  },
+  "train_seconds": 106.16645431518555,
+  "epochs": [
+    {
+      "checkpoint": "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks4_seed0/checkpoint-32",
+      "epoch": 1.0,
+      "n_eval_puzzles": 32,
+      "samples_per_puzzle": 32,
+      "pass_at_1": 0.2001953125,
+      "pass_at_2": 0.286101310483871,
+      "pass_at_4": 0.37968663097886546,
+      "pass_at_8": 0.4761621976697755,
+      "pass_at_16": 0.5626422171978526,
+      "pass_at_32": 0.625,
+      "puzzles_passed": 20,
+      "correct_samples": 205,
+      "malformed_samples": 46,
+      "total_samples": 1024,
+      "generation": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "max_new_tokens": 128
+      }
+    },
+    {
+      "checkpoint": "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks4_seed0/checkpoint-64",
+      "epoch": 2.0,
+      "n_eval_puzzles": 32,
+      "samples_per_puzzle": 32,
+      "pass_at_1": 0.6708984375,
+      "pass_at_2": 0.7855342741935485,
+      "pass_at_4": 0.8665765781423804,
+      "pass_at_8": 0.9151205696262704,
+      "pass_at_16": 0.9525474653024365,
+      "pass_at_32": 0.96875,
+      "puzzles_passed": 31,
+      "correct_samples": 687,
+      "malformed_samples": 20,
+      "total_samples": 1024,
+      "generation": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "max_new_tokens": 128
+      }
+    },
+    {
+      "checkpoint": "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks4_seed0/checkpoint-96",
+      "epoch": 3.0,
+      "n_eval_puzzles": 32,
+      "samples_per_puzzle": 32,
+      "pass_at_1": 0.7373046875,
+      "pass_at_2": 0.8283140120967744,
+      "pass_at_4": 0.8838648845939934,
+      "pass_at_8": 0.9031909029976325,
+      "pass_at_16": 0.9062106547532686,
+      "pass_at_32": 0.90625,
+      "puzzles_passed": 29,
+      "correct_samples": 755,
+      "malformed_samples": 10,
+      "total_samples": 1024,
+      "generation": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "max_new_tokens": 128
+      }
+    }
+  ]
+}

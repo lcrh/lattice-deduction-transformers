@@ -343,4 +343,29 @@ output format rather than the puzzle.
 Qwen3.5-0.8B on the same 1K train set do not produce any correct held-out
 Sudoku-Extreme solutions even at pass@32. That turns the zero-shot LLM
 comparison into a stronger negative: task training alone, without lattice
-search, is not enough for this model/data budget.
+search, is not enough for this model/data budget on natural ~56-blank
+puzzles.
+
+### Controlled blank sweep (sanity + difficulty ladder)
+
+**Experiment.** Same model/data/eval protocol, but rebuild every train and
+eval puzzle from its solution with exactly `K ∈ {1, 2, 4, 8, 16, 32}` blanks.
+Train for 3 epochs. This checks that the SFT/eval pipeline can learn anything
+at all, then measures where performance collapses.
+
+**Results (seed 0, epoch 3).**
+
+| blanks | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | pass@32 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 80.9% | 90.3% | 95.8% | 98.7% | 99.9% | 100% |
+| 2 | 95.1% | 97.8% | 99.4% | 99.9% | 100% | 100% |
+| 4 | 73.7% | 82.8% | 88.4% | 90.3% | 90.6% | 90.6% |
+| 8 | 37.6% | 47.9% | 58.7% | 69.2% | 77.2% | 81.2% |
+| 16 | 5.7% | 9.9% | 16.1% | 24.3% | 34.3% | 46.9% |
+| 32 | 0% | 0% | 0% | 0% | 0% | 0% |
+
+**Interpretation.** The pipeline is not broken: with 1–2 missing cells the
+model reaches perfect pass@32 by epoch 3. Performance degrades smoothly with
+blank count and is already weak at 16 blanks; at 32 blanks (still far easier
+than natural Sudoku-Extreme) it returns to 0%, matching the natural-blank
+failure mode.

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from followups.llm_baseline.run import (
     _checkpoint_dirs,
+    apply_n_blanks,
     estimate_pass_at_k,
     make_messages,
     parse_solution,
@@ -55,6 +56,16 @@ class QwenSudokuExperimentTest(unittest.TestCase):
         self.assertLess(curve["pass_at_1"], curve["pass_at_2"])
         self.assertLess(curve["pass_at_2"], curve["pass_at_4"])
         self.assertEqual(curve["pass_at_32"], 1.0)
+
+    def test_apply_n_blanks_is_exact_and_deterministic(self) -> None:
+        answer = "123456789" * 9
+        puzzle = apply_n_blanks(answer, n_blanks=2, seed=7, puzzle_index=3)
+        self.assertEqual(puzzle.count("0"), 2)
+        self.assertEqual(len(puzzle), 81)
+        for q, a in zip(puzzle, answer):
+            self.assertTrue(q == "0" or q == a)
+        self.assertEqual(puzzle, apply_n_blanks(answer, n_blanks=2, seed=7, puzzle_index=3))
+        self.assertNotEqual(puzzle, apply_n_blanks(answer, n_blanks=2, seed=7, puzzle_index=4))
 
 
 if __name__ == "__main__":
