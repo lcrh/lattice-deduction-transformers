@@ -40,7 +40,6 @@ packages = [
     "followups",
     "followups/arch_ablation",
     "followups/ood_snowflake",
-    "followups/cost_accounting",
     "followups/deduction_operator",
     "followups/search_process",
 ]

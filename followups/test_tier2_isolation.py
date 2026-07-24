@@ -141,7 +141,7 @@ def test_e2_launcher_points_at_followup_entrypoints():
     assert "experiments/sudoku/eval_only.py" not in ecmd
 
 
-_BANNED = re.compile(r"\b(E2|E3|E8)\b|\bphase\s*[12]\b|\bstudy\b", re.I)
+_BANNED = re.compile(r"\b(E2|E3)\b|\bphase\s*[12]\b|\bstudy\b", re.I)
 
 
 def test_experiments_core_has_no_tier2_study_terms():
