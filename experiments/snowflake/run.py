@@ -51,6 +51,8 @@ _RUN_PARAMS: tuple[tuple[str, object], ...] = (
     ("eval_orders",              ""),
     ("translate_aug",            False),
     ("use_rope",                 False),
+    ("constraint_group_embed",   False),
+    ("data_suffix",              ""),
 )
 
 
@@ -88,7 +90,9 @@ from lattice_diffusion.training.utils.checkpoint import load_checkpoint
 from experiments.sudoku.dpll import StepConfig
 from experiments.sudoku.ema import swap_in_ema_if_present
 from experiments.sudoku.solve import SolveConfig, solve
-from experiments.snowflake.data import SnowflakeConfig, SnowflakeDataset
+from experiments.snowflake.data import (
+    MAX_CONSTRAINT_GROUPS, SnowflakeConfig, SnowflakeDataset,
+)
 from experiments.snowflake.train import (
     GRID_COLS, GRID_ROWS, N_CHANNELS, SEQ_LEN, VOCAB,
     TrainConfig, _build_state, _given_mask, train,
@@ -138,6 +142,8 @@ def run(
     eval_orders: str = "",
     translate_aug: bool = False,
     use_rope: bool = False,
+    constraint_group_embed: bool = False,
+    data_suffix: str = "",
     ckpt_name: str = "",
     ckpt_subdir: str = "",
     overwrite: bool = False,
@@ -150,6 +156,9 @@ def run(
     _loc_snapshot = dict(locals())
     _arg_values = {name: _loc_snapshot[name] for name, _ in _RUN_PARAMS}
     _print_run_config(_arg_values)
+
+    train_data_path = f"{DATA_MOUNT}/snowflake_train{data_suffix}.parquet"
+    test_data_path = f"{DATA_MOUNT}/snowflake_test{data_suffix}.parquet"
 
     def _parse_orders(s: str) -> list[int] | None:
         """Comma-separated order list -> list[int], or None (empty = no filter)."""
@@ -243,8 +252,11 @@ def run(
         augment_dihedral=False,    # snowflake: digit-perm only (covering grid is hex)
         vocab_dim=VOCAB,
     )
+    constraint_group_vocab = (
+        MAX_CONSTRAINT_GROUPS if constraint_group_embed else 0
+    )
     model_cfg = LoopedTransformerConfig(
-        n_channels=N_CHANNELS, seq_len=SEQ_LEN,
+        n_channels=N_CHANNELS + constraint_group_vocab, seq_len=SEQ_LEN,
         grid_rows=GRID_ROWS, grid_cols=GRID_COLS,
         cls_token=conflict_loss_weight > 0,
         use_rope=use_rope,
@@ -269,18 +281,20 @@ def run(
         ema_decay=ema_decay,
         model=model_cfg,
         data=SnowflakeConfig(
-            data_path=f"{DATA_MOUNT}/snowflake_train.parquet",
+            data_path=train_data_path,
             batch_size=batch_size, seed=42,
             n_puzzles=n_train_puzzles,
             orders=train_orders_list,          # E4: restrict train to these orders
             order_counts=train_order_counts_dict,  # E4: exact soft-shift mixture
             translate_aug=translate_aug,       # E4: positional-confound mitigation (train only)
+            constraint_group_vocab=constraint_group_vocab,
         ),
         eval_data=SnowflakeConfig(
-            data_path=f"{DATA_MOUNT}/snowflake_test.parquet",
+            data_path=test_data_path,
             n_puzzles=200, batch_size=200, seed=200,
             zero_hint_weight=1.0, correct_hint_weight=0.0, error_hint_weight=0.0,
             orders=eval_orders_list,           # E4: restrict in-train eval to these orders
+            constraint_group_vocab=constraint_group_vocab,
         ),
         out_dir=train_out_dir,
         name=train_name,
@@ -295,6 +309,12 @@ def run(
 
     ckpt = load_checkpoint(str(ckpt_path))
     cfg_loaded = LoopedTransformerConfig(**ckpt["model_cfg"])
+    loaded_group_vocab = cfg_loaded.n_channels - N_CHANNELS
+    if loaded_group_vocab < 0:
+        raise ValueError(
+            f"checkpoint n_channels={cfg_loaded.n_channels} is smaller than "
+            f"Snowflake's legacy width {N_CHANNELS}"
+        )
     model = PowersetModel(cfg_loaded)
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device).eval()
@@ -333,11 +353,12 @@ def run(
     # single batch of exactly that many unique puzzles. (An empty pool raises in
     # the dataset constructor rather than hanging — see SnowflakeDataset.)
     eval_cfg_probe = SnowflakeConfig(
-        data_path=f"{DATA_MOUNT}/snowflake_test.parquet",
+        data_path=test_data_path,
         n_puzzles=n_eval_puzzles, batch_size=1, seed=200,
         zero_hint_weight=1.0, correct_hint_weight=0.0, error_hint_weight=0.0,
         orders=eval_orders_list,           # E4: restrict eval to these orders
         return_orders=True,
+        constraint_group_vocab=loaded_group_vocab,
     )
     eval_pool_size = SnowflakeDataset(eval_cfg_probe).n_puzzles
     if eval_pool_size < n_eval_puzzles:
@@ -349,14 +370,22 @@ def run(
     eval_ds = SnowflakeDataset(dataclasses.replace(
         eval_cfg_probe, batch_size=eval_pool_size,
     ))
-    x, y, mask, sat, orders_t = eval_ds.next_batch(); eval_ds.close()
+    eval_batch = eval_ds.next_batch(); eval_ds.close()
+    if loaded_group_vocab > 0:
+        x, y, mask, sat, orders_t, groups = eval_batch
+    else:
+        x, y, mask, sat, orders_t = eval_batch
+        groups = None
     sat_mask = sat.bool()
     x = x[sat_mask].to(device).float()
     y = y[sat_mask].to(device).float()
     in_puzzle_mask = mask[sat_mask].to(device).bool()
+    group_features = (
+        groups[sat_mask].to(device).float() if groups is not None else None
+    )
     # Per-puzzle order for the surviving (SAT) eval rows, aligned to solve order.
     eval_orders_per_puzzle = orders_t[sat_mask].tolist()
-    state = _build_state(x, in_puzzle_mask)
+    state = _build_state(x, in_puzzle_mask, group_features)
     given_mask = _given_mask(x)
     n_sat = x.shape[0]
     print(f"  Loaded {n_sat}/{eval_pool_size} SAT snowflake eval puzzles "
@@ -663,6 +692,8 @@ def entrypoint(
     eval_orders: str = "",
     translate_aug: bool = False,
     use_rope: bool = False,
+    constraint_group_embed: bool = False,
+    data_suffix: str = "",
     ckpt_name: str = "",
     ckpt_subdir: str = "",
     overwrite: bool = False,
@@ -698,6 +729,8 @@ def entrypoint(
         eval_orders=eval_orders,
         translate_aug=translate_aug,
         use_rope=use_rope,
+        constraint_group_embed=constraint_group_embed,
+        data_suffix=data_suffix,
         ckpt_name=ckpt_name,
         ckpt_subdir=ckpt_subdir,
         overwrite=overwrite,

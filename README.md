@@ -98,20 +98,32 @@ multiple step counts and across 3 seeds.
 ### Snowflake Sudoku (Table 2)
 
 The Snowflake puzzles are generated with CVC5 via the
-[snowflakesudoku](https://github.com/santolucito/snowflakesudoku) helper
-package (MIT-licensed, cloned at Modal-image build time).
+[lcrh/snowflakesudoku](https://github.com/lcrh/snowflakesudoku) helper
+package (MIT-licensed fork of
+[santolucito/snowflakesudoku](https://github.com/santolucito/snowflakesudoku),
+cloned at Modal-image build time). Canonical topologies are the default;
+`--varied-topologies` opts into per-puzzle connected layouts.
 
 ```bash
 # One-time: generate the ~30K-puzzle dataset (CVC5, ~100 CPU workers, parallel)
 uv run modal run --detach experiments/snowflake/gen_data.py
 
+# Optional OOD arm: varied connected topologies (writes *_varied.parquet)
+uv run modal run --detach experiments/snowflake/gen_data.py --varied-topologies
+
 # Train + eval (headline: 100 / 100 on 1,000-puzzle test split)
 uv run modal run --detach experiments/snowflake/run.py \
     --steps 1000 --n-train-puzzles 500 --n-eval-puzzles 1000
+
+# Same, but consume the varied dataset
+uv run modal run --detach experiments/snowflake/run.py \
+    --data-suffix _varied --steps 1000 --n-train-puzzles 500 --n-eval-puzzles 1000
 ```
 
 `gen_data.py` writes `/data/snowflake_train.parquet` and
-`/data/snowflake_test.parquet` to the `lattice-diffusion-data` volume.
+`/data/snowflake_test.parquet` to the `lattice-diffusion-data` volume
+(or `*_varied.parquet` with `--varied-topologies`). Pass matching
+`--data-suffix` to `run.py` / `eval_only.py`.
 
 ### Maze-Hard (Table 3, K=1 and K=512)
 

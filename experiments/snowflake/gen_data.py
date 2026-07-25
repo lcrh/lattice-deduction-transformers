@@ -1,13 +1,14 @@
 """Modal-parallel snowflake puzzle generator.
 
-Uses the `snowflake` package from https://github.com/santolucito/snowflakesudoku
-(MIT-licensed) for hex-topology construction; CVC5 for SAT solving.
+Uses the `snowflake` package from https://github.com/lcrh/snowflakesudoku
+(MIT-licensed fork of santolucito/snowflakesudoku) for hex-topology
+construction; CVC5 for SAT solving.
 
 100 CPU workers each generate ~300 puzzles (5 n-values × 10 base × 6 variants),
-write a parquet shard to the `lattice-diffusion-data` volume at
-`/data/snowflake_shards/shard_{id:03d}.parquet`. A consolidation function
-then reads all shards, deterministically reorders by (n, code), assigns
-final ids, and splits 90/10 into train/test parquet files.
+write a parquet shard to the `lattice-diffusion-data` volume (default
+`/data/snowflake_shards/`, or a varied suffix directory). A consolidation
+function then reads all shards, deterministically reorders by (n, code),
+assigns final ids, and splits 90/10 into train/test parquet files.
 
 Schema (per row):
   - id        : int64
@@ -21,12 +22,13 @@ Schema (per row):
 Usage:
     uv run modal run --detach experiments/snowflake/gen_data.py
     uv run modal run --detach experiments/snowflake/gen_data.py --n-shards 100 --count-per-shard 10
-    # E4 order-transfer OOD: extend the generated range up to order 10. This
-    # regenerates the SINGLE consolidated snowflake_train/test.parquet that
-    # run.py reads, so orders 9-10 become available to both training (via
-    # --train-orders) and eval (--eval-orders). run.py has no separate-file
-    # data path, so generate into the main split rather than a side file.
+    # E4 order-transfer OOD: extend the generated range up to order 10.
     uv run modal run --detach experiments/snowflake/gen_data.py --n-max 10
+    # Varied topologies (opt-in): keep the same CLI defaults, but generate a
+    # deterministic connected layout per base puzzle and write a separate
+    # shard/output suffix so the canonical dataset is not overwritten.
+    # Consume with: modal run experiments/snowflake/run.py --data-suffix _varied
+    uv run modal run --detach experiments/snowflake/gen_data.py --varied-topologies
 """
 
 from __future__ import annotations
@@ -42,13 +44,21 @@ import modal
 
 
 # Build a CPU-only image with cvc5 + snowflakesudoku helper repo.
+# Covering-grid bounds must match experiments/snowflake/data.py.
+COVER_Q_MIN, COVER_Q_MAX = -2, 2
+COVER_R_MIN, COVER_R_MAX = -2, 2
 SNOWFLAKE_REPO_DIR = "/opt/snowflakesudoku"
+SNOWFLAKE_REPO_URL = "https://github.com/lcrh/snowflakesudoku"
+# Pin a concrete commit so Modal image rebuilds are reproducible even if the
+# branch tip moves. Update this when pulling a new snowflakesudoku revision.
+SNOWFLAKE_REPO_COMMIT = "78394dfa8ce77c5429fe411547c866e704a18d68"
 gen_image = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install("git")
     .pip_install("cvc5==1.3.3", "pyarrow==23.0.1", "numpy>=1.24")
     .run_commands(
-        f"git clone https://github.com/santolucito/snowflakesudoku {SNOWFLAKE_REPO_DIR}",
+        f"git clone {SNOWFLAKE_REPO_URL} {SNOWFLAKE_REPO_DIR} && "
+        f"git -C {SNOWFLAKE_REPO_DIR} checkout {SNOWFLAKE_REPO_COMMIT}",
     )
 )
 
@@ -58,6 +68,7 @@ DATA_MOUNT = "/data"
 app = modal.App("snowflake-data-gen")
 
 SHARDS_DIR = "snowflake_shards"  # subdir on the volume
+VARIED_SHARDS_DIR = "snowflake_shards_varied"
 
 
 @app.function(image=gen_image, cpu=1.0, timeout=3600,
@@ -69,6 +80,8 @@ def gen_shard(
     count_per_shard: int = 10,
     variants: int = 6,
     seed_base: int = 42,
+    varied_topologies: bool = False,
+    shards_dir: str = SHARDS_DIR,
 ) -> dict:
     """Generate one parquet shard. Returns a small status dict for logging."""
     import cvc5
@@ -78,7 +91,11 @@ def gen_shard(
 
     sys.path.insert(0, SNOWFLAKE_REPO_DIR)
     from snowflake.parametric_topology import (
-        build_snowflake, HEX_COORDS_BY_N, get_cell_positions,
+        HEX_COORDS_BY_N,
+        build_snowflake,
+        get_cell_positions,
+        get_hex_coords,
+        translate_hex_coords,
     )
 
     # ---- inline snowflake puzzle generation ----
@@ -177,32 +194,81 @@ def gen_shard(
         chars = string.ascii_uppercase + string.digits
         return "".join(rng.choice(chars) for _ in range(3))
 
-    # Pre-cache topology per n. HEX_COORDS_BY_N supports orders up to 19 (the
-    # covering grid embeds all of them), so E4's orders 9-10 are in range;
-    # fail loudly if a requested order is unsupported by the topology module.
+    # HEX_COORDS_BY_N supports orders up to 19 (the covering grid embeds all of
+    # them), so E4's orders 9-10 are in range; fail loudly if a requested order
+    # is unsupported by the topology module.
     max_supported = max(HEX_COORDS_BY_N.keys())
     if n_max > max_supported:
         raise ValueError(
             f"n_max={n_max} exceeds HEX_COORDS_BY_N max order {max_supported}"
         )
-    topo = {}
-    for n in range(n_min, n_max + 1):
-        constraints, n_cells = build_snowflake(n)
-        topo[n] = {
+
+    def _topology_for(n: int, topology_seed: int | None) -> dict:
+        # Default call args keep the historical concentric-ring topology.
+        # With varied_topologies, each base puzzle gets a deterministic
+        # connected layout that is then translated into the covering-grid box.
+        # Long strips can miss the box, so resample with a namespaced seed
+        # rather than aborting the whole Modal shard.
+        if topology_seed is None:
+            hex_coords = get_hex_coords(n)
+        else:
+            hex_coords = None
+            last_err: Exception | None = None
+            for attempt in range(64):
+                candidate_seed = (
+                    (int(topology_seed) ^ 0xA5A5A5A5)
+                    + attempt * 7919
+                ) & 0x7FFFFFFF
+                candidate = get_hex_coords(n, topology_seed=candidate_seed)
+                try:
+                    hex_coords = translate_hex_coords(
+                        candidate,
+                        q_min=COVER_Q_MIN,
+                        q_max=COVER_Q_MAX,
+                        r_min=COVER_R_MIN,
+                        r_max=COVER_R_MAX,
+                    )
+                    break
+                except ValueError as err:
+                    last_err = err
+            if hex_coords is None:
+                raise RuntimeError(
+                    f"no varied layout for n={n} fits covering box "
+                    f"q,r∈[{COVER_Q_MIN},{COVER_Q_MAX}] after 64 tries"
+                ) from last_err
+        constraints, n_cells = build_snowflake(n, hex_coords)
+        return {
             "n_cells": n_cells,
             "constraints": constraints,
-            "hex_coords": HEX_COORDS_BY_N[n],
-            "cell_positions": get_cell_positions(n),
+            "hex_coords": hex_coords,
+            "cell_positions": get_cell_positions(n, hex_coords),
         }
 
+    # Canonical mode reuses one topology per order; varied mode builds one per
+    # base puzzle below.
+    topo = (
+        {}
+        if varied_topologies
+        else {
+            n: _topology_for(n, topology_seed=None)
+            for n in range(n_min, n_max + 1)
+        }
+    )
+
     # Per-shard seed: distinct across shards so puzzles don't duplicate.
+    # Topology seeds are namespaced separately so layout geometry is not
+    # deterministically coupled to the puzzle/solution RNG stream.
     base_seed = seed_base + shard_id * 100_000
     records: list[dict] = []
     t0 = time.time()
     for n in range(n_min, n_max + 1):
         for base_idx in range(count_per_shard):
-            rng = random.Random(base_seed + n * 1000 + base_idx * 100)
-            t = topo[n]
+            task_seed = base_seed + n * 1000 + base_idx * 100
+            rng = random.Random(task_seed)
+            if varied_topologies:
+                t = _topology_for(n, topology_seed=task_seed)
+            else:
+                t = topo[n]
             solution = _random_distinct_solution(t["n_cells"], t["constraints"], rng)
             if solution is None:
                 continue
@@ -231,7 +297,7 @@ def gen_shard(
           flush=True)
 
     # Write parquet shard.
-    shards_dir = Path(DATA_MOUNT) / SHARDS_DIR
+    shards_dir = Path(DATA_MOUNT) / shards_dir
     shards_dir.mkdir(parents=True, exist_ok=True)
     table = pa.table({
         "id":       pa.array([r["id"] for r in records], type=pa.int64()),
@@ -252,38 +318,51 @@ def gen_shard(
 @app.function(image=gen_image, cpu=2.0, timeout=600,
               volumes={DATA_MOUNT: data_volume})
 def consolidate(test_frac: float = 0.1, seed: int = 0,
-                out_suffix: str = "") -> dict:
-    """Read all parquet shards, dedupe by (puzzle, solution) fingerprint,
-    sort by (n, code), assign final ids, then hash-split disjointly into
-    train/test parquet files at
+                out_suffix: str = "",
+                shards_dir: str = SHARDS_DIR) -> dict:
+    """Read all parquet shards, dedupe by (puzzle, solution, topology)
+    fingerprint, sort by (n, code), assign final ids, then hash-split
+    disjointly into train/test parquet files at
     /data/snowflake_train{out_suffix}.parquet and /data/snowflake_test{out_suffix}.parquet.
 
-    Hash-split: each fingerprint deterministically maps to train or test
-    via `sha256(fingerprint)` mod 1000 < test_frac*1000`. This is robust
-    to any future duplicate that slips through (it would map to the same
-    side both times) and is independent of split-time randomness.
+    Topology is included so varied layouts with identical digit vectors remain
+    distinct. Canonical datasets keep a constant topology per order, so their
+    uniqueness is unchanged. Hash-split: each fingerprint deterministically
+    maps to train or test via `sha256(fingerprint)` mod 1000 < test_frac*1000.
     """
     import hashlib
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    shards_dir = Path(DATA_MOUNT) / SHARDS_DIR
-    shard_files = sorted(shards_dir.glob("shard_*.parquet"))
-    print(f"reading {len(shard_files)} shards from {shards_dir}", flush=True)
+    shards_path = Path(DATA_MOUNT) / shards_dir
+    shard_files = sorted(shards_path.glob("shard_*.parquet"))
+    print(f"reading {len(shard_files)} shards from {shards_path}", flush=True)
     if not shard_files:
-        raise RuntimeError(f"no shards found in {shards_dir}")
+        raise RuntimeError(f"no shards found in {shards_path}")
 
     table = pa.concat_tables([pq.read_table(str(p)) for p in shard_files])
     print(f"  total rows before dedup: {table.num_rows}", flush=True)
 
-    # Dedup by (puzzle bytes, solution bytes). Within a duplicate group we
-    # keep the first row encountered after sort-by-(n, code).
+    def _fingerprint(row: dict) -> bytes:
+        topo = row.get("topology", "")
+        if not isinstance(topo, (bytes, bytearray)):
+            topo = str(topo).encode()
+        return (
+            bytes(bytearray(row["puzzle"]))
+            + b"|"
+            + bytes(bytearray(row["solution"]))
+            + b"|"
+            + bytes(topo)
+        )
+
+    # Dedup by (puzzle, solution, topology). Within a duplicate group we keep
+    # the first row encountered after sort-by-(n, code).
     df = table.to_pylist()
     df.sort(key=lambda r: (r["n"], r["code"]))
     seen: set[bytes] = set()
     deduped: list[dict] = []
     for r in df:
-        fp = bytes(bytearray(r["puzzle"])) + b"|" + bytes(bytearray(r["solution"]))
+        fp = _fingerprint(r)
         if fp in seen:
             continue
         seen.add(fp)
@@ -298,7 +377,7 @@ def consolidate(test_frac: float = 0.1, seed: int = 0,
     salt = f"snowflake-split-seed{seed}".encode()
     for i, r in enumerate(deduped):
         r["id"] = i
-        fp = bytes(bytearray(r["puzzle"])) + b"|" + bytes(bytearray(r["solution"]))
+        fp = _fingerprint(r)
         h = hashlib.sha256(salt + fp).digest()
         bucket = int.from_bytes(h[:4], "big") % 1000
         if bucket < test_threshold:
@@ -328,10 +407,8 @@ def consolidate(test_frac: float = 0.1, seed: int = 0,
     data_volume.commit()
 
     # Sanity: assert disjoint by fingerprint.
-    train_fp = {bytes(bytearray(r["puzzle"])) + b"|" + bytes(bytearray(r["solution"]))
-                for r in train_rows}
-    test_fp = {bytes(bytearray(r["puzzle"])) + b"|" + bytes(bytearray(r["solution"]))
-               for r in test_rows}
+    train_fp = {_fingerprint(r) for r in train_rows}
+    test_fp = {_fingerprint(r) for r in test_rows}
     overlap = len(train_fp & test_fp)
     print(f"  sanity: train ∩ test fingerprints = {overlap} (should be 0)", flush=True)
     if overlap != 0:
@@ -359,14 +436,24 @@ def main(
     test_frac: float = 0.1,
     split_seed: int = 0,
     out_suffix: str = "",
+    varied_topologies: bool = False,
 ):
+    # Keep default paths/behavior identical. Varied generation writes to a
+    # separate shard directory and, unless the caller overrides out_suffix,
+    # a `_varied` train/test pair so the canonical dataset is preserved.
+    shards_dir = VARIED_SHARDS_DIR if varied_topologies else SHARDS_DIR
+    if varied_topologies and out_suffix == "":
+        out_suffix = "_varied"
+
     print(f"Spawning {n_shards} shard workers in parallel "
           f"(n in [{n_min}, {n_max}], count_per_shard={count_per_shard}, "
-          f"variants={variants}). Each shard targets ~"
+          f"variants={variants}, varied_topologies={varied_topologies}). "
+          f"Each shard targets ~"
           f"{(n_max - n_min + 1) * count_per_shard * variants} puzzles.",
           flush=True)
     args = [
-        (i, n_min, n_max, count_per_shard, variants, seed_base)
+        (i, n_min, n_max, count_per_shard, variants, seed_base,
+         varied_topologies, shards_dir)
         for i in range(n_shards)
     ]
     total = 0
@@ -380,6 +467,7 @@ def main(
 
     summary = consolidate.remote(
         test_frac=test_frac, seed=split_seed, out_suffix=out_suffix,
+        shards_dir=shards_dir,
     )
     print(f"\nConsolidation: {summary['n_rows_before_dedup']} rows → "
           f"{summary['n_unique']} unique → "

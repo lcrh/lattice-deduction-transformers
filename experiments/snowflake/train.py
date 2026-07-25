@@ -5,8 +5,9 @@ covering-grid setup:
   - State carries the in-puzzle mask as a 7th channel
     (`state[..., :6]` = vocab powerset, `state[..., 6]` = in-puzzle bit
     locked at 1 for in-puzzle cells, 0 elsewhere). The model has
-    `n_channels=7` so the mask is just an extra "always-on" vocab slot
-    the operator never touches.
+    `n_channels=7` by default so the mask is just an extra "always-on" slot
+    the operator never touches. An opt-in experiment appends randomized
+    multi-hot constraint-group IDs as additional locked channels.
   - All deduce / decide / loss / GT-conflict logic gates on
     `in_puzzle_mask` so out-of-puzzle cells are inert.
   - Augmentation is digit-perm only (no spatial dihedral): the covering
@@ -57,8 +58,7 @@ def _default_step_cfg() -> StepConfig:
 
 
 def _default_model_cfg() -> LoopedTransformerConfig:
-    """LoopedTransformerConfig with snowflake-specific defaults: n_channels=7,
-    grid_rows=15, grid_cols=10, cls_token=True (for the conflict head)."""
+    """Legacy Snowflake model defaults (group embeddings remain opt-in)."""
     return LoopedTransformerConfig(
         n_channels=N_CHANNELS,
         seq_len=SEQ_LEN,
@@ -113,13 +113,22 @@ class TrainConfig:
     eval_data: SnowflakeConfig | None = None
 
 
-def _build_state(orig_x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    """Build [B, S, 7] state from snowflake [B, S, 6] vocab + [B, S] mask.
+def _build_state(
+    orig_x: torch.Tensor,
+    mask: torch.Tensor,
+    group_features: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Build Snowflake state from vocab, mask, and optional group membership.
 
     Channel 6 is the in-puzzle mask, locked at 1 for in-puzzle cells.
-    Out-of-puzzle cells have all-zero state (vocab + mask).
+    Optional channels 7+ are multi-hot randomized constraint-group IDs.  All
+    post-vocab channels are locked auxiliary input features: DPLL only mutates
+    channels ``[:VOCAB]``. Out-of-puzzle cells have all-zero state.
     """
-    return torch.cat([orig_x, mask.unsqueeze(-1).float()], dim=-1)
+    pieces = [orig_x, mask.unsqueeze(-1).float()]
+    if group_features is not None:
+        pieces.append(group_features.float())
+    return torch.cat(pieces, dim=-1)
 
 
 def _gt_conflict(
@@ -185,12 +194,11 @@ def _losses(
 ):
     """Compute losses over vocab channels only, gated by in_puzzle_mask.
 
-    `state` and `orig_y` arrive as [B, S, N_CHANNELS=7] (orig_y is padded
-    with a zero-valued mask channel by the caller so that aug functions
-    can permute it homogeneously with state). `out["bce"][i]` and
-    `out["softmax"][i]` are also [B, S, N_CHANNELS]. We slice all three
-    to `[..., :VOCAB]` for loss math so the auxiliary mask channel gets
-    no gradient signal (the model learns to ignore it).
+    `state` and `orig_y` arrive as [B, S, C], where C=7 on the legacy path
+    and may include group channels. `orig_y` is zero-padded so augmentation
+    can permute it homogeneously with state. We slice state, targets, and model
+    outputs to `[..., :VOCAB]` for loss math, so auxiliary channels receive no
+    direct supervision.
 
     BCE reduction matches sudoku's `weighted_bce_with_logits(...).mean()`
     semantics: per-bit loss multiplied by an in-puzzle mask, then mean
@@ -263,6 +271,13 @@ def train(cfg: TrainConfig):
         ts = time.strftime("%Y%m%d_%H%M%S")
         ckpt_path = out_dir / f"{cfg.name}_{ts}.pt"
 
+    expected_channels = N_CHANNELS + cfg.data.constraint_group_vocab
+    if cfg.model.n_channels != expected_channels:
+        raise ValueError(
+            f"model.n_channels={cfg.model.n_channels}, but Snowflake data "
+            f"requires {expected_channels} (= {N_CHANNELS} legacy + "
+            f"{cfg.data.constraint_group_vocab} group channels)"
+        )
     model = PowersetModel(cfg.model).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"device={device}  params={n_params:,}  steps={cfg.steps}  bs={cfg.batch_size}",
@@ -295,6 +310,7 @@ def train(cfg: TrainConfig):
                 n_puzzles=cfg.eval_n_puzzles, batch_size=cfg.eval_n_puzzles,
                 seed=200,
                 zero_hint_weight=1.0, correct_hint_weight=0.0, error_hint_weight=0.0,
+                constraint_group_vocab=cfg.data.constraint_group_vocab,
             )
         else:
             print(f"  WARNING: eval_data unset AND no sibling test split found "
@@ -305,15 +321,31 @@ def train(cfg: TrainConfig):
                 n_puzzles=cfg.eval_n_puzzles, batch_size=cfg.eval_n_puzzles,
                 seed=200,
                 zero_hint_weight=1.0, correct_hint_weight=0.0, error_hint_weight=0.0,
+                constraint_group_vocab=cfg.data.constraint_group_vocab,
             )
+    if eval_cfg.constraint_group_vocab != cfg.data.constraint_group_vocab:
+        raise ValueError(
+            "train and eval constraint_group_vocab must match, got "
+            f"{cfg.data.constraint_group_vocab} and "
+            f"{eval_cfg.constraint_group_vocab}"
+        )
     eval_ds = SnowflakeDataset(eval_cfg)
-    ex_x, ex_y, ex_mask, ex_sat = eval_ds.next_batch()
+    eval_batch = eval_ds.next_batch()
     eval_ds.close()
+    if cfg.data.constraint_group_vocab > 0:
+        ex_x, ex_y, ex_mask, ex_sat, ex_groups = eval_batch
+    else:
+        ex_x, ex_y, ex_mask, ex_sat = eval_batch
+        ex_groups = None
     sat_mask = ex_sat.bool()
     eval_x = ex_x[sat_mask][:cfg.eval_n_puzzles].to(device).float()
     eval_y = ex_y[sat_mask][:cfg.eval_n_puzzles].to(device).float()
     eval_in_puzzle = ex_mask[sat_mask][:cfg.eval_n_puzzles].to(device).bool()
-    eval_state = _build_state(eval_x, eval_in_puzzle)
+    eval_groups = (
+        ex_groups[sat_mask][:cfg.eval_n_puzzles].to(device).float()
+        if ex_groups is not None else None
+    )
+    eval_state = _build_state(eval_x, eval_in_puzzle, eval_groups)
     eval_given = _given_mask(eval_x)
     print(f"In-train eval set: {eval_state.shape[0]} SAT puzzles "
           f"(every {cfg.eval_every} steps, "
@@ -331,22 +363,31 @@ def train(cfg: TrainConfig):
               f"{len(ema.shadow)} param tensors", flush=True)
 
     def fresh_batch(n: int):
-        """Return `(x, solutions, mask)` with `solutions: [n, K=1, S, vocab_dim]`."""
-        bx, by, bm = [], [], []
+        """Return x, solutions, mask, and optional group features."""
+        bx, by, bm, bg = [], [], [], []
         while sum(t.shape[0] for t in bx) < n:
-            x_b, y_b, m_b, _ = dataset.next_batch()
+            batch = dataset.next_batch()
+            if cfg.data.constraint_group_vocab > 0:
+                x_b, y_b, m_b, _, g_b = batch
+                bg.append(g_b)
+            else:
+                x_b, y_b, m_b, _ = batch
             bx.append(x_b); by.append(y_b); bm.append(m_b)
         x = torch.cat(bx, dim=0)[:n].to(device).float()
         y = torch.cat(by, dim=0)[:n].to(device).float()
         m = torch.cat(bm, dim=0)[:n].to(device).bool()
+        groups = (
+            torch.cat(bg, dim=0)[:n].to(device).float()
+            if bg else None
+        )
         solutions = y.unsqueeze(1)  # [n, 1, S, VOCAB]
-        return x, solutions, m
+        return x, solutions, m, groups
 
     # Pool: stores canonical-frame state (with mask channel), orig_x (vocab
     # only), solutions ([P, K, S, VOCAB]), in_puzzle_mask, age.
     pool_size = cfg.batch_size
-    pool_orig_x, pool_solutions, pool_in_puzzle = fresh_batch(pool_size)
-    pool_state = _build_state(pool_orig_x, pool_in_puzzle)
+    pool_orig_x, pool_solutions, pool_in_puzzle, pool_groups = fresh_batch(pool_size)
+    pool_state = _build_state(pool_orig_x, pool_in_puzzle, pool_groups)
     # Fresh-state α: all K solutions survive (orig_x permissive over vocab).
     # Equals OR-over-K-solutions per (cell, channel). For K=1 = solutions[:,0].
     pool_last_alpha = pool_solutions.bool().any(dim=1).float()  # [P, S, VOCAB]
@@ -379,11 +420,13 @@ def train(cfg: TrainConfig):
         gt_conflict_pre = _gt_conflict(state, orig_y, in_puzzle_mask)
         is_sat_pre = ~gt_conflict_pre
 
-        # Pad orig_y to N_CHANNELS so apply_aug_state's digit-perm gather
-        # (sized to N_CHANNELS=7) works homogeneously on state and orig_y.
+        # Pad orig_y to the actual state width so apply_aug_state's digit-perm
+        # gather works homogeneously on state and orig_y.
         # The trailing channel stays 0 (digit-perm has identity on slots
         # >=vocab_dim), and `_losses` slices back to vocab.
-        orig_y_padded = F.pad(orig_y, (0, N_CHANNELS - VOCAB))   # [B, S, N_CHANNELS]
+        orig_y_padded = F.pad(
+            orig_y, (0, state.shape[-1] - VOCAB)
+        )
 
         # ---- forward + losses (grad-tracked; aug applied via aug_forward) ----
         model.train()
@@ -444,13 +487,13 @@ def train(cfg: TrainConfig):
         n_to_replace = int(discard.sum().item())
         new_last_alpha = orig_y.clone()
         if n_to_replace > 0:
-            fx, f_solutions, fm = fresh_batch(n_to_replace)
+            fx, f_solutions, fm, fg = fresh_batch(n_to_replace)
             new_state = new_state.clone()
             new_orig_x = orig_x.clone()
             new_solutions = solutions.clone()
             new_in_puzzle = in_puzzle_mask.clone()
             new_age = new_age.clone()
-            new_state[discard] = _build_state(fx, fm)
+            new_state[discard] = _build_state(fx, fm, fg)
             new_orig_x[discard] = fx
             new_solutions[discard] = f_solutions
             new_in_puzzle[discard] = fm

@@ -69,7 +69,7 @@ VOLUME_NAME = _common.VOLUME_NAME
 RUN_ENTRYPOINT = "experiments/snowflake/run.py"
 
 # Boolean flags: emitted as a bare `--flag` when truthy, omitted otherwise.
-BOOL_FLAGS = {"translate_aug", "use_rope"}
+BOOL_FLAGS = {"translate_aug", "use_rope", "constraint_group_embed"}
 
 
 # --------------------------------------------------------------------------
@@ -135,6 +135,41 @@ _add(
          "95% (475/500) of training puzzles are orders 4-5 and only 5% "
          "(25/500) are orders 6-8. Evaluate on the balanced held-out split.",
 )
+
+# --- Varied-topology × constraint-group core sweep ------------------------
+# Both arms consume the same independently generated varied-topology parquet.
+# The cg_aug arm resamples injective group IDs from the full vocabulary on
+# every sample. Translation augmentation remains enabled in both arms.
+_VARIED_CORE = (
+    ("all", "4,5,6,7,8", "4,5,6,7,8", {}),
+    ("leq5", "4,5", "6,7,8,9,10", {}),
+    ("leq6", "4,5,6", "7,8,9,10", {}),
+    (
+        "shift95",
+        "4,5,6,7,8",
+        "4,5,6,7,8",
+        {"train_order_counts": "4:238,5:237,6:9,7:8,8:8"},
+    ),
+)
+
+for short_name, train_orders, eval_orders, extra_overrides in _VARIED_CORE:
+    for group_aug in (False, True):
+        arm = "cg_aug" if group_aug else "cg_off"
+        overrides = {"data_suffix": "_varied", **extra_overrides}
+        if group_aug:
+            overrides["constraint_group_embed"] = True
+        _add(
+            f"e4_varied_{short_name}_{arm}",
+            train_orders,
+            eval_orders,
+            overrides=overrides,
+            n_seeds=3,
+            note=(
+                "Varied-topology core sweep; constraint-group embedding "
+                + ("enabled with per-sample randomized IDs." if group_aug
+                   else "disabled.")
+            ),
+        )
 
 # --- Support-preserving sparse-support GRID (1 seed each) ------------------
 # Axes:
@@ -228,6 +263,11 @@ CONFIG_ORDER = [
     "e4_all", "e4_leq5", "e4_leq6", "e4_shift95",
 ]
 CONFIG_ORDER += [
+    f"e4_varied_{short_name}_{arm}"
+    for short_name, *_ in _VARIED_CORE
+    for arm in ("cg_off", "cg_aug")
+]
+CONFIG_ORDER += [
     _shift1k_name(h, steps, rope)
     for h in (3, 6, 12, 25, 50)
     for steps in (1000, 4000)
@@ -280,7 +320,7 @@ def launch_command(config_name: str, seed: int) -> str:
     # Remaining effective flags in a stable, readable order.
     for name in (
         "steps", "n_train_puzzles", "train_order_counts", "translate_aug",
-        "use_rope",
+        "use_rope", "data_suffix", "constraint_group_embed",
     ):
         if name not in eff:
             continue

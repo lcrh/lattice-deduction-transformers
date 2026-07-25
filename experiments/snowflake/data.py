@@ -44,6 +44,10 @@ GRID_ROWS = 3 * (R_MAX - R_MIN + 1)   # 15
 GRID_COLS = 2 * (Q_MAX - Q_MIN + 1)   # 10
 SEQ_LEN = GRID_ROWS * GRID_COLS       # 150
 VOCAB = 6
+# Canonical order 19 has 19 hex groups + 24 meeting-point groups.  Group-ID
+# augmentation samples present groups without replacement from this entire
+# range, even for smaller orders, so every embedding row is exercised.
+MAX_CONSTRAINT_GROUPS = 43
 
 
 def cell_to_grid_idx(q: int, r: int, direction: str) -> int:
@@ -98,6 +102,51 @@ def puzzle_to_state(puzzle_rec: dict) -> tuple[np.ndarray, np.ndarray, np.ndarra
     return x, y, mask
 
 
+def constraint_group_features(
+    puzzle_rec: dict,
+    n_group_ids: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Return randomized constraint-membership channels ``[SEQ_LEN, G]``.
+
+    Each constraint group receives a unique ID sampled without replacement
+    from the full ``[0, n_group_ids)`` vocabulary.  A cell has a 1 in every
+    group channel it belongs to (normally its hex group plus zero or more
+    meeting-point groups).  Re-sampling IDs whenever a puzzle is loaded makes
+    group identity exchangeable: the model can use equality/shared membership,
+    but cannot memorize that a particular ordinal means a particular location.
+    """
+    if n_group_ids <= 0:
+        raise ValueError(f"n_group_ids must be positive, got {n_group_ids}")
+
+    topology = puzzle_rec["topology"]
+    constraints = topology["constraints"]
+    if len(constraints) > n_group_ids:
+        raise ValueError(
+            f"puzzle has {len(constraints)} constraint groups, but only "
+            f"{n_group_ids} group IDs are available"
+        )
+
+    assigned_ids = rng.choice(
+        n_group_ids, size=len(constraints), replace=False
+    )
+    features = np.zeros((SEQ_LEN, n_group_ids), dtype=np.float32)
+    cell_positions = topology["cell_positions"]
+    for group, group_id in zip(constraints, assigned_ids):
+        cells = group["cells"] if isinstance(group, dict) else group
+        for cell_id in cells:
+            cp = cell_positions.get(str(cell_id), cell_positions.get(cell_id))
+            if cp is None:
+                raise ValueError(
+                    f"constraint references missing cell ID {cell_id}"
+                )
+            grid_idx = cell_to_grid_idx(
+                int(cp["q"]), int(cp["r"]), cp["direction"]
+            )
+            features[grid_idx, int(group_id)] = 1.0
+    return features
+
+
 # -----------------------------------------------------------------------------
 # Translation augmentation (E4 positional-confound mitigation).
 
@@ -107,7 +156,11 @@ def random_translate(
     y: np.ndarray,      # [SEQ_LEN, VOCAB]
     mask: np.ndarray,   # [SEQ_LEN] bool
     rng: np.random.Generator,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    group_features: np.ndarray | None = None,  # [SEQ_LEN, G]
+) -> (
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+    | tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+):
     """Randomly translate a puzzle within the 15x10 covering grid.
 
     Design.  Every hex cell (q, r, direction) maps to a grid slot via
@@ -119,8 +172,8 @@ def random_translate(
     slot by  3*dr_hex  and the grid col by  2*dq. Because the shift is a whole
     multiple of the sub-block size, the 6-direction internal layout of each hex
     cell is preserved exactly, and the transform is a pure permutation of grid
-    slots applied identically to x, y and mask (relabelling positions, never
-    touching the vocab channels).
+    slots applied identically to x, y, mask, and optional constraint-group
+    features (relabelling positions, never touching feature channels).
 
     Bounds check.  We compute the occupied bounding box (min/max row and col
     over `mask`), then sample the shift so that after shifting no occupied slot
@@ -140,7 +193,9 @@ def random_translate(
     """
     occ = np.where(mask)[0]
     if occ.size == 0:
-        return x, y, mask
+        if group_features is None:
+            return x, y, mask
+        return x, y, mask, group_features
     rows = occ // GRID_COLS
     cols = occ % GRID_COLS
     min_row, max_row = int(rows.min()), int(rows.max())
@@ -156,7 +211,9 @@ def random_translate(
     dr_hex = int(rng.integers(dr_lo, dr_hi + 1)) if dr_hi >= dr_lo else 0
     dq = int(rng.integers(dq_lo, dq_hi + 1)) if dq_hi >= dq_lo else 0
     if dr_hex == 0 and dq == 0:
-        return x, y, mask
+        if group_features is None:
+            return x, y, mask
+        return x, y, mask, group_features
 
     srow = 3 * dr_hex
     scol = 2 * dq
@@ -170,7 +227,11 @@ def random_translate(
     x_out[new_idx] = x[occ]
     y_out[new_idx] = y[occ]
     mask_out[new_idx] = True
-    return x_out, y_out, mask_out
+    if group_features is None:
+        return x_out, y_out, mask_out
+    group_out = np.zeros_like(group_features)
+    group_out[new_idx] = group_features[occ]
+    return x_out, y_out, mask_out, group_out
 
 
 # -----------------------------------------------------------------------------
@@ -208,6 +269,11 @@ class SnowflakeConfig:
     orders: list[int] | None = None
     translate_aug: bool = False
     return_orders: bool = False
+    # Opt-in explicit constraint structure.  When positive, each constraint is
+    # assigned a unique random ID from this full vocabulary and every token
+    # receives multi-hot membership channels for its groups.  Zero preserves
+    # the historical dataset return contract and model input exactly.
+    constraint_group_vocab: int = 0
 
 
 def _apply_sample_type(x, y, mask, sample_type, cfg, rng):
@@ -367,35 +433,49 @@ class SnowflakeDataset:
         self._pos += 1
         rec = self.puzzles[idx]
         x, y, mask = puzzle_to_state(rec)
+        group_features = None
+        if self.cfg.constraint_group_vocab > 0:
+            group_features = constraint_group_features(
+                rec, self.cfg.constraint_group_vocab, self.rng
+            )
         # E4 translation aug: shift the whole occupied region within the grid.
         # Applied BEFORE sample-type corruption so corruption operates on the
         # translated (blank) cells; the transform is a pure position relabelling
         # and commutes with sample-type logic (which is per-cell, position-blind).
         if self.cfg.translate_aug:
-            x, y, mask = random_translate(x, y, mask, self.rng)
+            translated = random_translate(
+                x, y, mask, self.rng, group_features=group_features
+            )
+            if group_features is None:
+                x, y, mask = translated
+            else:
+                x, y, mask, group_features = translated
         stype = self.rng.choice(self.type_names, p=self.type_probs)
         is_sat, y = _apply_sample_type(x, y, mask, stype, self.cfg, self.rng)
         order = int(rec["n"])
-        return x, y, mask, is_sat, order
+        return x, y, mask, is_sat, order, group_features
 
     def _prefetch_loop(self):
         try:
             while not self._stop.is_set():
-                bx, by, bm, bs, bo = [], [], [], [], []
+                bx, by, bm, bs, bo, bg = [], [], [], [], [], []
                 for _ in range(self.cfg.batch_size):
-                    x, y, mask, is_sat, order = self._next_sample()
+                    x, y, mask, is_sat, order, groups = self._next_sample()
                     bx.append(x); by.append(y); bm.append(mask); bs.append(is_sat)
                     bo.append(order)
+                    if groups is not None:
+                        bg.append(groups)
                 tx = torch.from_numpy(np.stack(bx))
                 ty = torch.from_numpy(np.stack(by))
                 tm = torch.from_numpy(np.stack(bm))
                 ts = torch.tensor(bs, dtype=torch.bool)
                 to = torch.tensor(bo, dtype=torch.long)
+                tg = torch.from_numpy(np.stack(bg)) if bg else None
                 # Retry the put on timeout so we notice self._stop promptly,
                 # but keep looping until the batch is enqueued or we're stopped.
                 while not self._stop.is_set():
                     try:
-                        self._queue.put((tx, ty, tm, ts, to), timeout=1.0)
+                        self._queue.put((tx, ty, tm, ts, to, tg), timeout=1.0)
                         break
                     except Exception:
                         continue
@@ -413,7 +493,10 @@ class SnowflakeDataset:
         By default returns the 4-tuple (x, y, mask, sat) that all existing
         callers unpack. When `cfg.return_orders` is True, returns the 5-tuple
         (x, y, mask, sat, orders) with `orders` a [B] long tensor of per-sample
-        puzzle order `n` (E4 per-order eval breakdown).
+        puzzle order `n` (E4 per-order eval breakdown).  When
+        `constraint_group_vocab > 0`, appends group features `[B, S, G]` to
+        either tuple.  Thus the opt-in contracts are `(x,y,mask,sat,groups)` or
+        `(x,y,mask,sat,orders,groups)`.
 
         Raises RuntimeError if the prefetch thread died (e.g. a bad puzzle
         record) rather than blocking forever.
@@ -423,9 +506,13 @@ class SnowflakeDataset:
             raise RuntimeError(
                 "SnowflakeDataset prefetch thread failed"
             ) from self._error
-        tx, ty, tm, ts, to = item
+        tx, ty, tm, ts, to, tg = item
+        if self.cfg.return_orders and tg is not None:
+            return tx, ty, tm, ts, to, tg
         if self.cfg.return_orders:
             return tx, ty, tm, ts, to
+        if tg is not None:
+            return tx, ty, tm, ts, tg
         return tx, ty, tm, ts
 
     def close(self):
