@@ -26,7 +26,9 @@ from experiments.sudoku.dpll import StepConfig
 from experiments.sudoku.ema import swap_in_ema_if_present
 from experiments.sudoku.solve import SolveConfig, solve
 from experiments.snowflake.data import SnowflakeConfig, SnowflakeDataset
-from experiments.snowflake.train import VOCAB, _build_state, _given_mask
+from experiments.snowflake.train import (
+    N_CHANNELS, VOCAB, _build_state, _given_mask,
+)
 
 
 app = modal.App("snowflake-eval-only")
@@ -51,11 +53,18 @@ def run(
     seq_drain_max_rounds: int = 200,
     dropout_p: float = 0.05,
     out_suffix: str = ".eval.fixed.json",
+    data_suffix: str = "",
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Loading: {checkpoint}", flush=True)
     ckpt = load_checkpoint(checkpoint)
     cfg = LoopedTransformerConfig(**ckpt["model_cfg"])
+    constraint_group_vocab = cfg.n_channels - N_CHANNELS
+    if constraint_group_vocab < 0:
+        raise ValueError(
+            f"checkpoint n_channels={cfg.n_channels} is smaller than "
+            f"Snowflake's legacy width {N_CHANNELS}"
+        )
     model = PowersetModel(cfg)
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device).eval()
@@ -77,16 +86,26 @@ def run(
     print(f"  params={sum(p.numel() for p in model.parameters()):,}", flush=True)
 
     eval_ds = SnowflakeDataset(SnowflakeConfig(
-        data_path=f"{DATA_MOUNT}/snowflake_test.parquet",
+        data_path=f"{DATA_MOUNT}/snowflake_test{data_suffix}.parquet",
         n_puzzles=n_eval, batch_size=n_eval, seed=200,
         zero_hint_weight=1.0, correct_hint_weight=0.0, error_hint_weight=0.0,
+        constraint_group_vocab=constraint_group_vocab,
     ))
-    x_all, y_all, mask_all, sat = eval_ds.next_batch(); eval_ds.close()
+    eval_batch = eval_ds.next_batch(); eval_ds.close()
+    if constraint_group_vocab > 0:
+        x_all, y_all, mask_all, sat, groups_all = eval_batch
+    else:
+        x_all, y_all, mask_all, sat = eval_batch
+        groups_all = None
     sat_mask = sat.bool()
     x = x_all[sat_mask].to(device).float()
     y = y_all[sat_mask].to(device).float()
     in_puzzle_mask = mask_all[sat_mask].to(device).bool()
-    state = _build_state(x, in_puzzle_mask)
+    group_features = (
+        groups_all[sat_mask].to(device).float()
+        if groups_all is not None else None
+    )
+    state = _build_state(x, in_puzzle_mask, group_features)
     given_mask = _given_mask(x)
     n = x.shape[0]
     print(f"Loaded {n}/{n_eval} SAT snowflake eval puzzles", flush=True)
@@ -231,6 +250,7 @@ def entrypoint(
     seq_drain_max_rounds: int = 200,
     dropout_p: float = 0.05,
     out_suffix: str = ".eval.fixed.json",
+    data_suffix: str = "",
 ):
     result = run.remote(
         checkpoint=checkpoint, n_eval=n_eval,
@@ -242,5 +262,6 @@ def entrypoint(
         seq_drain_max_rounds=seq_drain_max_rounds,
         dropout_p=dropout_p,
         out_suffix=out_suffix,
+        data_suffix=data_suffix,
     )
     print(f"\nFinal: {result}", flush=True)
