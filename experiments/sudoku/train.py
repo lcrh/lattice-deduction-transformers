@@ -60,6 +60,12 @@ class TrainConfig:
     bce_neg_mult: float = 0.5
     softmax_loss_weight: float = 0.2
     conflict_loss_weight: float = 1.0
+    # CoLT branch-policy BCE (λ_pol; ad3002/colt uses 0.25). Target is the
+    # branch-survival probability p* — the probability that a value sampled
+    # from the actual branch distribution at that cell keeps the known
+    # solution alive. 0.0 = baseline (no policy head supervision). Requires
+    # `model.policy_head=True`.
+    policy_loss_weight: float = 0.0
 
     # Augment toggle lives at `step.augment` (StepConfig). Both the
     # grad-tracked forward (`aug_forward`) and the no-grad
@@ -165,12 +171,29 @@ def _given_mask(orig_x: torch.Tensor) -> torch.Tensor:
 
 
 def _losses(out, state, orig_y, given_mask, is_sat, gt_conflict_target,
-            bce_pos_mult, bce_neg_mult, softmax_w, conflict_w):
+            bce_pos_mult, bce_neg_mult, softmax_w, conflict_w,
+            policy_w=0.0, temp_decide=1.5):
     B, S, C = state.shape
     device = state.device
     bce_target = state * orig_y
     pos_w = torch.full((B, 1, 1), bce_pos_mult, device=device)
     neg_w = torch.full((B, 1, 1), bce_neg_mult, device=device)
+
+    # CoLT policy target: branch-survival probability p* per cell, computed
+    # from the ITERATION-MEAN branch (softmax-head) logits, detached — the
+    # Algorithm-2 convention from ad3002/colt (colt/losses.py::policy_target).
+    # p*_i = Σ_{d alive in bce_target} softmax(sm_i / τ over alive)[d].
+    # Supervised only at multi-alive cells of non-⊥ (SAT) rows.
+    p_star = None
+    pol_mask = None
+    if policy_w > 0 and "policy" in out:
+        with torch.no_grad():
+            sm_mean = torch.stack(out["softmax"], dim=0).mean(dim=0)   # [B, S, C]
+            alive = state > 0.5
+            masked_sm = (sm_mean / temp_decide).masked_fill(~alive, float("-inf"))
+            probs = torch.nan_to_num(torch.softmax(masked_sm, dim=-1), nan=0.0)
+            p_star = (probs * (bce_target > 0.5).float()).sum(dim=-1)  # [B, S]
+            pol_mask = (alive.sum(dim=-1) >= 2) & is_sat.unsqueeze(-1)  # [B, S]
 
     # Cells where α has multiple alive channels — the model has multiple
     # legitimate options here, so we skip the softmax-CE supervision (which
@@ -198,6 +221,14 @@ def _losses(out, state, orig_y, given_mask, is_sat, gt_conflict_target,
             total = total + conflict_w * F.binary_cross_entropy_with_logits(
                 c_logits, gt_conflict_target.float(),
             )
+
+        # Policy BCE(σ(π), p*) over masked cells, every iteration (CoLT).
+        if pol_mask is not None and pol_mask.any():
+            pl = F.binary_cross_entropy_with_logits(
+                out["policy"][i], p_star.clamp(0.0, 1.0), reduction="none",
+            )
+            m = pol_mask.float()
+            total = total + policy_w * (pl * m).sum() / m.sum()
     return total / n_loops
 
 
@@ -360,6 +391,8 @@ def train(cfg: TrainConfig):
             is_sat_pre, gt_conflict_pre,
             cfg.bce_pos_mult, cfg.bce_neg_mult,
             cfg.softmax_loss_weight, cfg.conflict_loss_weight,
+            policy_w=cfg.policy_loss_weight,
+            temp_decide=cfg.step.temp_decide,
         )
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)

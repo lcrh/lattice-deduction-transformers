@@ -46,6 +46,18 @@ class LoopedTransformerConfig:
     use_rope: bool = False
     rope_base: float = 10000.0
 
+    # CoLT components (ad3002/colt), all default-off = baseline behavior:
+    # constraint-graph relational attention bias + normalized-coordinate MLP
+    # (replace the learned 2D positional tables; see transformer2d.py), and
+    # a per-cell branch-policy head π scoring "how safe is it to branch
+    # here" (trained against the branch-survival probability; replaces
+    # uniform-random branch-cell choice at inference).
+    use_rel_bias: bool = False
+    use_coord_mlp: bool = False
+    box_rows: int = 3
+    box_cols: int = 3
+    policy_head: bool = False
+
 
 class PowersetModel(nn.Module):
     """Looped transformer with normalized residual and input re-injection.
@@ -58,6 +70,7 @@ class PowersetModel(nn.Module):
     - bce_head: per-candidate keep/eliminate logits [B, S, C]
     - softmax_head: per-cell digit prediction logits [B, S, C]
     - conflict_head: grid-level SAT/UNSAT logit [B, 1] (requires cls_token=True)
+    - policy_head: per-cell branch-policy logit [B, S] (requires policy_head=True)
 
     Default forward returns mean-across-iterations (averaged sigmoid/logits).
     return_all=True returns per-iteration outputs for training loss.
@@ -85,6 +98,10 @@ class PowersetModel(nn.Module):
             pre_norm=cfg.pre_norm,
             use_rope=cfg.use_rope,
             rope_base=cfg.rope_base,
+            use_rel_bias=cfg.use_rel_bias,
+            use_coord_mlp=cfg.use_coord_mlp,
+            box_rows=cfg.box_rows,
+            box_cols=cfg.box_cols,
         )
         self.backbone = Transformer2D(backbone_cfg)
         self.loop_norm = nn.LayerNorm(cfg.dim)
@@ -92,6 +109,8 @@ class PowersetModel(nn.Module):
         self.softmax_head = nn.Linear(cfg.dim, cfg.n_channels, bias=True)
         if cfg.cls_token:
             self.conflict_head = nn.Linear(cfg.dim, 1, bias=True)
+        if cfg.policy_head:
+            self.policy_head = nn.Linear(cfg.dim, 1, bias=True)
 
     def forward(
         self,
@@ -117,6 +136,7 @@ class PowersetModel(nn.Module):
         all_softmax = []
         all_cls = []
         all_conflict = []
+        all_policy = []
 
         for _ in range(self.cfg.n_loops):
             h = h + h0  # re-inject input
@@ -136,6 +156,8 @@ class PowersetModel(nn.Module):
             if self.cfg.cls_token:
                 all_cls.append(cls_h)
                 all_conflict.append(self.conflict_head(cls_h))
+            if self.cfg.policy_head:
+                all_policy.append(self.policy_head(h).squeeze(-1))  # [B, S]
 
         result = {}
         if return_all:
@@ -144,12 +166,16 @@ class PowersetModel(nn.Module):
             if self.cfg.cls_token:
                 result["cls"] = all_cls
                 result["conflict"] = all_conflict
+            if self.cfg.policy_head:
+                result["policy"] = all_policy
         elif use_final:
             result["bce"] = all_bce[-1]
             result["softmax"] = all_softmax[-1]
             if self.cfg.cls_token:
                 result["cls"] = all_cls[-1]
                 result["conflict"] = all_conflict[-1]
+            if self.cfg.policy_head:
+                result["policy"] = all_policy[-1]
         else:
             # Mean across iterations
             result["bce"] = torch.stack(all_bce, dim=0).mean(dim=0)
@@ -157,5 +183,7 @@ class PowersetModel(nn.Module):
             if self.cfg.cls_token:
                 result["cls"] = torch.stack(all_cls, dim=0).mean(dim=0)
                 result["conflict"] = self.conflict_head(result["cls"])
+            if self.cfg.policy_head:
+                result["policy"] = torch.stack(all_policy, dim=0).mean(dim=0)
 
         return result

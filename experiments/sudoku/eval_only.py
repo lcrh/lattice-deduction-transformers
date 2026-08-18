@@ -17,6 +17,7 @@ from torch import nn
 
 from lattice_diffusion.data.sudoku_extreme import SudokuExtremeConfig, SudokuExtremeDataset
 from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig, PowersetModel
+from lattice_diffusion.models.transformer2d import _RelBiasAttention
 from lattice_diffusion.modal.image import (
     CHECKPOINT_MOUNT, DATA_MOUNT,
     checkpoint_volume, data_volume, hf_secret, image,
@@ -26,6 +27,7 @@ from lattice_diffusion.training.utils.checkpoint import load_checkpoint
 from experiments.sudoku.dpll import StepConfig
 from experiments.sudoku.ema import swap_in_ema_if_present
 from experiments.sudoku.solve import SolveConfig, solve
+from experiments.sudoku.union_frames import UnionFrames
 
 
 app = modal.App("sudoku-eval-only")
@@ -53,6 +55,12 @@ def run(
     out_suffix: str = ".eval.fixed.json",
     split: str = "test",
     compile: bool = False,
+    search: str = "restart",
+    use_ban_set: bool = True,
+    policy_mode: str = "random",
+    union_frames: int = 1,
+    union_agg: str = "union",
+    seed: int = 0,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.set_float32_matmul_precision("high")
@@ -76,11 +84,23 @@ def run(
             elif isinstance(m, nn.MultiheadAttention):
                 m.dropout = dropout_p
                 n_mha += 1
+            elif isinstance(m, _RelBiasAttention):
+                m.attn_dropout_p = dropout_p
+                n_mha += 1
         model.train()
         print(f"  Dropout-noise eval: overrode {n_drop} nn.Dropout + "
               f"{n_mha} MHA-internal-attn-dropout layers to p={dropout_p}, "
               f"model in train() mode", flush=True)
     print(f"  params={sum(p.numel() for p in model.parameters()):,}", flush=True)
+    if union_frames > 1:
+        # CoLT H2: test-time union ensembling over K digit-permutation
+        # frames (no retraining). See experiments/sudoku/union_frames.py.
+        model = UnionFrames(
+            model, n_frames=union_frames, agg=union_agg,
+            generator=torch.Generator().manual_seed(seed),
+        )
+        print(f"  UnionFrames eval wrapper: K={union_frames} agg={union_agg}",
+              flush=True)
 
     eval_ds = SudokuExtremeDataset(SudokuExtremeConfig(
         cache_dir=DATA_MOUNT, split=split, n_puzzles=n_eval,
@@ -104,10 +124,12 @@ def run(
         temp_decide=temp_decide,
         cls_threshold=cls_threshold,
         augment=augment,
+        policy_mode=policy_mode,
     )
     solve_cfg = SolveConfig(
         step=step_cfg, max_rounds=max_rounds,
         n_chains=n_chains, batch_size=batch_size,
+        search=search, use_ban_set=use_ban_set,
         estimate_sequential=estimate_sequential,
         seq_drain_max_rounds=seq_drain_max_rounds,
         log_per_round_fill=log_per_round_fill,
@@ -117,7 +139,7 @@ def run(
           flush=True)
     print(f"  step: threshold={threshold} (deterministic) "
           f"temp_dec={temp_decide} cls_threshold={cls_threshold} "
-          f"augment={augment}", flush=True)
+          f"augment={augment} search={search} policy={policy_mode}", flush=True)
 
     t0 = time.time()
     res = solve(model, x, y, given_mask, solve_cfg)
@@ -133,9 +155,15 @@ def run(
     cls_p = res.diag_conflict_tp / max(res.diag_conflict_tp + res.diag_conflict_fp, 1)
     cls_r = res.diag_conflict_tp / max(res.diag_conflict_tp + res.diag_conflict_fn, 1)
 
+    total_suppressed = int(res.n_suppressed.sum().item())
+    total_backjumps = int(res.n_backjumps.sum().item())
+
     print(f"\n{'='*60}\nRESULT (streaming-queue solver, {n} puzzles)\n{'='*60}", flush=True)
     print(f"  correct={n_correct}/{n}  wrong={n_wrong}  timeouts={n_timeout}", flush=True)
     print(f"  total_calls={res.model_calls}  avg/correct={avg_calls:.1f}", flush=True)
+    if search == "dfs":
+        print(f"  DFS: suppressed_wrong_completions={total_suppressed}  "
+              f"backjumps={total_backjumps}", flush=True)
     print(f"  Deduction soundness: {res.diag_total_unsound_deductions} unsound / "
           f"{res.diag_total_deduced} deduced  (rate={unsound_rate:.4%})", flush=True)
     print(f"  Conflict head P={cls_p:.3f} R={cls_r:.3f} "
@@ -154,12 +182,17 @@ def run(
             "n_chains": n_chains, "batch_size": batch_size,
             "max_rounds": max_rounds,
             "augment": augment,
+            "search": search, "use_ban_set": use_ban_set,
+            "policy_mode": policy_mode,
+            "union_frames": union_frames, "union_agg": union_agg,
         },
         "summary": {
             "correct": n_correct, "wrong": n_wrong, "timeouts": n_timeout,
             "total_calls": res.model_calls,
             "avg_calls_per_correct": avg_calls,
             "avg_resets": float(res.n_resets.float().mean().item()),
+            "suppressed_wrong_completions": total_suppressed,
+            "backjumps": total_backjumps,
         },
         "diag": {
             "total_deduced": res.diag_total_deduced,
@@ -206,6 +239,8 @@ def run(
                 "round_solved": rs,
                 "n_resets": int(res.n_resets[i].item()),
                 "forwards_unbatched": forwards_unbatched,
+                "n_suppressed": int(res.n_suppressed[i].item()),
+                "n_backjumps": int(res.n_backjumps[i].item()),
             }
             if estimate_sequential:
                 seq_v = int(res.forwards_seq[i].item())
@@ -246,6 +281,12 @@ def entrypoint(
     out_suffix: str = ".eval.fixed.json",
     split: str = "test",
     compile: bool = False,
+    search: str = "restart",
+    use_ban_set: bool = True,
+    policy_mode: str = "random",
+    union_frames: int = 1,
+    union_agg: str = "union",
+    seed: int = 0,
 ):
     result = run.remote(
         checkpoint=checkpoint, n_eval=n_eval,
@@ -260,5 +301,11 @@ def entrypoint(
         out_suffix=out_suffix,
         split=split,
         compile=compile,
+        search=search,
+        use_ban_set=use_ban_set,
+        policy_mode=policy_mode,
+        union_frames=union_frames,
+        union_agg=union_agg,
+        seed=seed,
     )
     print(f"\nFinal: {result}", flush=True)

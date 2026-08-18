@@ -48,6 +48,25 @@ class SolveConfig:
     n_chains: int = 64          # chains per puzzle (slightly above HP's 48)
     batch_size: int = 512       # forward batch size; mixes M = batch_size//n_chains puzzles
 
+    # Search mode (CoLT §3.3, ad3002/colt):
+    #   "restart" — LDT baseline: conflict ⇒ reset the chain to the original
+    #               puzzle; first all-singleton chain is accepted (no external
+    #               verification — wrong grids can be emitted, counted in
+    #               `res.wrong`).
+    #   "dfs"     — CoLT solver: each chain keeps a decision stack; on
+    #               conflict it backjumps (pops to the deepest decision with
+    #               untried alive values, excludes the failed value, resumes).
+    #               A completed grid is only ACCEPTED after passing the
+    #               external sudoku constraint verifier (verify-or-abstain);
+    #               a failed completion goes into a per-puzzle nogood ban set
+    #               shared across the puzzle's chains — any chain that
+    #               re-derives it is pruned immediately instead of
+    #               re-verified. Stack exhaustion ⇒ fresh restart.
+    # Branch-cell policy for both modes lives at `step.policy_mode`
+    # (random / mrv / learned).
+    search: str = "restart"
+    use_ban_set: bool = True    # dfs only: per-puzzle nogood ban set
+
     # Optional per-puzzle "if K=1 sequential" cost estimate.
     # When ON, each chain reset is recorded as an "attempt"; on the first
     # winning solve, the slot enters drain mode and continues running until
@@ -128,6 +147,32 @@ class SolveResult:
                                  # the streaming-queue solver. -1 if puzzle
                                  # was never filled (only possible if P > Q
                                  # and we exit before all queued).
+    # ----- DFS-mode diagnostics (zeros in restart mode). -----
+    n_suppressed: torch.Tensor = None  # [P] long — wrong completions caught
+                                       # by the verifier or the ban set
+                                       # (CoLT's "suppressed wrong grids")
+    n_backjumps: torch.Tensor = None   # [P] long — total decision-stack pops
+
+
+def _sudoku_valid(digits: torch.Tensor, n: int, box_rows: int, box_cols: int) -> bool:
+    """External constraint verifier for a completed grid. `digits`: [S] long
+    in [0, n). True iff every row / column / box is a permutation of 0..n-1.
+    Givens are automatically respected: the lattice is monotone, so a
+    committed grid can only ever refine the original clues."""
+    g = digits.view(n, n)
+    target = torch.arange(n, device=digits.device)
+
+    def _ok(v: torch.Tensor) -> bool:
+        return bool(torch.equal(v.reshape(-1).sort().values, target))
+
+    for i in range(n):
+        if not _ok(g[i]) or not _ok(g[:, i]):
+            return False
+    for br in range(0, n, box_rows):
+        for bc in range(0, n, box_cols):
+            if not _ok(g[br:br + box_rows, bc:bc + box_cols]):
+                return False
+    return True
 
 
 def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
@@ -160,6 +205,32 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
     M = max(1, cfg.batch_size // K)
     B = M * K
     device = puzzle.device
+
+    dfs = cfg.search == "dfs"
+    if cfg.search not in ("restart", "dfs"):
+        raise ValueError(f"unknown search mode {cfg.search!r}")
+    if dfs:
+        # DFS mode is sudoku-only (external constraint verifier assumes a
+        # full n×n all-different grid) and doesn't support the optional
+        # instrumentation paths.
+        assert in_puzzle_mask is None, "dfs search does not support in_puzzle_mask"
+        assert cfg.step.vocab_dim is None, "dfs search does not support vocab_dim"
+        assert not cfg.estimate_sequential, "dfs search does not support estimate_sequential"
+        assert not cfg.log_per_round_fill, "dfs search does not support log_per_round_fill"
+        n_grid_dfs = int(round(S ** 0.5))
+        assert n_grid_dfs * n_grid_dfs == S
+        box_rows_dfs = int(round(n_grid_dfs ** 0.5))
+        box_cols_dfs = n_grid_dfs // box_rows_dfs
+        # Per-chain decision stacks: frames of (pre-pin state, cell, branch
+        # distribution at decision time, tried-value mask). Per-slot nogood
+        # ban set of verified-failed complete grids, shared across the
+        # slot's K chains.
+        dfs_stacks: list[list[dict]] = [[] for _ in range(B)]
+        dfs_ban: list[set[bytes]] = [set() for _ in range(M)]
+        slot_suppressed = torch.zeros(M, dtype=torch.long, device=device)
+        slot_backjumps = torch.zeros(M, dtype=torch.long, device=device)
+    n_suppressed_out = torch.zeros(P, dtype=torch.long, device=device)
+    n_backjumps_out = torch.zeros(P, dtype=torch.long, device=device)
 
     # Eval never passes `orig_y` to dpll_step → deduction is always
     # deterministic threshold, training-only stochastic kill is off.
@@ -303,12 +374,164 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
             slot_drain_start[slot] = -1
             slot_attempt_dur_sum[slot] = 0
             slot_attempt_dur_count[slot] = 0
+        if dfs:
+            for b in range(slot * K, (slot + 1) * K):
+                dfs_stacks[b].clear()
+            dfs_ban[slot].clear()
+            slot_suppressed[slot] = 0
+            slot_backjumps[slot] = 0
 
     def evict(slot: int, p: int) -> None:
         n_resets_out[p] = slot_resets[slot]
         puzzle_calls_out[p] = total_calls - slot_calls_start[slot]
+        if dfs:
+            n_suppressed_out[p] = slot_suppressed[slot]
+            n_backjumps_out[p] = slot_backjumps[slot]
         slot_puzzle[slot] = -1
         chain_done[slot * K:(slot + 1) * K] = True  # freeze rows so forward is benign
+
+    def _dfs_round(new_state, conflict, just_solved_chain, info,
+                   evictions: list[int]) -> None:
+        """One round of the CoLT DFS solver (per-chain decision stacks +
+        backjumping + per-puzzle nogood ban set), operating on the
+        post-deduce CANONICAL `new_state` (dpll_step ran with
+        do_decide=False). Mirrors ad3002/colt `dfs_solve`."""
+        nonlocal n_correct_running, n_wrong_running, n_timeout_running
+        sm_can = info["sm_logits"]            # [B, S, C] canonical branch logits
+        pol_can = info.get("policy_logits")   # [B, S] canonical, or None
+        if cfg.step.policy_mode == "learned" and pol_can is None:
+            raise ValueError(
+                "policy_mode='learned' requires a model with policy_head=True")
+        tau = cfg.step.temp_decide
+        for slot in range(M):
+            p = int(slot_puzzle[slot].item())
+            if p < 0:
+                continue
+            lo, hi = slot * K, (slot + 1) * K
+            accepted = False
+            for b in range(lo, hi):
+                if bool(chain_done[b]):
+                    continue
+                hit_conflict = bool(conflict[b])
+                if bool(just_solved_chain[b]):
+                    digits = new_state[b].argmax(dim=-1)          # [S], all singleton
+                    key = bytes(digits.cpu().tolist())
+                    if cfg.use_ban_set and key in dfs_ban[slot]:
+                        slot_suppressed[slot] += 1
+                        hit_conflict = True   # known-bad completion: prune
+                    elif _sudoku_valid(digits, n_grid_dfs, box_rows_dfs, box_cols_dfs):
+                        # Verified emission (verify-or-abstain): accept.
+                        solved_out[p] = True
+                        round_solved_out[p] = slot_round[slot]
+                        solutions_out[p] = new_state[b]
+                        is_correct, label = _label(new_state[b], ground_truth[p])
+                        correct_out[p] = is_correct
+                        wrong_out[p] = not is_correct
+                        if is_correct:
+                            n_correct_running += 1
+                        else:
+                            n_wrong_running += 1
+                        if verbose:
+                            print(f"  {p:>7d} | {label:>13} | "
+                                  f"{int(slot_round[slot].item()):>6d} | "
+                                  f"{int(slot_resets[slot].item()):>7d} | "
+                                  f"{total_calls:>8d} || "
+                                  f"{n_correct_running}/{n_wrong_running}/{n_timeout_running}",
+                                  flush=True)
+                        evictions.append(slot)
+                        accepted = True
+                        break
+                    else:
+                        # Wrong completion: record the nogood, treat the
+                        # leaf as a conflict.
+                        if cfg.use_ban_set:
+                            dfs_ban[slot].add(key)
+                        slot_suppressed[slot] += 1
+                        hit_conflict = True
+                if hit_conflict:
+                    # Backjump: pop to the deepest decision with untried
+                    # alive values, exclude the failed value, resume.
+                    pops = 0
+                    resumed = False
+                    stack = dfs_stacks[b]
+                    while stack:
+                        f = stack[-1]
+                        alive = f["x"][f["cell"]] > 0.5
+                        remaining = alive & ~f["tried"]
+                        if bool(remaining.any()):
+                            probs = f["probs"].masked_fill(~remaining, 0.0)
+                            total = probs.sum()
+                            if float(total.item()) <= 0.0:
+                                probs = remaining.float()
+                                total = probs.sum()
+                            probs = probs / total
+                            d = int(torch.multinomial(probs, 1).item())
+                            f["tried"][d] = True
+                            x_new = f["x"].clone()
+                            x_new[f["cell"]] = 0.0
+                            x_new[f["cell"], d] = 1.0
+                            new_state[b] = x_new
+                            resumed = True
+                            break
+                        stack.pop()
+                        pops += 1
+                    slot_backjumps[slot] += pops
+                    if not resumed:
+                        # Stack exhausted ⇒ fresh restart (chains stay
+                        # diverse through sampled value orderings).
+                        new_state[b] = original[b]
+                        slot_resets[slot] += 1
+                    continue
+                # Active chain: commit one decision (push a frame, pin value).
+                st = new_state[b]
+                counts = (st > 0.5).sum(dim=-1)                   # [S]
+                multi = counts >= 2
+                if not bool(multi.any()):
+                    continue
+                mode = cfg.step.policy_mode
+                if mode == "learned":
+                    g = -torch.log(-torch.log(
+                        torch.rand(S, device=device).clamp_min(1e-9)))
+                    score = (pol_can[b] + g).masked_fill(~multi, float("-inf"))
+                    cell = int(score.argmax().item())
+                elif mode == "mrv":
+                    tie = torch.rand(S, device=device)
+                    score = (-counts.float() + 0.01 * tie).masked_fill(
+                        ~multi, float("-inf"))
+                    cell = int(score.argmax().item())
+                else:
+                    idx = multi.nonzero(as_tuple=True)[0]
+                    cell = int(idx[torch.randint(idx.numel(), (1,), device=device)].item())
+                alive_at = st[cell] > 0.5
+                if tau > 0:
+                    logits = (sm_can[b, cell] / tau).masked_fill(
+                        ~alive_at, float("-inf"))
+                    probs = torch.softmax(logits, dim=-1)
+                else:
+                    logits = sm_can[b, cell].masked_fill(~alive_at, float("-inf"))
+                    probs = torch.zeros(C, device=device)
+                    probs[int(logits.argmax().item())] = 1.0
+                d = int(torch.multinomial(probs, 1).item())
+                frame = {"x": st.clone(), "cell": cell, "probs": probs,
+                         "tried": torch.zeros(C, dtype=torch.bool, device=device)}
+                frame["tried"][d] = True
+                dfs_stacks[b].append(frame)
+                new_state[b, cell] = 0.0
+                new_state[b, cell, d] = 1.0
+            if accepted:
+                continue
+            slot_round[slot] += 1
+            # Per-slot timeout: never produced a verified emission.
+            if int(slot_round[slot].item()) >= cfg.max_rounds:
+                evictions.append(slot)
+                n_timeout_running += 1
+                if verbose:
+                    print(f"  {p:>7d} | {'TIMEOUT':>13} | "
+                          f"{int(slot_round[slot].item()):>6d} | "
+                          f"{int(slot_resets[slot].item()):>7d} | "
+                          f"{total_calls:>8d} || "
+                          f"{n_correct_running}/{n_wrong_running}/{n_timeout_running}",
+                          flush=True)
 
     # Initial fill.
     for slot in range(min(M, P)):
@@ -321,6 +544,7 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         new_state, conflict, just_solved_chain, _, info = dpll_step(
             model, state, given_mask_b, cfg.step,
             in_puzzle_mask=in_puzzle_mask_b, want_stats=False,
+            do_decide=not dfs,   # dfs makes its own per-chain decisions below
         )
         total_calls += 1
 
@@ -413,7 +637,9 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         new_state = torch.where(chain_done.view(-1, 1, 1), state, new_state)
 
         evictions: list[int] = []
-        for slot in range(M):
+        if dfs:
+            _dfs_round(new_state, conflict, just_solved_chain, info, evictions)
+        for slot in ([] if dfs else range(M)):
             p = int(slot_puzzle[slot].item())
             if p < 0:
                 continue
@@ -596,4 +822,6 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         decision_bitflips_per_round=decision_bitflips_out,
         n_givens=n_givens_out,
         puzzle_calls=puzzle_calls_out,
+        n_suppressed=n_suppressed_out,
+        n_backjumps=n_backjumps_out,
     )

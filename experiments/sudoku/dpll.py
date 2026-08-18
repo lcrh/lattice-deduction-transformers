@@ -43,9 +43,12 @@ from experiments.sudoku.aug import (
     apply_aug_mask,
     apply_aug_state,
     build_dihedral_cell_perms,
+    invert_aug_cellwise,
     invert_aug_state,
     sample_chain_augs,
 )
+
+POLICY_MODES = ("random", "mrv", "learned")
 
 
 @dataclass
@@ -77,6 +80,13 @@ class StepConfig:
     # semantics and shuffling them would break the data. Inert when
     # `augment=False`.
     permute_digits: bool = True
+    # Branch-cell selection for the decide step (CoLT §3.1 ablation grid):
+    #   "random"  — uniform over multi-alive cells (LDT baseline; control).
+    #   "mrv"     — classical minimum-remaining-values heuristic (fewest
+    #               alive candidates first, random tie-break).
+    #   "learned" — Gumbel-sample ∝ softmax(policy-head logits) restricted
+    #               to multi-alive cells (requires model policy_head=True).
+    policy_mode: str = "random"
 
 
 # Cache of per-(n, device) cell permutations so we don't rebuild them on
@@ -102,6 +112,7 @@ def dpll_step(
     orig_y: torch.Tensor | None = None,   # [B, S, C] one-hot GT; train-only; CANONICAL
     in_puzzle_mask: torch.Tensor | None = None,   # [B, S] bool, CANONICAL — cells active in this puzzle
     want_stats: bool = True,
+    do_decide: bool = True,
 ):
     """One unified DPLL-style step (unit propagation + branching +
     conflict detection). Returns (new_state, conflict, solved, out, info).
@@ -208,8 +219,12 @@ def dpll_step(
     solved = all_singleton & ~conflict
     can_decide = ~conflict & ~solved            # [B]
 
-    # ===== Decision: uniform multi-alive cell, softmax-sample digit (aug) =====
-    if can_decide.any():
+    # ===== Decision: policy-selected multi-alive cell, softmax-sample digit
+    # (aug frame). `cfg.policy_mode` picks the branch cell: "random" is the
+    # LDT baseline (uniform); "mrv"/"learned" are the CoLT search policies.
+    # `do_decide=False` skips the decision entirely (DFS solver does its own
+    # per-chain decisions with a stack; see solve.py).
+    if do_decide and can_decide.any():
         cd_b_idx = can_decide.nonzero(as_tuple=True)[0]              # [N_cd]
         cd_state = new_state_aug[cd_b_idx]                           # [N_cd, S, C]
         # Multi-alive over vocab channels only (so an in-puzzle cell with
@@ -219,7 +234,24 @@ def dpll_step(
             # Mask out out-of-puzzle cells from the decision pool — they
             # have sum>1.5 only by accident, but explicit gate is safer.
             cd_multi_alive = cd_multi_alive * ip_aug[cd_b_idx].float()
-        cell_idx = torch.multinomial(cd_multi_alive, 1).squeeze(-1)
+        if cfg.policy_mode == "random":
+            cell_idx = torch.multinomial(cd_multi_alive, 1).squeeze(-1)
+        elif cfg.policy_mode == "mrv":
+            counts = cd_state[..., :vd].sum(dim=-1)                  # [N_cd, S]
+            tie = torch.rand_like(counts)
+            score = (-counts + 0.01 * tie).masked_fill(
+                cd_multi_alive < 0.5, float("-inf"))
+            cell_idx = score.argmax(dim=1)
+        elif cfg.policy_mode == "learned":
+            assert "policy" in out, (
+                "policy_mode='learned' requires a model with policy_head=True")
+            pol = out["policy"][cd_b_idx]                            # [N_cd, S] aug frame
+            g = -torch.log(-torch.log(
+                torch.rand_like(pol).clamp_min(1e-9)))
+            score = (pol + g).masked_fill(cd_multi_alive < 0.5, float("-inf"))
+            cell_idx = score.argmax(dim=1)
+        else:
+            raise ValueError(f"unknown policy_mode {cfg.policy_mode!r}")
 
         N_cd = cd_b_idx.shape[0]
         cd_arange = torch.arange(N_cd, device=device)
@@ -269,6 +301,20 @@ def dpll_step(
         # Skip the 6 .item() calls entirely. `deduce_mask` is a tensor and
         # free to include; `solve()` reads it for soundness diagnostics.
         info = {"deduce_mask": deduce_mask}
+    if not do_decide:
+        # DFS solver path: it makes its own decisions in the CANONICAL
+        # frame, so hand it canonical-frame branch logits (softmax head)
+        # and policy logits (cell-wise; digit-perm doesn't apply).
+        if cfg.augment:
+            info["sm_logits"] = invert_aug_state(
+                sm_logits, digit_perm, dih_idx, cell_perms)
+            if "policy" in out:
+                info["policy_logits"] = invert_aug_cellwise(
+                    out["policy"], dih_idx, cell_perms)
+        else:
+            info["sm_logits"] = sm_logits
+            if "policy" in out:
+                info["policy_logits"] = out["policy"]
     # Always expose aug params and aug-frame inputs alongside info — the
     # trainer's grad forward typically uses `aug_forward()` directly to
     # get its own aug, but exposing the no-grad aug here keeps the

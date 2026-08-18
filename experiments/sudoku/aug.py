@@ -136,6 +136,21 @@ def apply_aug_mask(
     return mask.gather(1, cell_perm)
 
 
+def invert_aug_cellwise(
+    t: torch.Tensor,            # [N, S] (any dtype) — per-cell, no channel dim
+    dih_idx: torch.Tensor | None,      # [N] long, or None for digit-perm-only
+    cell_perms: torch.Tensor | None,   # [8, S] long, or None for digit-perm-only
+) -> torch.Tensor:
+    """Undo `apply_aug_mask` on a per-cell tensor (e.g. policy logits).
+    Digit-perm has no effect on [N, S] tensors; only the spatial cell perm
+    is inverted (gather with the argsort-inverse of each row's perm)."""
+    if cell_perms is None or dih_idx is None:
+        return t
+    cell_perm = cell_perms[dih_idx]                              # [N, S]
+    inv_cell = cell_perm.argsort(dim=-1)
+    return t.gather(1, inv_cell)
+
+
 def invert_aug_state(
     state_aug: torch.Tensor,    # [N, S, C]
     digit_perm: torch.Tensor,   # [N, C] long

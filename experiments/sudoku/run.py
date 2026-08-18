@@ -48,6 +48,15 @@ _RUN_PARAMS: tuple[tuple[str, object], ...] = (
     ("eval_dropout_p",           0.05),
     ("n_loops",                  16),
     ("pre_norm",                 True),
+    # ---- CoLT components (ad3002/colt), on by default on this branch ----
+    ("use_rel_bias",             True),
+    ("use_coord_mlp",            True),
+    ("policy_loss_weight",       0.25),
+    ("policy_mode",              "learned"),
+    ("search",                   "dfs"),
+    ("use_ban_set",              True),
+    ("eval_union_frames",        1),
+    ("eval_union_agg",           "union"),
 )
 
 
@@ -77,6 +86,7 @@ def _print_run_config(values: dict) -> None:
 
 from lattice_diffusion.data.sudoku_extreme import SudokuExtremeConfig, SudokuExtremeDataset
 from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig, PowersetModel
+from lattice_diffusion.models.transformer2d import _RelBiasAttention
 from lattice_diffusion.modal.image import (
     CHECKPOINT_MOUNT, DATA_MOUNT,
     checkpoint_volume, data_volume, hf_secret, image,
@@ -87,6 +97,7 @@ from experiments.sudoku.dpll import StepConfig
 from experiments.sudoku.ema import swap_in_ema_if_present
 from experiments.sudoku.solve import SolveConfig, solve
 from experiments.sudoku.train import TrainConfig, train
+from experiments.sudoku.union_frames import UnionFrames
 
 
 app = modal.App("sudoku")
@@ -130,6 +141,14 @@ def run(
     eval_dropout_p: float = 0.05,
     n_loops: int = 16,
     pre_norm: bool = True,
+    use_rel_bias: bool = True,
+    use_coord_mlp: bool = True,
+    policy_loss_weight: float = 0.25,
+    policy_mode: str = "learned",
+    search: str = "dfs",
+    use_ban_set: bool = True,
+    eval_union_frames: int = 1,
+    eval_union_agg: str = "union",
 ):
     # Snapshot the call-site arg values BEFORE any local mutation, then dump
     # the config table. (Snapshot locals() outside the comprehension —
@@ -147,11 +166,15 @@ def run(
         temp_decide=temp_decide,
         cls_threshold=cls_threshold,
         augment=augment,
+        policy_mode=policy_mode,
     )
     model_cfg = LoopedTransformerConfig(
         cls_token=conflict_loss_weight > 0,
         n_loops=n_loops,
         pre_norm=pre_norm,
+        use_rel_bias=use_rel_bias,
+        use_coord_mlp=use_coord_mlp,
+        policy_head=policy_loss_weight > 0,
     )
     ckpt_path = train(TrainConfig(
         steps=steps,
@@ -164,6 +187,7 @@ def run(
         softmax_loss_weight=softmax_loss_weight,
         conflict_loss_weight=conflict_loss_weight,
         warmup_fraction=warmup_fraction,
+        policy_loss_weight=policy_loss_weight,
         step=step_cfg,
         max_age=max_age,
         use_ema=use_ema,
@@ -204,10 +228,23 @@ def run(
             elif isinstance(m, nn.MultiheadAttention):
                 m.dropout = eval_dropout_p
                 n_mha += 1
+            elif isinstance(m, _RelBiasAttention):
+                m.attn_dropout_p = eval_dropout_p
+                n_mha += 1
         model.train()
         print(f"  Dropout-noise eval: overrode {n_drop} nn.Dropout + "
               f"{n_mha} MHA-internal-attn-dropout layers to p={eval_dropout_p}, "
               f"model in train() mode", flush=True)
+
+    if eval_union_frames > 1:
+        # CoLT H2: test-time union ensembling over K digit-permutation
+        # frames (no retraining). See experiments/sudoku/union_frames.py.
+        model = UnionFrames(
+            model, n_frames=eval_union_frames, agg=eval_union_agg,
+            generator=torch.Generator().manual_seed(seed),
+        )
+        print(f"  UnionFrames eval wrapper: K={eval_union_frames} "
+              f"agg={eval_union_agg}", flush=True)
 
     # Eval data: seed=200, zero_hint_weight=1.0 (all SAT), n=n_eval_puzzles.
     eval_ds = SudokuExtremeDataset(SudokuExtremeConfig(
@@ -232,6 +269,7 @@ def run(
     solve_cfg = SolveConfig(
         step=eval_step_cfg, max_rounds=eval_max_rounds,
         n_chains=eval_n_chains, batch_size=eval_batch_size,
+        search=search, use_ban_set=use_ban_set,
         estimate_sequential=estimate_sequential,
         seq_drain_max_rounds=seq_drain_max_rounds,
     )
@@ -253,9 +291,15 @@ def run(
     cls_p = res.diag_conflict_tp / max(res.diag_conflict_tp + res.diag_conflict_fp, 1)
     cls_r = res.diag_conflict_tp / max(res.diag_conflict_tp + res.diag_conflict_fn, 1)
 
+    total_suppressed = int(res.n_suppressed.sum().item())
+    total_backjumps = int(res.n_backjumps.sum().item())
+
     print(f"\n{'='*60}\nRESULT SUMMARY\n{'='*60}", flush=True)
     print(f"  correct={n_correct}/{n}  wrong={n_wrong}  timeouts={n_timeout}  "
           f"n_chains={res.n_chains}", flush=True)
+    if search == "dfs":
+        print(f"  DFS: suppressed_wrong_completions={total_suppressed}  "
+              f"backjumps={total_backjumps}", flush=True)
     print(f"  Total model calls: {res.model_calls}  "
           f"(amortized: {res.model_calls / max(n_correct, 1):.1f} calls/correct)",
           flush=True)
@@ -289,6 +333,9 @@ def run(
         "avg_resets": avg_resets,
         "step_cfg": asdict(step_cfg),
         "max_rounds": eval_max_rounds,
+        "search": search,
+        "suppressed_wrong_completions": total_suppressed,
+        "backjumps": total_backjumps,
         "train_wallclock": train_wallclock,
         "diag": {
             "total_deduced": res.diag_total_deduced,
@@ -351,6 +398,8 @@ def run(
                 "n_givens": int(n_givens_per_puzzle[i]),
                 "puzzle_calls": int(res.puzzle_calls[i].item()),
                 "forwards_unbatched": forwards_unbatched,
+                "n_suppressed": int(res.n_suppressed[i].item()),
+                "n_backjumps": int(res.n_backjumps[i].item()),
             }) + "\n")
     checkpoint_volume.commit()
 
@@ -394,6 +443,14 @@ def entrypoint(
     eval_dropout_p: float = 0.05,
     n_loops: int = 16,
     pre_norm: bool = True,
+    use_rel_bias: bool = True,
+    use_coord_mlp: bool = True,
+    policy_loss_weight: float = 0.25,
+    policy_mode: str = "learned",
+    search: str = "dfs",
+    use_ban_set: bool = True,
+    eval_union_frames: int = 1,
+    eval_union_agg: str = "union",
 ):
     result = run.remote(
         steps=steps, batch_size=batch_size,
@@ -422,5 +479,13 @@ def entrypoint(
         eval_dropout_p=eval_dropout_p,
         n_loops=n_loops,
         pre_norm=pre_norm,
+        use_rel_bias=use_rel_bias,
+        use_coord_mlp=use_coord_mlp,
+        policy_loss_weight=policy_loss_weight,
+        policy_mode=policy_mode,
+        search=search,
+        use_ban_set=use_ban_set,
+        eval_union_frames=eval_union_frames,
+        eval_union_agg=eval_union_agg,
     )
     print(f"\nFinal: {result}", flush=True)
