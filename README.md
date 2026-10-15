@@ -14,7 +14,7 @@ self-contained subdirectories under `experiments/`:
 | Snowflake Sudoku | `experiments/snowflake/` | Table 2 |
 | Maze-Hard (30×30) | `experiments/maze/` | Table 3 + Figure 3 (K-sweep) |
 
-The shared package `lattice_diffusion/` holds the looped-transformer model,
+The shared package `src/lattice_diffusion/` holds the looped-transformer model,
 the dataset loaders, and the Modal image / checkpoint utilities used by all
 three.
 
@@ -108,13 +108,13 @@ uv run python -m paper.launch launch table1_sudoku --dry-run
 uv run python -m paper.launch launch table1_sudoku         # submits only what is missing
 uv run python -m paper.launch collect table1_sudoku --rows # -> paper/results/table1_sudoku.csv
 uv run python -m paper.tables.table1_sudoku --copy-to ../latticeDiffusion/figs
-uv run python -m paper.launch ledger --exp T1              # launch history
+uv run python -m paper.launch ledger --exp M1              # launch history
 ```
 
 Status is read off the checkpoint volume (a run is done when its summary
 exists); `--offline` uses the last saved listing. `launch` refuses a dirty
 working tree. Each run is submitted as `modal run --detach -n
-ldt-<exp_id>-<entry>-<trainhash8>[-<evalhash8>]`; the entry points record
+ldt-<exp_id>-<entry>-s<seed>-<trainhash8>[-<evalhash8>]`; the entry points record
 the code's git SHA in the checkpoint and eval spec (outside every hash),
 print a greppable `[ldt-train]` / `[ldt-eval]` header, and append a record
 with the Modal app and call IDs to `ledger/` on the volume. Tables and
@@ -232,9 +232,7 @@ Each K is averaged over 4 seeds; evaluation is on a seed-200 pool of 1,000
 fresh 15×15 mazes.
 
 ```bash
-# Repeat for K in {1, 8, 32, 64, 128, 256, 512} and seeds in {0, 1, 2, 3}
-uv run modal run --detach experiments/maze/run.py --config configs/maze/ksweep.yaml \
-    --set "data.k_solutions=<K> train.seed=<S>"
+uv run python -m paper.launch launch fig3_maze_ksweep   # K in {1, 8, ..., 512} x 4 seeds
 ```
 
 ---
@@ -265,10 +263,10 @@ experiments/
   <benchmark>/eval_task.py  adapter for the shared evaluator
 baselines/            HRM/TRM reproduction and evals, fine-tuned Qwen baseline
                       (see baselines/README.md)
-paper/               Manifests (runs per table/figure), launcher, tables,
+paper/                Manifests (runs per table/figure), launcher, tables,
                       figures, portfolio and compute analysis
 tools/                inspect_wrong.py: print puzzles a run got wrong
 tests/                CPU tests, including bit-exact equivalence fixtures
 ```
 
-All hyperparameters are in `configs/` and in Appendix C of the paper.
+All hyperparameters are in `configs/` and in the paper's appendix.

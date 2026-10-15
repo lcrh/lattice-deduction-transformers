@@ -4,7 +4,7 @@ Reads the per-checkpoint sweep JSONs produced by
 {trm,hrm}_eval/modal_eval.py::sweep  (lists of {step, n, exact, lenient}) and
 renders one PNG with a panel per model. Run via the eval_*.sh scripts, or:
 
-    uv run --with matplotlib python experiments/plot_maze_sweeps.py
+    uv run --with matplotlib python baselines/hrm_trm/plot_maze_sweeps.py
 """
 
 import json
@@ -14,7 +14,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-NOTES = os.path.join(os.path.dirname(__file__), "results")
+RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
 
 # released-checkpoint reference lines (our lenient eval of the public weights)
 REF = {
@@ -30,7 +30,7 @@ COND_COLOR = {"aug": "#c0563b", "no-aug": "#2f6f9f"}
 
 
 def _load(name):
-    p = os.path.join(NOTES, name)
+    p = os.path.join(RESULTS_DIR, name)
     if not os.path.exists(p):
         return None
     rows = sorted(json.load(open(p)), key=lambda r: r["step"])
@@ -70,6 +70,6 @@ fig.suptitle("Maze-30×30-hard: exact vs lenient accuracy over training "
              "(8× dihedral augmentation vs none)",
              fontsize=14, fontweight="bold", color="#15233b", y=0.98)
 fig.tight_layout(rect=[0, 0, 1, 0.95])
-out = os.path.join(NOTES, "maze_aug_vs_noaug.png")
+out = os.path.join(RESULTS_DIR, "maze_aug_vs_noaug.png")
 fig.savefig(out, dpi=200, facecolor="white")
 print("wrote", out)

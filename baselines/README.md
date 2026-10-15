@@ -24,13 +24,11 @@ from an existing checkpoint, evaluated with the scripts here.
   `solution`).
 
 ```bash
-uv run modal run baselines/hrm_trm/hrm_eval/modal_eval.py::sudoku
-uv run modal run baselines/hrm_trm/trm_eval/modal_eval.py::sudoku           # TRM-MLP
-uv run modal run baselines/hrm_trm/hrm_eval/modal_eval.py::sweep  --run-dir "maze-hard-repro/hrm-maze-noaug"
-uv run modal run baselines/hrm_trm/trm_eval/modal_eval.py::sweep  --run-dir "maze-hard-repro/trm-maze-noaug"
-uv run modal run baselines/qwen_sft/run.py::evaluate                        # natural-puzzle run
-uv run modal run baselines/qwen_sft/run.py::evaluate --run-dir /checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks16_ep16_seed0
+uv run python -m paper.launch launch baselines        # HRM/TRM, Sudoku + Maze
+uv run python -m paper.launch launch appendix_i_llm   # Qwen SFT
 ```
+
+The manifests list the exact `modal run` commands.
 
 ## Checkpoint provenance
 
@@ -48,10 +46,9 @@ They exclude compile and startup time.
 | HRM, released | `sapientinc/HRM-checkpoint-maze-30x30-hard` | Authors' release | not published | 74.4% | 81.6% |
 | TRM, released | `alphaXiv/trm-model-maze/maze_hard_step_32550` | alphaXiv independent reproduction (the TRM authors released no weights) | not published | 83.8%† | 90.7%† |
 
-† Evaluated with `L_cycles=6`; these checkpoints were trained with
-`L_cycles=4`. Re-evaluate with `cfg_maze.yaml` (see Open issues). The
-released checkpoint's 83.8% is close to alphaXiv's reported 83.67%, which
-suggests their number also used the default config.
+† Evaluated with `L_cycles=6`, but trained with `L_cycles=4`; must be
+re-evaluated (see Known issues). The released checkpoint's 83.8% is close to
+alphaXiv's reported 83.67%, so their number likely used the same default.
 
 The paper's current Table 3 baselines (HRM 74.5%, TRM 85.3%; TRM "24 h,
 4× L40S") are the original papers' self-reported exact-match numbers, not
@@ -88,30 +85,23 @@ and one checkpoint per epoch (`checkpoint-<32 × epoch>`).
 | `qwen3_5_0_8b_blanks16_ep16_seed0` | 16 blanks | 545 s |
 | `qwen3_5_0_8b_blanks32_ep16_seed0` | 32 blanks | 401 s |
 
-These runs trained on LDT's *old* 1,000-puzzle subset: seed 42, drawn before
-the `sudoku_val` holdout existed. Retrained LDT models draw a different
-subset, so Qwen and LDT no longer share training puzzles exactly. The
-earlier results used 32 test puzzles (seed-200 subset). They are archived in
-`followups/llm_baseline/results/` on branch
-`worktree-followup-experiment-plan`. New training
-runs (`run.py::train`) use the current LDT pool.
+These runs trained on a seed-42 1,000-puzzle subset drawn without the
+`sudoku_val` holdout, so their training puzzles differ slightly from the
+retrained LDT models'. New training runs (`run.py::train`) use the current
+LDT pool.
 
 ## Known issues
 
-- **Maze checkpoint selection used the test set.** The retrained Maze
-  checkpoints above are the best of each training trajectory, scored on the
-  1,000-puzzle test set. Alternatives with no selection on test:
-  - HRM at the recipe's end, `step_26040`: 72.2% exact / 80.6% lenient.
-  - TRM's final checkpoint, `step_58590`: 77.9% / 89.6%.
-
-  Either report one of these or state the selection in the paper.
-- **TRM Maze numbers so far used the wrong loop count.** The released Maze
-  checkpoint and our retrains were trained with `arch.L_cycles=4`. The
-  earlier Maze evals (`results/trm_*_sweep.json`, the 85.1% / 91.6% above)
-  ran `run_eval_only.py` with the fork's default config, which has
-  `L_cycles=6`. The loop count does not change parameter shapes, so this
-  loaded without error. The eval now passes `trm_eval/cfg_maze.yaml`
-  (`L_cycles=4`). Every TRM Maze number must be re-evaluated before use.
+- **Maze checkpoints are selected on the test set.** Table 3 reports each
+  retrain's best checkpoint by lenient test accuracy (`maze_step: best` in
+  the baselines manifest), and the caption says so. Final checkpoints for
+  comparison: HRM `step_26040` 72.2% exact / 80.6% lenient; TRM `step_58590`
+  77.9% / 89.6% (with the old loop count).
+- **TRM Maze sweeps in `hrm_trm/results/` used the wrong loop count.** They
+  ran with the fork's default `L_cycles=6`, but the checkpoints were trained
+  with `L_cycles=4`. The loop count does not change parameter shapes, so this
+  loads silently. The eval passes `trm_eval/cfg_maze.yaml` (`L_cycles=4`);
+  rerun the sweeps before using any TRM Maze number.
 - **TRM Sudoku checkpoint variant (unverified).** The mapping of
   `step_32550_sudoku_epoch50k` to TRM-MLP comes from the fork README's eval
   example and the model card's variant table. Loading it with the wrong
