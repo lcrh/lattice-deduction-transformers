@@ -1,5 +1,5 @@
 # Table 3: Maze-Hard 30x30, K=1 and K=512 supervised paths, 3 seeds each.
-exp_id: T3
+exp_id: M4
 benchmark: maze
 eval: whole
 seeds: [0, 1, 2]

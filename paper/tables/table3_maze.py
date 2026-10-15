@@ -1,8 +1,9 @@
 """Table 3: Maze-Hard. LDT is accepted on any shortest path (lenient); the
 exact column counts only the dataset's reference path. Baselines come from
 the HRM/TRM checkpoint sweeps, at the step named by the baselines manifest
-(`maze_step: last` = the trajectory's final checkpoint, no test-set
-selection).
+(`maze_step: best` = the checkpoint with the highest lenient accuracy,
+selected on the test set; `last` = the trajectory's final checkpoint; or an
+explicit step).
 
     uv run python -m paper.tables.table3_maze [--copy-to DIR]
 """
@@ -23,6 +24,8 @@ def _sweep_point(sweep: list[dict], step) -> dict:
     points = sorted(sweep, key=lambda p: p["step"])
     if step == "last":
         return points[-1]
+    if step == "best":     # selected on the test set, by the lenient criterion
+        return max(points, key=lambda p: p["lenient"])
     return next(p for p in points if p["step"] == int(step))
 
 
@@ -43,9 +46,11 @@ def build(records: list[dict], baselines: list[dict], maze_step="last",
         body.append([escape(recs[0]["label"]), str(len(recs)),
                      pm(*mean_std([r["accuracy"] for r in recs])), pm(*mean_std(exact)),
                      num(sum(r["wrong"] for r in recs))])
+    selection = {"best": "best checkpoint by lenient test accuracy",
+                 "last": "final checkpoint"}.get(str(maze_step), f"step {maze_step}")
     caption = ("Maze-Hard (30$\\times$30) test accuracy on all 1,000 test mazes. Lenient: any "
                "shortest path; exact: the dataset's reference path. LDT: mean $\\pm$ std over "
-               "seeds. Baselines: B200 retrains, final checkpoint.")
+               f"seeds. Baselines: {selection}.")
     return Table(columns=columns, rows=body, caption=caption, label="tab:maze")
 
 

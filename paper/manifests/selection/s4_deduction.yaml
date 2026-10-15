@@ -1,6 +1,6 @@
 # Phase 1, deduction operator at inference (eval-only on the 2K model): model
 # loops, deduction passes per round, elimination and conflict thresholds.
-exp_id: S4
+exp_id: P4
 benchmark: sudoku
 config: configs/sudoku/ablation.yaml
 eval: select

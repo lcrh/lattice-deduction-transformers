@@ -33,18 +33,18 @@ def test_shared_configs_share_checkpoints():
     port = _by_key(_runs("portfolio"))
     fig2 = _by_key(_runs("fig2_sudoku_compute"))
     for s in (0, 1, 2):
-        ckpt = t1[f"T1/steps4k/seed{s}"].checkpoint
-        assert port[f"K1/anchor/seed{s}"].checkpoint == ckpt
-        assert fig2[f"F2/steps_4000/seed{s}"].checkpoint == ckpt
+        ckpt = t1[f"M1/steps4k/seed{s}"].checkpoint
+        assert port[f"X1/anchor/seed{s}"].checkpoint == ckpt
+        assert fig2[f"M2/steps_4000/seed{s}"].checkpoint == ckpt
         # Same eval spec too, so the full-split blocks are shared.
-        assert port[f"K1/anchor/seed{s}"].run_dir == t1[f"T1/steps4k/seed{s}"].run_dir
-    assert t1["T1/steps1k/seed0"].checkpoint != t1["T1/steps1k/seed1"].checkpoint
+        assert port[f"X1/anchor/seed{s}"].run_dir == t1[f"M1/steps4k/seed{s}"].run_dir
+    assert t1["M1/steps1k/seed0"].checkpoint != t1["M1/steps1k/seed1"].checkpoint
 
 
 def test_eval_only_entries_reuse_training_checkpoints():
     runs = _by_key(_runs("appendix_d_soundness"))
     for s in (0, 1, 2):
-        arm, train = runs[f"D1/sym_matched/seed{s}"], runs[f"D1/sym/seed{s}"]
+        arm, train = runs[f"A7/sym_matched/seed{s}"], runs[f"A7/sym/seed{s}"]
         assert arm.kind == "eval" and arm.train_key == train.key
         assert arm.checkpoint == train.checkpoint
         assert arm.eval_hash != train.eval_hash
@@ -102,9 +102,9 @@ def test_eval_overrides_reproduce_the_local_spec():
     """evaluate.py merges the tokens into whatever config the checkpoint was
     trained under; the resulting spec must equal the locally resolved one."""
     runs = _by_key(_runs("appendix_d_soundness"))
-    arm = runs["D1/sym_matched/seed1"]
+    arm = runs["A7/sym_matched/seed1"]
     # Pretend the checkpoint was trained under a different eval block.
-    stored = cfglib.to_dict(runs["D1/sym/seed1"].exp)
+    stored = cfglib.to_dict(runs["A7/sym/seed1"].exp)
     stored["eval"]["stop"] = "sequential"
     stored["eval"]["workers"] = 3
     stored["provenance"] = {"exp_id": "OTHER", "entry": "x", "code_sha": "abc"}
@@ -113,7 +113,7 @@ def test_eval_overrides_reproduce_the_local_spec():
     spec = exp.eval_spec(arm.checkpoint)
     assert spec.hashed_fields() == arm.spec.hashed_fields()
     assert spec.run_dir("/checkpoints/eval") == arm.spec.run_dir("/checkpoints/eval")
-    assert (spec.exp_id, spec.entry) == ("D1", "D1/sym_matched/seed1")
+    assert (spec.exp_id, spec.entry) == ("A7", "A7/sym_matched/seed1")
 
 
 # --- naming, provenance, ledger -----------------------------------------------
@@ -125,7 +125,7 @@ def test_app_names_are_sanitized_and_keep_hashes():
     assert len(name) <= 64
     assert set(name) <= set("abcdefghijklmnopqrstuvwxyz0123456789-")
     assert entry_key("A1", "loops_4", 2) == "A1/loops_4/seed2"
-    assert entry_key("K1", "rerun", 3, 2) == "K1/rerun/seed3/eval2"
+    assert entry_key("X1", "rerun", 3, 2) == "X1/rerun/seed3/eval2"
 
 
 def test_every_run_name_is_unique_within_a_manifest():
@@ -185,9 +185,9 @@ def _summary(n, correct, wrong=0, timeout=None):
 
 def test_status_states():
     runs = _by_key(_runs("appendix_d_soundness"))
-    done_run, trained_run = runs["D1/default/seed0"], runs["D1/sym/seed0"]
-    running, failed = runs["D1/ratio2/seed0"], runs["D1/ratio32/seed0"]
-    partial = runs["D1/nocls/seed0"]
+    done_run, trained_run = runs["A0/default/seed0"], runs["A7/sym/seed0"]
+    running, failed = runs["A7/ratio2/seed0"], runs["A7/ratio32/seed0"]
+    partial = runs["A7/nocls/seed0"]
     files = {
         volume_path(done_run.checkpoint): b"",
         volume_path(done_run.summary_file): _summary(1000, 990),
@@ -203,9 +203,9 @@ def test_status_states():
     assert states[running.key] == "running"
     assert states[failed.key] == "failed"
     assert states[partial.key] == "partial"
-    assert states["D1/sym_matched/seed0"] == "trained"      # its checkpoint exists
-    assert states["D1/ratio2_matched/seed0"] == "blocked"   # training still running
-    assert states["D1/default/seed1"] == "not started"
+    assert states["A7/sym_matched/seed0"] == "trained"      # its checkpoint exists
+    assert states["A7/ratio2_matched/seed0"] == "blocked"   # training still running
+    assert states["A0/default/seed1"] == "not started"
     offline = L.statuses(list(runs.values()), FakeVolumeView(files), ledger, None)
     assert offline[running.key] == "launched"
 
@@ -214,16 +214,16 @@ def test_plan_launches():
     runs = _runs("portfolio")
     states = {r.key: "not started" for r in runs}
     plan = {r.key: (cmd, why) for r, cmd, why in L.plan_launches(runs, states)}
-    cmd, _ = plan["K1/anchor/seed0"]
+    cmd, _ = plan["X1/anchor/seed0"]
     assert cmd[:6] == ["uv", "run", "modal", "run", "--detach", "-n"]
     assert "experiments/sudoku/run.py" in cmd and "--no-wait" in cmd
     assert "--no-evaluate" not in cmd
-    assert "--no-evaluate" in plan["K1/models/seed7"][0]
-    assert plan["K1/rerun_models/seed7"][0] is None          # no failure set yet
+    assert "--no-evaluate" in plan["X1/models/seed7"][0]
+    assert plan["X1/rerun_models/seed7"][0] is None          # no failure set yet
     # A checkpoint that exists is only evaluated.
     t1 = _runs("table1_sudoku")
     states = {r.key: "trained" for r in t1}
-    cmd, why = {r.key: (c, w) for r, c, w in L.plan_launches(t1, states)}["T1/steps4k/seed0"]
+    cmd, why = {r.key: (c, w) for r, c, w in L.plan_launches(t1, states)}["M1/steps4k/seed0"]
     assert "experiments/evaluate.py" in cmd and why == "evaluate existing checkpoint"
     assert cmd[cmd.index("--checkpoint") + 1].startswith("/checkpoints/sudoku/paper-")
 
@@ -233,9 +233,9 @@ def test_rerun_entries_resolve_once_the_failure_set_exists(monkeypatch):
 
     monkeypatch.setattr(manifest, "_read_indices", lambda path: [5, 17])
     runs = _by_key(_runs("portfolio"))
-    rerun = runs["K1/rerun_models/seed5/eval2"]
+    rerun = runs["X1/rerun_models/seed5/eval2"]
     assert rerun.spec.explicit_indices == [5, 17] and rerun.spec.eval_seed == 2
-    assert rerun.checkpoint == runs["K1/models/seed5"].checkpoint
+    assert rerun.checkpoint == runs["X1/models/seed5"].checkpoint
     cmd = L.eval_command(rerun)
     assert cmd[cmd.index("--indices-file") + 1] == "paper/results/portfolio_failures.txt"
 

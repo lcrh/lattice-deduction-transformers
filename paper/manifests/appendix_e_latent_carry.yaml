@@ -1,7 +1,7 @@
 # Appendix E: carrying a latent between solve steps (TRM-style). Carry needs
 # a fixed frame, so every arm here, including the reference, runs without
 # per-step augmentation.
-exp_id: E1
+exp_id: A8
 benchmark: sudoku
 config: configs/sudoku/ablation.yaml
 eval: ablation

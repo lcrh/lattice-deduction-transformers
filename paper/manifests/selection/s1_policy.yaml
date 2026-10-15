@@ -2,7 +2,7 @@
 # and a 1K-step model. Scored on sudoku_val (held-out train puzzles), never
 # on test. Selection rule: zero wrong answers, then accuracy, then fewest
 # calls/solve, then the simpler option.
-exp_id: S1
+exp_id: P1
 benchmark: sudoku
 config: configs/sudoku/ablation.yaml
 eval: select

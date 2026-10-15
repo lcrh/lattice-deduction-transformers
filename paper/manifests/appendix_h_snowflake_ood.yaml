@@ -1,7 +1,7 @@
 # Appendix H: Snowflake order transfer (varied-topology generator): train on
 # small orders, test on larger ones, with and without a few higher-order
 # training puzzles mixed in. One consolidated table with per-order columns.
-exp_id: H1
+exp_id: A11
 benchmark: snowflake
 eval: whole
 seeds: [0, 1, 2]

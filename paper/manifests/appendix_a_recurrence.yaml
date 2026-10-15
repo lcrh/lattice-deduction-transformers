@@ -15,54 +15,66 @@ table:
     escalation: "More compute or data for few loops"
 entries:
   - name: default
+    exp_id: A0
     label: "4 layers x 16 loops (default)"
     group: loops
   - name: loops
     group: loops
     sweep: {model.n_loops: [1, 2, 4, 8, 32]}
   - name: shape8x92
+    exp_id: A2
     label: "8 layers x 92, 1 loop"
     group: shapes
     set: {model.n_loops: 1, model.num_layers: 8, model.dim: 92}
   - name: shape16x64
+    exp_id: A2
     label: "16 layers x 64, 1 loop"
     group: shapes
     set: {model.n_loops: 1, model.num_layers: 16, model.dim: 64}
   - name: shape32x44
+    exp_id: A2
     label: "32 layers x 44, 1 loop"
     group: shapes
     set: {model.n_loops: 1, model.num_layers: 32, model.dim: 44}
   - name: untied8
+    exp_id: A3
     label: "8 layers x 128, 1 loop, 16K steps"
     group: bigger
     set: {model.n_loops: 1, model.num_layers: 8, train.steps: 16000}
   - name: untied16
+    exp_id: A3
     label: "16 layers x 128, 1 loop, 8K steps"
     group: bigger
     set: {model.n_loops: 1, model.num_layers: 16, train.steps: 8000}
   - name: wide
+    exp_id: A3
     label: "4 layers x 256, 1 loop, 8K steps"
     group: bigger
     set: {model.n_loops: 1, model.dim: 256, train.steps: 8000}
   - name: untied16_max
+    exp_id: A3
     label: "16 layers x 128, 1 loop, 32K steps, full train split"
     group: bigger
     seeds: [0, 1]
     set: {model.n_loops: 1, model.num_layers: 16, train.steps: 32000, data.n_puzzles: null}
   - name: l2_cm
+    exp_id: A4
     label: "2 loops, 16K steps (matched training FLOPs)"
     group: escalation
     set: {model.n_loops: 2, train.steps: 16000}
   - name: l1_cm
+    exp_id: A4
     label: "1 loop, 32K steps (matched training FLOPs)"
     group: escalation
     set: {model.n_loops: 1, train.steps: 32000}
   - name: l1_cm4x
+    exp_id: A4
     label: "1 loop, 128K steps (4x training FLOPs)"
     group: escalation
     seeds: [0, 1]
     set: {model.n_loops: 1, train.steps: 128000}
   - name: l1_bigdata
+    exp_id: A4
     label: "1 loop, 128K steps, full train split"
     group: escalation
     seeds: [0, 1]

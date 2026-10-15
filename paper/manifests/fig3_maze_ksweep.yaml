@@ -1,6 +1,6 @@
 # Figure 3: accuracy against the number K of supervised shortest paths,
 # 15x15 synthetic mazes, 4 seeds.
-exp_id: F3
+exp_id: M5
 benchmark: maze
 config: configs/maze/ksweep.yaml
 eval: whole

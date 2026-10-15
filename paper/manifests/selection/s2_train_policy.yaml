@@ -1,6 +1,6 @@
 # Phase 1, search: does training with the eval digit policy matter? 2x2 of
 # training policy x evaluation policy, on sudoku_val.
-exp_id: S2
+exp_id: P2
 benchmark: sudoku
 config: configs/sudoku/ablation.yaml
 eval: select

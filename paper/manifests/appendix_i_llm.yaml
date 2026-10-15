@@ -2,7 +2,7 @@
 # only; baselines/qwen_sft). Each run is evaluated at every second epoch on
 # the first 200 puzzles of sudoku_test_perm (natural) or their K-blank
 # versions, 32 samples per puzzle, pass@k.
-exp_id: I1
+exp_id: B4
 benchmark: baselines
 entries:
   - name: qwen_natural

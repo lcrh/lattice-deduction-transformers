@@ -1,5 +1,5 @@
 # Table 2: Snowflake Sudoku, varied-topology generator, orders 4-8.
-exp_id: T2
+exp_id: M3
 benchmark: snowflake
 config: configs/snowflake/paper.yaml
 eval: whole

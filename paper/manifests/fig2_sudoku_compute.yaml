@@ -1,7 +1,7 @@
 # Figure 2: test-time compute against training compute (call-count
 # percentiles per training budget), plus the per-puzzle call histogram of the
 # 4K model. Shares checkpoints with Table 1 at 1K/2K/4K.
-exp_id: F2
+exp_id: M2
 benchmark: sudoku
 config: configs/sudoku/paper.yaml
 eval: sequential

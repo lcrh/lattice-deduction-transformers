@@ -7,7 +7,7 @@
 #                 `python -m paper.portfolio extract-failures`), every model,
 #                 with independent eval seeds as extra attempts
 # Launch `anchor` and `models` first; rerun entries stay blocked until H exists.
-exp_id: K1
+exp_id: X1
 benchmark: sudoku
 config: configs/sudoku/paper.yaml
 table:

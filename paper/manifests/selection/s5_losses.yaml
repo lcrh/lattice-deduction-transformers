@@ -1,6 +1,6 @@
 # Phase 1, training losses: lambda_CE and the BCE positive/negative ratio
 # (default 4.0/0.5 = 8x), on sudoku_val.
-exp_id: S5
+exp_id: P5
 benchmark: sudoku
 config: configs/sudoku/ablation.yaml
 eval: select
