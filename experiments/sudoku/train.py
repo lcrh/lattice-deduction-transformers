@@ -173,7 +173,7 @@ def monitor_solve(model, ema, x, y, given_mask, cfg, **solve_kw):
             step=cfg.step, max_rounds=cfg.monitor_max_rounds, n_chains=cfg.monitor_n_chains,
             # Match training batch shape so torch.compile reuses its kernel.
             batch_size=cfg.batch_size,
-        ), verbose=False, **solve_kw)
+        ), **solve_kw)
     if ema_backup is not None:
         ema.swap_out(model, ema_backup)
     return res

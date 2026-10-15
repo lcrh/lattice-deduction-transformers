@@ -797,39 +797,6 @@ def maze_classify(
     return valid_t, minimal_t, gt_exact_t
 
 
-def make_maze_label_fn(H: int, W: int):
-    """Build a `label_fn` for `solve()` that does BFS path-validation
-    per puzzle. Returns a closure with signature `(sol, gt) -> (is_correct, label)`:
-      - "CORRECT_GT"    : path matches GT cell-for-cell (exact argmax equality
-                          over the path/free mask). Counts as correct.
-      - "CORRECT_ALT"   : valid optimal-length S→G path, but different cells
-                          than GT (an alternate shortest path). Counts as
-                          correct.
-      - "WRONG_VALID"   : connected S→G path but longer than GT optimal.
-                          Does NOT count as correct.
-      - "WRONG_INVALID" : broken / disconnected / multiple S or G cells.
-                          Does NOT count as correct.
-    (TIMEOUT is emitted by solve() itself when a puzzle never self-accepts;
-    label_fn is only consulted on solved puzzles.)
-    """
-    def _fn(sol_state: torch.Tensor, gt_state: torch.Tensor) -> tuple[bool, str]:
-        # Both [S, C]; classify a single puzzle.
-        sol_b = sol_state.unsqueeze(0)
-        gt_b = gt_state.unsqueeze(0)
-        valid, minimal, gt_exact = maze_classify(sol_b, gt_b, H, W)
-        v = bool(valid[0].item())
-        m = bool(minimal[0].item())
-        e = bool(gt_exact[0].item())
-        if v and m and e:
-            return True, "CORRECT_GT"
-        if v and m:
-            return True, "CORRECT_ALT"
-        if v:
-            return False, "WRONG_VALID"
-        return False, "WRONG_INVALID"
-    return _fn
-
-
 def rescore(
     res,                       # SolveResult from experiments.sudoku.solve.solve
     targets: torch.Tensor,     # [P, S, C] GT one-hot

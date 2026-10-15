@@ -80,7 +80,7 @@ class MazeTask(EvalTask):
         h, w = grid_dims(self._data_cfg(split, maze_data))
         cfg = build_solve_config(solve_dict)
         with torch.no_grad():
-            res = solve(model, x, y, x.sum(dim=-1) == 1, cfg, verbose=False)
+            res = solve(model, x, y, x.sum(dim=-1) == 1, cfg)
         rescore(res, y, h, w)
 
         valid, minimal, exact = (res._maze_valid.tolist(), res._maze_minimal.tolist(),

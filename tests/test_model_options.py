@@ -54,7 +54,7 @@ def test_carry_trains_and_solves(mode):
     x, y = fakes.sudoku_tensors(4, (2, 5), seed=3)
     res = solve(model, x.float(), y.float(), x.float().sum(-1) == 1,
                 SolveConfig(step=StepConfig(augment=False), max_rounds=4, n_chains=4,
-                            batch_size=8), verbose=False)
+                            batch_size=8))
     assert torch.equal(res.correct | res.wrong | res.timeouts, torch.ones(4, dtype=torch.bool))
 
 

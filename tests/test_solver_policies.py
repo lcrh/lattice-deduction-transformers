@@ -119,7 +119,7 @@ def _hard_solve(**solve_kw):
     cfg = SolveConfig(step=StepConfig(cls_threshold=0.6, augment=True), max_rounds=25,
                       n_chains=4, batch_size=8, **solve_kw)
     torch.manual_seed(9)
-    return solve(model, x, y, x.sum(-1) == 1, cfg, verbose=False)
+    return solve(model, x, y, x.sum(-1) == 1, cfg)
 
 
 @pytest.mark.parametrize("backtrack,negate", [("last", False), ("geometric", False),
@@ -127,8 +127,8 @@ def _hard_solve(**solve_kw):
 def test_backtracking_policies(backtrack, negate):
     res = _hard_solve(backtrack=backtrack, backtrack_negate=negate, max_decision_depth=8)
     assert torch.equal(res.correct | res.wrong | res.timeouts, torch.ones_like(res.correct))
-    assert res.search["backtracks"] == int(res.n_resets.sum())
-    assert res.search["sum_target_depth"] <= res.search["sum_conflict_depth"]
+    assert res.search.backtracks == int(res.n_resets.sum())
+    assert res.search.sum_target_depth <= res.search.sum_conflict_depth
 
 
 @pytest.mark.parametrize("negate,gt_digit", [(False, 2), (True, 2), (True, 1)])
@@ -149,8 +149,8 @@ def test_decision_stack_backtracks_to_the_last_decision(negate, gt_digit):
         expected[0, 0, 1] = 0.0                # the decided candidate is ruled out
     assert torch.equal(out, expected)
     assert bool(at_root[0]) == (not negate)    # back at depth 0, but negation is progress
-    assert stack.n_negations == int(negate)
-    assert stack.n_unsound_negations == int(negate and gt_digit == 1)
+    assert stack.stats.negations == int(negate)
+    assert stack.stats.unsound_negations == int(negate and gt_digit == 1)
 
 
 def test_per_puzzle_diagnostics_add_up_to_the_totals():
@@ -168,6 +168,6 @@ def test_multi_pass_solve_reports_per_pass_diagnostics():
     cfg = SolveConfig(step=StepConfig(cls_threshold=0.6, augment=True, deduce_passes=2),
                       max_rounds=25, n_chains=4, batch_size=8)
     torch.manual_seed(9)
-    res = solve(model, x, y, x.sum(-1) == 1, cfg, verbose=False)
+    res = solve(model, x, y, x.sum(-1) == 1, cfg)
     assert res.puzzle_pass_diag.shape == (6, 2, 2)
     assert torch.equal(res.puzzle_pass_diag.sum(dim=1), res.puzzle_diag[:, :2])

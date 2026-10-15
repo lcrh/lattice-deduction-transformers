@@ -54,7 +54,7 @@ def test_solve_matches_reference(case):
     model.train()
     cfg = SolveConfig(step=StepConfig(**inp["step"]), **inp["solve"])
     torch.manual_seed(321)
-    res = solve(model, inp["x"], inp["y"], inp["given"], cfg, verbose=False)
+    res = solve(model, inp["x"], inp["y"], inp["given"], cfg)
     for key in ("correct", "wrong", "timeouts", "round_solved", "n_resets", "solution",
                 "puzzle_calls"):
         assert torch.equal(getattr(res, key), ref[key]), key
