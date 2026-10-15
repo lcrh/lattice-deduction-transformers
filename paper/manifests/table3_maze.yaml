@@ -1,0 +1,15 @@
+# Table 3: Maze-Hard 30x30, K=1 and K=512 supervised paths, 3 seeds each.
+exp_id: T3
+benchmark: maze
+eval: whole
+seeds: [0, 1, 2]
+table:
+  caption: "Maze-Hard (30x30) test accuracy."
+  baselines: baselines
+entries:
+  - name: k1
+    label: "LDT, K=1"
+    config: configs/maze/paper.yaml
+  - name: k512
+    label: "LDT, K=512"
+    config: configs/maze/paper_k512.yaml

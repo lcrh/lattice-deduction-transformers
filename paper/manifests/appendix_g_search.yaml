@@ -1,0 +1,58 @@
+# Appendix G: search policies. S1: cell x digit policy on a 2K- and a
+# 1K-step model; S2: training with the eval digit policy; S3: where a chain
+# restarts after a conflict. All eval-only except the 1K model and the
+# argmax-trained model.
+exp_id: G1
+benchmark: sudoku
+config: configs/sudoku/ablation.yaml
+eval: ablation
+seeds: [0, 1, 2]
+table:
+  reference: default
+  groups:
+    s1_2k: "Cell x digit policy, 2K-step model"
+    s1_1k: "Cell x digit policy, 1K-step model"
+    s2: "Training policy vs evaluation policy"
+    s3: "Backtracking"
+entries:
+  - name: default
+    label: "2K model, uniform cell, sampled digit"
+    group: s1_2k
+  - name: base1k
+    label: "1K model, uniform cell, sampled digit"
+    group: s1_1k
+    set: {train.steps: 1000}
+  - name: s1_2k
+    group: s1_2k
+    eval_of: default
+    grid:
+      solve.step.cell_policy: [uniform, mrv, min_entropy, max_entropy]
+      solve.step.digit_policy: [sample, argmax, rank_k]
+  - name: s1_1k
+    group: s1_1k
+    eval_of: base1k
+    grid:
+      solve.step.cell_policy: [uniform, mrv, min_entropy, max_entropy]
+      solve.step.digit_policy: [sample, argmax, rank_k]
+  - name: train_argmax
+    label: "trained argmax, eval sample"
+    group: s2
+    set: {train.step.digit_policy: argmax}
+  - name: train_argmax_eval
+    label: "trained argmax, eval argmax"
+    group: s2
+    eval_of: train_argmax
+    set: {solve.step.digit_policy: argmax}
+  - name: s3_2k
+    group: s3
+    eval_of: default
+    sweep: {solve.backtrack: [last, geometric, uniform_depth]}
+  - name: s3_2k_negate
+    group: s3
+    eval_of: default
+    set: {solve.backtrack_negate: true}
+    sweep: {solve.backtrack: [last, geometric, uniform_depth]}
+  - name: s3_1k
+    group: s3
+    eval_of: base1k
+    sweep: {solve.backtrack: [last, geometric, uniform_depth]}

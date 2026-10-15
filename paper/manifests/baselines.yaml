@@ -1,0 +1,43 @@
+# HRM/TRM baselines: existing checkpoints only, evaluated with the scripts in
+# baselines/hrm_trm (see baselines/README.md for provenance). These run in the
+# upstream code's own images, not through the shared evaluator, so each entry
+# is a `modal run` command whose result is a local JSON file. Sudoku: first
+# 10,000 puzzles of sudoku_test_perm. Maze: every checkpoint of a run
+# (exact + lenient); the table picks the step named in `table`.
+exp_id: BL1
+benchmark: baselines
+table:
+  maze_step: last          # last checkpoint of each trajectory (no test-set selection)
+entries:
+  - name: hrm_sudoku
+    label: "HRM (released checkpoint)"
+    group: sudoku
+    command: [baselines/hrm_trm/hrm_eval/modal_eval.py::sudoku, --n, "10000",
+              --out, baselines/hrm_trm/results/hrm_sudoku.json]
+    result: baselines/hrm_trm/results/hrm_sudoku.json
+  - name: trm_mlp_sudoku
+    label: "TRM-MLP (alphaXiv checkpoint)"
+    group: sudoku
+    command: [baselines/hrm_trm/trm_eval/modal_eval.py::sudoku, --n, "10000", --variant, mlp,
+              --out, baselines/hrm_trm/results/trm_mlp_sudoku.json]
+    result: baselines/hrm_trm/results/trm_mlp_sudoku.json
+  - name: trm_att_sudoku
+    label: "TRM-attention (alphaXiv checkpoint)"
+    group: sudoku
+    command: [baselines/hrm_trm/trm_eval/modal_eval.py::sudoku, --n, "10000", --variant, att,
+              --out, baselines/hrm_trm/results/trm_att_sudoku.json]
+    result: baselines/hrm_trm/results/trm_att_sudoku.json
+  - name: hrm_maze
+    label: "HRM (B200 retrain)"
+    group: maze
+    command: [baselines/hrm_trm/hrm_eval/modal_eval.py::sweep,
+              --run-dir, maze-hard-repro/hrm-maze-noaug,
+              --out, baselines/hrm_trm/results/hrm_noaug_sweep.json]
+    result: baselines/hrm_trm/results/hrm_noaug_sweep.json
+  - name: trm_maze
+    label: "TRM (B200 retrain)"
+    group: maze
+    command: [baselines/hrm_trm/trm_eval/modal_eval.py::sweep,
+              --run-dir, maze-hard-repro/trm-maze-noaug,
+              --out, baselines/hrm_trm/results/trm_noaug_sweep_lcycles4.json]
+    result: baselines/hrm_trm/results/trm_noaug_sweep_lcycles4.json

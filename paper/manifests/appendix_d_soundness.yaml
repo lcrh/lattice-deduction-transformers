@@ -1,0 +1,39 @@
+# Appendix D: what enforces soundness. BCE asymmetry (positive/negative
+# weight ratio; default 4.0/0.5 = 8x) and the conflict head. The *_matched
+# entries re-evaluate the same checkpoints with the elimination threshold
+# matched to the ratio, theta = 1/(1+ratio), to separate training pressure
+# from an eval-threshold mismatch.
+exp_id: D1
+benchmark: sudoku
+config: configs/sudoku/ablation.yaml
+eval: ablation
+seeds: [0, 1, 2]
+table:
+  reference: default
+entries:
+  - name: default
+    label: "8x asymmetry, conflict head (default)"
+  - name: sym
+    label: "1x (symmetric)"
+    set: {train.bce_pos_mult: 0.5}
+  - name: ratio2
+    label: "2x"
+    set: {train.bce_pos_mult: 1.0}
+  - name: ratio32
+    label: "32x"
+    set: {train.bce_pos_mult: 16.0}
+  - name: nocls
+    label: "8x, no conflict head"
+    set: {train.conflict_loss_weight: 0.0, model.cls_token: false}
+  - name: sym_matched
+    label: "1x, theta_elim = 0.5"
+    eval_of: sym
+    set: {solve.step.threshold: 0.5}
+  - name: ratio2_matched
+    label: "2x, theta_elim = 0.33"
+    eval_of: ratio2
+    set: {solve.step.threshold: 0.33}
+  - name: ratio32_matched
+    label: "32x, theta_elim = 0.03"
+    eval_of: ratio32
+    set: {solve.step.threshold: 0.03}

@@ -1,0 +1,21 @@
+# Phase 1, deduction operator at inference (eval-only on the 2K model): model
+# loops, deduction passes per round, elimination and conflict thresholds.
+exp_id: S4
+benchmark: sudoku
+config: configs/sudoku/ablation.yaml
+eval: select
+seeds: [0, 1, 2]
+entries:
+  - name: base2k
+  - name: eval_loops
+    eval_of: base2k
+    sweep: {solve.step.n_loops: [8, 32]}
+  - name: passes
+    eval_of: base2k
+    sweep: {solve.step.deduce_passes: [2, 4, fixpoint]}
+  - name: theta
+    eval_of: base2k
+    sweep: {solve.step.threshold: [0.05, 0.2, 0.3]}
+  - name: cls
+    eval_of: base2k
+    sweep: {solve.step.cls_threshold: [0.5, 0.7, 0.8]}

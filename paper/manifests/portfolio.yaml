@@ -1,0 +1,34 @@
+# Appendix K / Table 1 portfolio row: how many independently trained 4K
+# models solve every test puzzle, at R=1000 rounds.
+#   anchor        seeds 0-4, every test puzzle (seeds 0-2 are Table 1's runs)
+#   models        seeds 5-24, trained only
+#   rerun_*       the failure set H of the anchors (paper/results/
+#                 portfolio_failures.txt, written by
+#                 `python -m paper.portfolio extract-failures`), every model,
+#                 with independent eval seeds as extra attempts
+# Launch `anchor` and `models` first; rerun entries stay blocked until H exists.
+exp_id: K1
+benchmark: sudoku
+config: configs/sudoku/paper.yaml
+table:
+  anchors: anchor
+  reruns: [rerun_anchor, rerun_models]
+entries:
+  - name: anchor
+    seeds: [0, 1, 2, 3, 4]
+    eval: full
+  - name: models
+    seeds: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
+    train_only: true
+  - name: rerun_anchor
+    eval_of: anchor
+    eval: explicit
+    eval_seeds: [1, 2, 3]
+    indices_file: paper/results/portfolio_failures.txt
+    split: test
+  - name: rerun_models
+    eval_of: models
+    eval: explicit
+    eval_seeds: [0, 1, 2, 3]
+    indices_file: paper/results/portfolio_failures.txt
+    split: test

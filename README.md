@@ -94,6 +94,34 @@ Training never sees evaluation puzzles; Sudoku-Extreme training pools also
 exclude 10,000 held-out train puzzles (`sudoku_val`), which are reserved for
 choosing defaults and for in-training monitoring.
 
+### Paper manifests: one command per table
+
+`paper/manifests/` lists every run behind each table and figure (one YAML
+file each; eval presets in `paper/manifests/_eval.yaml`). Each entry carries
+a tracker experiment ID (`exp_id`), and every run an entry key
+`<exp_id>/<entry>/seed<s>`.
+
+```bash
+uv run python -m paper.launch list                         # manifests
+uv run python -m paper.launch status table1_sudoku         # per run: done / running / ...
+uv run python -m paper.launch launch table1_sudoku --dry-run
+uv run python -m paper.launch launch table1_sudoku         # submits only what is missing
+uv run python -m paper.launch collect table1_sudoku --rows # -> paper/results/table1_sudoku.csv
+uv run python -m paper.tables.table1_sudoku --copy-to ../latticeDiffusion/figs
+uv run python -m paper.launch ledger --exp T1              # launch history
+```
+
+Status is read off the checkpoint volume (a run is done when its summary
+exists); `--offline` uses the last saved listing. `launch` refuses a dirty
+working tree. Each run is submitted as `modal run --detach -n
+ldt-<exp_id>-<entry>-<trainhash8>[-<evalhash8>]`; the entry points record
+the code's git SHA in the checkpoint and eval spec (outside every hash),
+print a greppable `[ldt-train]` / `[ldt-eval]` header, and append a record
+with the Modal app and call IDs to `ledger/` on the volume. Tables and
+figures are built from the collected CSVs by `paper/tables/*.py` and
+`paper/figures/*.py`; `paper/portfolio.py` analyzes the model-portfolio
+runs and `paper/compute.py` the compute accounting.
+
 ### Sudoku-Extreme (Table 1, Figure 2)
 
 `configs/sudoku/paper.yaml` is the 4K-step recipe (1,000 training puzzles).
@@ -237,6 +265,9 @@ experiments/
   <benchmark>/eval_task.py  adapter for the shared evaluator
 baselines/            HRM/TRM reproduction and evals, fine-tuned Qwen baseline
                       (see baselines/README.md)
+paper/               Manifests (runs per table/figure), launcher, tables,
+                      figures, portfolio and compute analysis
+tools/                inspect_wrong.py: print puzzles a run got wrong
 tests/                CPU tests, including bit-exact equivalence fixtures
 ```
 
