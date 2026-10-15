@@ -1,4 +1,4 @@
-# Maze-Hard reproductions: HRM & TRM, with lenient evaluation
+# HRM & TRM baselines: Maze-Hard reproductions (lenient evaluation) and Sudoku-Extreme evals
 
 Independent reproductions of **HRM** ([sapientinc/HRM](https://github.com/sapientinc/HRM))
 and **TRM** ([alphaXiv/TinyRecursiveModels](https://github.com/alphaXiv/TinyRecursiveModels))
@@ -6,7 +6,7 @@ on **Maze-30×30-hard**, re-evaluated with a *lenient* metric and trained with/w
 augmentation. Runs on [Modal](https://modal.com/) (B200 train, H100 eval); the
 external repos are cloned at image-build time (nothing vendored/forked).
 
-## Why re-evaluate
+## Maze-Hard: why re-evaluate
 
 The HRM paper's stated maze-hard correctness criterion is that a path is correct
 if it is **valid and optimal**. But for the model comparison the reported numbers
@@ -43,7 +43,38 @@ Training streams to **Weights & Biases** (online via `wandb-secret`) and writes 
 persistent `<run_name>.train.log` to the checkpoint volume. Eval sweeps + plots
 land in `baselines/hrm_trm/results/` (committed once runs complete).
 
-## Results — released checkpoints, full 1,000-puzzle test set
+## Sudoku-Extreme: evaluation of existing checkpoints
+
+No Sudoku training is done here. The released checkpoints are evaluated on the
+first N puzzles (default 10,000) of LDT's `sudoku_test_perm` ordering
+(`lattice_diffusion.eval.indices`), so baselines and LDT see the same puzzles
+in the same order. Their accuracy is far from 100%, so a fixed subset with a
+binomial interval is enough; no sequential stopping.
+
+```bash
+uv run modal run baselines/hrm_trm/hrm_eval/modal_eval.py::sudoku            # HRM (authors' release)
+uv run modal run baselines/hrm_trm/trm_eval/modal_eval.py::sudoku            # TRM-MLP (alphaXiv reproduction)
+uv run modal run baselines/hrm_trm/trm_eval/modal_eval.py::sudoku --variant att
+# --n 422786 evaluates the full test split
+```
+
+Each run:
+- builds the upstream test split (`test.csv` in file order, no augmentation)
+  and checks it against LDT's `sudoku_extreme_test.pt` cache, index by index;
+- cuts it down to the requested indices (`sudoku_rows.subset_test_split`);
+- runs upstream inference on one B200 (HRM: its ACT loop; TRM:
+  `scripts/run_eval_only.py` with EMA weights and bf16);
+- writes per-puzzle rows (`idx`, `pos`, `status`, `solution`, the
+  `lattice_diffusion/eval/records.py` field names) and a summary to
+  `eval/baselines/<model>/sudoku_test_perm_n<N>/` on the
+  `lattice-diffusion-checkpoints` volume;
+- writes the summary with a Clopper–Pearson interval and the eval time
+  (`gpu_seconds`, single B200) to `baselines/hrm_trm/results/`.
+
+TRM checkpoints need their architecture config: `trm_eval/cfg_sudoku_mlp.yaml`
+(TRM-MLP, the variant behind the TRM paper's 87.4%) or `cfg_sudoku_att.yaml`.
+
+## Maze-Hard results — released checkpoints, full 1,000-puzzle test set
 | model | params | exact | lenient (any optimal path) |
 |---|---|---|---|
 | HRM | 27M | 74.4% | **81.6%** |
@@ -58,7 +89,7 @@ path that simply isn't A\*'s labelled one.
 > is the authors' own release
 > ([`sapientinc/HRM-checkpoint-maze-30x30-hard`](https://huggingface.co/sapientinc/HRM-checkpoint-maze-30x30-hard)).
 
-## Findings
+## Maze-Hard findings
 
 **1. The paper numbers reproduce.** Re-training from scratch *without* augmentation
 matches the papers' reported maze-hard exact-match accuracy, and evaluating the
@@ -91,7 +122,7 @@ curves are below.
 
 ![Maze-30×30-hard: exact vs lenient accuracy over training, augmentation vs none](results/maze_aug_vs_noaug.png)
 
-## Steady-state training throughput (single B200, global batch 768)
+## Maze-Hard steady-state training throughput (single B200, global batch 768)
 For compute-matched comparisons later. Per-step cost is independent of
 augmentation (same model/batch); total steps = `epochs × 1.302`.
 
