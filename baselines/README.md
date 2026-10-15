@@ -42,11 +42,16 @@ They exclude compile and startup time.
 
 | Baseline | Checkpoint | Provenance | Training hardware / time | Exact | Lenient |
 |---|---|---|---|---|---|
-| TRM, B200 retrain | volume `trm-maze-aug-ckpts`: `maze-hard-repro/trm-maze-noaug/step_19530` | Our retrain, published no-aug recipe (`hrm_trm/trm_eval/modal_train.py`), global batch 768 | 1× B200; ~7.9 h to this step (derived). Run hit Modal's 24 h cap at step 58,590, before the recipe's ~65,100 steps | 85.1% | 91.6% |
+| TRM, B200 retrain | volume `trm-maze-aug-ckpts`: `maze-hard-repro/trm-maze-noaug/step_19530` | Our retrain, published no-aug recipe (`hrm_trm/trm_eval/modal_train.py`), global batch 768 | 1× B200; ~7.9 h to this step (derived). Run hit Modal's 24 h cap at step 58,590, before the recipe's ~65,100 steps | 85.1%† | 91.6%† |
 | HRM, B200 retrain | volume `hrm-maze-aug-ckpts`: `maze-hard-repro/hrm-maze-noaug/step_23436` | Our retrain, published no-aug recipe (`hrm_trm/hrm_eval/modal_train.py`), global batch 768 | 1× B200; ~4.0 h to this step (derived) | 74.8% | 81.1% |
 | HRM, B200 retrain, best lenient | same run, `step_39060` | as above | 1× B200; ~6.6 h (derived) | 72.4% | 82.2% |
 | HRM, released | `sapientinc/HRM-checkpoint-maze-30x30-hard` | Authors' release | not published | 74.4% | 81.6% |
-| TRM, released | `alphaXiv/trm-model-maze/maze_hard_step_32550` | alphaXiv independent reproduction (the TRM authors released no weights) | not published | 83.8% | 90.7% |
+| TRM, released | `alphaXiv/trm-model-maze/maze_hard_step_32550` | alphaXiv independent reproduction (the TRM authors released no weights) | not published | 83.8%† | 90.7%† |
+
+† Evaluated with `L_cycles=6`; these checkpoints were trained with
+`L_cycles=4`. Re-evaluate with `cfg_maze.yaml` (see Open issues). The
+released checkpoint's 83.8% is close to alphaXiv's reported 83.67%, which
+suggests their number also used the default config.
 
 The paper's current Table 3 baselines (HRM 74.5%, TRM 85.3%; TRM "24 h,
 4× L40S") are the original papers' self-reported exact-match numbers, not
@@ -100,12 +105,13 @@ runs (`run.py::train`) use the current LDT pool.
   - TRM's final checkpoint, `step_58590`: 77.9% / 89.6%.
 
   Either report one of these or state the selection in the paper.
-- **TRM Maze eval config (unverified).** The TRM Maze retrains used
-  `arch.L_cycles=4` (`hrm_trm/trm_eval/modal_train.py`). The Maze eval runs
-  the fork's `run_eval_only.py` with its default config, `L_cycles=6`. The
-  loop count does not change parameter shapes, so a mismatch would load
-  silently. Check whether `run_eval_only.py` picks up the checkpoint's
-  training config before relying on the sweep numbers.
+- **TRM Maze numbers so far used the wrong loop count.** The released Maze
+  checkpoint and our retrains were trained with `arch.L_cycles=4`. The
+  earlier Maze evals (`results/trm_*_sweep.json`, the 85.1% / 91.6% above)
+  ran `run_eval_only.py` with the fork's default config, which has
+  `L_cycles=6`. The loop count does not change parameter shapes, so this
+  loaded without error. The eval now passes `trm_eval/cfg_maze.yaml`
+  (`L_cycles=4`). Every TRM Maze number must be re-evaluated before use.
 - **TRM Sudoku checkpoint variant (unverified).** The mapping of
   `step_32550_sudoku_epoch50k` to TRM-MLP comes from the fork README's eval
   example and the model card's variant table. Loading it with the wrong

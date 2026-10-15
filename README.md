@@ -221,6 +221,8 @@ experiments/
                       with a pregen cache) + trainer.
   <benchmark>/config.py     typed experiment config (defaults = paper recipe)
   <benchmark>/eval_task.py  adapter for the shared evaluator
+baselines/            HRM/TRM reproduction and evals, fine-tuned Qwen baseline
+                      (see baselines/README.md)
 tests/                CPU tests, including bit-exact equivalence fixtures
 ```
 

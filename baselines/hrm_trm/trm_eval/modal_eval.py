@@ -20,6 +20,10 @@ its adam-atan2 CUDA extension is only JIT-built when the optimizer is used —
 stubs are needed. We drive their own `run_eval_only.py` and verify its saved
 predictions.
 
+Maze checkpoints (the release and our retrains) were trained with
+`arch.L_cycles=4`; `cfg_maze.yaml` sets that explicitly, since the fork's
+default config uses 6 and a loop-count mismatch loads without error.
+
 Sudoku checkpoints (`alphaXiv/trm-model-sudoku`, also an independent
 reproduction) need the matching architecture config: `cfg_sudoku_mlp.yaml`
 (TRM-MLP, the variant behind the paper's 87.4%) or `cfg_sudoku_att.yaml`.
@@ -59,6 +63,8 @@ image = (
         f"cd {TRM_REMOTE} && git checkout {TRM_COMMIT}",
         f"cd {TRM_REMOTE} && pip install -e . --no-deps",
     )
+    .add_local_file(Path(__file__).parent / "cfg_maze.yaml",
+                    f"{TRM_REMOTE}/config/cfg_maze.yaml")
     .add_local_file(Path(__file__).parent / "cfg_sudoku_mlp.yaml",
                     f"{TRM_REMOTE}/config/cfg_sudoku_mlp.yaml")
     .add_local_file(Path(__file__).parent / "cfg_sudoku_att.yaml",
@@ -163,6 +169,7 @@ def run(checkpoint: str = CKPT):
     os.makedirs(outdir, exist_ok=True)
     cmd = [
         sys.executable, "scripts/run_eval_only.py",
+        "--config", "config/cfg_maze.yaml",
         "--checkpoint", checkpoint,
         "--dataset", "data/maze-30x30-hard-1k",
         "--outdir", outdir,

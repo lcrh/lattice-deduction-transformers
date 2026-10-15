@@ -97,8 +97,12 @@ released checkpoints agrees:
 
 | model | best exact (ours) | paper exact | released-ckpt exact | best lenient (ours) |
 |---|---|---|---|---|
-| TRM (7M)  | 85.1% | 85.3% | 83.8% | 91.6% |
+| TRM (7M)  | 85.1%† | 85.3% | 83.8%† | 91.6%† |
 | HRM (27M) | 74.8% | 74.5% | 74.4% | 82.2% |
+
+† TRM Maze evals in this section ran `run_eval_only.py` with the default
+`L_cycles=6`, but the checkpoints were trained with `L_cycles=4`. Eval now
+uses `trm_eval/cfg_maze.yaml`; these numbers need re-evaluation.
 
 **2. 8× dihedral augmentation hurts TRM, and helps HRM only on long runs (lenient
 only).** Best performance reached over each training trajectory:
