@@ -451,5 +451,5 @@ def print_index_pins(topology: str, sizes: dict[str, int]) -> None:
             print(f"  (no index list named {name})", flush=True)
             continue
         lst = index_lists.load(name, split_size=sizes[split]) if spec.split_size is None else None
-        digest = index_lists.digest(lst) if lst is not None else spec.sha256
+        digest = lst.digest if lst is not None else spec.sha256
         print(f"  {name}: split_size={sizes[split]}, sha256=\"{digest}\"", flush=True)

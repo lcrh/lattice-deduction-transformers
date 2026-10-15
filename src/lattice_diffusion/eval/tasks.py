@@ -44,11 +44,7 @@ class EvalTask(ABC):
     @abstractmethod
     def solve_block(self, model: nn.Module, split: str, indices: np.ndarray,
                     solve: dict) -> list[Row]:
-        """Rows for `indices`, in order.
-
-        Rows have every field in records.py except `pos` and `block`, which the
-        caller adds.
-        """
+        """Rows for `indices` in order; the caller adds `pos` and `block`."""
 
 
 TASKS: dict[str, str] = {

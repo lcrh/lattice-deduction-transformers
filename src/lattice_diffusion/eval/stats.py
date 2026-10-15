@@ -38,7 +38,7 @@ def _log_mixture_ratio(p: float, successes: int, failures: int,
 
 
 def _bisect(f, lo: float, hi: float, iters: int = 60) -> float:
-    """Root of a function that is True at lo and False at hi."""
+    """Point where predicate `f` switches from True (at lo) to False (at hi)."""
     for _ in range(iters):
         mid = 0.5 * (lo + hi)
         if f(mid):
@@ -128,7 +128,8 @@ def paired_difference(correct_a: list[bool], correct_b: list[bool],
     only_a = sum(1 for x, y in zip(a, b) if x and not y)
     only_b = sum(1 for x, y in zip(a, b) if y and not x)
     if n == 0:
-        return PairedDifference(0, 0.0, 0.0, 0.0, -1.0, 1.0, 0, 0)
+        return PairedDifference(n=0, acc_a=0.0, acc_b=0.0, delta=0.0, lo=-1.0, hi=1.0,
+                                only_a=0, only_b=0)
     delta = (only_a - only_b) / n
     var = max((only_a + only_b) - (only_a - only_b) ** 2 / n, 0.0) / n ** 2
     z = _normal_quantile(1.0 - alpha / 2)

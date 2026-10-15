@@ -104,7 +104,7 @@ def test_fixed_n_reports_exactly_n(workers, window):
     assert res.stop_reason == "fixed_n"
     assert res.n == len(res.rows) == 1000
     assert [r["pos"] for r in res.rows] == list(range(1000))
-    assert max(res.blocks_done) == n_blocks(1000, spec.block_size) - 1
+    assert res.n_evaluated == n_blocks(1000, spec.block_size) * spec.block_size
 
 
 def test_fixed_n_longer_than_list_is_exhausted():

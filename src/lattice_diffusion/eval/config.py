@@ -2,30 +2,30 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from lattice_diffusion.eval.indices import filter_tag
 from lattice_diffusion.eval.records import EvalSpec
 from lattice_diffusion.eval.stop import PRESETS
+from lattice_diffusion.provenance import Provenance
 
 
 @dataclass
 class EvalConfig:
-    # Named list from lattice_diffusion.eval.indices, or "range" for the
-    # first `n` items of `split` in dataset order.
+    """How a trained checkpoint is evaluated."""
+
+    # Named list (lattice_diffusion.eval.indices), or "range" for the first `n` items of `split`.
     index_list: str = "sudoku_test_perm"
     split: str | None = None
     n: int | None = None
-    # Task-specific restriction of the list (kept in list order), e.g.
-    # {"orders": [7, 8, 9, 10]} for Snowflake order-transfer evals.
-    index_filter: dict | None = None
+    index_filter: dict | None = None    # see EvalSpec.index_filter
     stop: str = "sequential"            # stop-rule preset (lattice_diffusion.eval.stop)
     dropout_p: float = 0.05             # eval-time dropout, used as search noise
     eval_seed: int = 0
     block_size: int = 512
     compile: bool = False
     tag: str = ""
-    # Cost / wall-clock only; not part of the eval's identity.
+    # Cost and wall-clock only; not part of the eval's identity.
     workers: int = 32
     max_in_flight: int | None = None    # None = workers
     keep_warm_s: int = 300
@@ -40,36 +40,38 @@ class EvalConfig:
 def build_spec(task: str, checkpoint: str, cfg: EvalConfig, solve: dict,
                explicit_indices: list[int] | None = None,
                explicit_split: str | None = None,
-               provenance: dict | None = None) -> EvalSpec:
-    """EvalSpec for `checkpoint`. `explicit_indices` (with `explicit_split`)
-    replaces the configured index list, e.g. for a portfolio failure set.
-    `provenance` (exp_id / entry / code_sha) is recorded, not hashed."""
-    index_list = cfg.index_list
-    if explicit_indices is None and index_list == "range":
+               provenance: Provenance | None = None) -> EvalSpec:
+    """EvalSpec for `checkpoint` under eval config `cfg`.
+
+    Args:
+        explicit_indices: Replace the configured list (e.g. a portfolio failure set);
+            needs explicit_split.
+        provenance: Recorded with the spec, not hashed.
+    """
+    if explicit_indices is None and cfg.index_list == "range":
         explicit_indices, explicit_split = list(range(cfg.n)), cfg.split
     if explicit_indices is not None:
-        tag = cfg.tag or (f"range-{explicit_split}-{len(explicit_indices)}"
-                          if index_list == "range" else "explicit")
-        index_list = "explicit"
+        default_tag = (f"range-{explicit_split}-{len(explicit_indices)}"
+                       if cfg.index_list == "range" else "explicit")
+    elif cfg.index_filter is not None:
+        default_tag = f"{cfg.index_list}[{filter_tag(cfg.index_filter)}]"
     else:
-        tag = cfg.tag or index_list
-        if cfg.index_filter is not None and not cfg.tag:
-            tag = f"{tag}[{filter_tag(cfg.index_filter)}]"
+        default_tag = cfg.index_list
     return EvalSpec(
         task=task,
         checkpoint=checkpoint,
-        index_list=index_list,
+        index_list="explicit" if explicit_indices is not None else cfg.index_list,
         solve={**solve, "dropout_p": cfg.dropout_p},
         stop=PRESETS[cfg.stop].to_dict(),
         block_size=cfg.block_size,
         eval_seed=cfg.eval_seed,
         compile=cfg.compile,
-        tag=tag,
+        tag=cfg.tag or default_tag,
         explicit_indices=explicit_indices,
         explicit_split=explicit_split,
         index_filter=cfg.index_filter,
         n_workers=cfg.workers,
         max_in_flight=cfg.max_in_flight,
         keep_warm_s=cfg.keep_warm_s,
-        **(provenance or {}),
+        **asdict(provenance or Provenance()),
     )

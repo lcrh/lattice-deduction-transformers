@@ -68,7 +68,7 @@ def small_sudoku_val(n_train: int = 300, length: int = 30):
     """Point the `sudoku_val` index list at a fake train split of n_train."""
     spec = index_lists.IndexListSpec(task="sudoku", split="train", split_size=n_train,
                                      seed=7, length=length, sha256="")
-    spec = dataclasses.replace(spec, sha256=index_lists._digest(index_lists.generate(spec)))
+    spec = dataclasses.replace(spec, sha256=index_lists.digest(index_lists.generate(spec)))
     old = index_lists.SPECS["sudoku_val"]
     index_lists.SPECS["sudoku_val"] = spec
     try:

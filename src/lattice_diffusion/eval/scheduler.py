@@ -7,38 +7,57 @@ puzzle in index-list order, so the reported result does not depend on the
 number of workers, the window size, or completion order. Those only change
 wall-clock time and how much work runs past the stopping point.
 
-The executor is abstract; Modal runs use a thread pool of blocking remote
-calls (one GPU container per worker), tests use local functions.
+Modal runs use a thread pool of blocking remote calls as the executor;
+tests use local functions.
 """
 
 from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass, field
-from typing import Callable, Protocol
+from dataclasses import dataclass
+from typing import Callable, Protocol, TypedDict
 
-from lattice_diffusion.eval.stop import PrefixCounts, StopRule
+from lattice_diffusion.eval.stop import PrefixCounts, Status, StopReason, StopRule
 
-Row = dict
+
+class Row(TypedDict, total=False):
+    """One evaluated puzzle. Benchmarks may add fields (Maze: `label`)."""
+
+    idx: int                # absolute dataset index
+    pos: int                # position in the index list
+    block: int
+    status: Status
+    rounds: int             # solver round of the accepted chain (-1 if none)
+    calls: int              # model calls while the puzzle held a solver slot
+    forwards: int           # single-chain forwards if run unbatched
+    forwards_seq: int       # drained-chain estimate; only with solve.estimate_sequential
+    n_resets: int           # chain resets
+    solution: str           # accepted prediction, benchmark-specific encoding
+    verified: bool | None   # rule check of `solution` (None: no rule check for the benchmark)
+    deduced: int            # candidates eliminated over the puzzle's chain-rounds
+    unsound: int            # of those, the solution's own
+    cls: list[int]          # conflict head [tp, fp, fn, tn] against true conflicts
+    pass_deduced_unsound: list[list[int]]   # [deduced, unsound] per deduction pass
 
 
 class Executor(Protocol):
     def submit(self, block: int) -> None: ...
 
     def wait_any(self) -> list[tuple[int, list[Row]]]:
-        """Block until at least one submitted block finishes; return all
-        finished (block, rows) pairs not yet returned."""
+        """Wait for a submitted block; return every finished (block, rows) not yet returned."""
         ...
 
 
 @dataclass
 class ScheduleResult:
-    n: int                          # reported prefix length (puzzles)
-    stop_reason: str                # "failures" | "half_width" | "fixed_n" | "exhausted"
+    stop_reason: StopReason
     counts: PrefixCounts
     rows: list[Row]                 # the reported prefix, in index-list order
     n_evaluated: int                # every puzzle evaluated, including overshoot
-    blocks_done: list[int] = field(default_factory=list)
+
+    @property
+    def n(self) -> int:
+        return self.counts.n
 
 
 def block_bounds(block: int, block_size: int, n_items: int) -> tuple[int, int]:
@@ -79,17 +98,16 @@ def run_blocks(
     prefix_blocks = 0       # blocks 0..prefix_blocks-1 are all done
     counts = PrefixCounts()
     prefix_rows: list[Row] = []
-    stop_reason: str | None = None
+    stop_reason: StopReason | None = None
 
     def advance_prefix() -> None:
         nonlocal prefix_blocks, stop_reason
         while stop_reason is None and prefix_blocks in done:
             rows = done[prefix_blocks]
-            expected = block_bounds(prefix_blocks, block_size, n_items)
-            if len(rows) != expected[1] - expected[0]:
+            start, end = block_bounds(prefix_blocks, block_size, n_items)
+            if len(rows) != end - start:
                 raise RuntimeError(
-                    f"block {prefix_blocks} has {len(rows)} rows, "
-                    f"expected {expected[1] - expected[0]}")
+                    f"block {prefix_blocks} has {len(rows)} rows, expected {end - start}")
             for row in rows:
                 counts.add(row["status"])
                 prefix_rows.append(row)
@@ -126,12 +144,10 @@ def run_blocks(
             raise RuntimeError("scheduler finished without covering all blocks")
         stop_reason = "exhausted"
     return ScheduleResult(
-        n=counts.n,
         stop_reason=stop_reason,
         counts=counts,
         rows=prefix_rows,
         n_evaluated=sum(len(r) for r in done.values()),
-        blocks_done=sorted(done),
     )
 
 

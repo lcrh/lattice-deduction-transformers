@@ -3,36 +3,13 @@
 Layout under the eval root (on the checkpoint volume):
 
     <root>/<checkpoint stem>/<tag>-<spec hash>/
-        spec.json            the resolved EvalSpec's hashed fields, plus the
-                             provenance of the launch that created the run
-        blocks/000000.jsonl  one row per puzzle, in index-list order
-        summary-<rule>.json  one per stop rule the blocks were summarized with
+        spec.json                       hashed EvalSpec fields + launch provenance
+        indices.sha256                  digest of the index list the blocks index into
+        blocks/000000.jsonl             one `Row` per puzzle, in index-list order
+        summary-<kind>-<digest8>.json   one per stop rule the blocks were summarized with
 
-Block contents do not depend on the stop rule, so the rule is not part of
-the hash: rerunning with a looser or tighter rule (or `NoStop`) reuses and
-extends the same blocks.
-
-Row fields (every benchmark):
-    idx       absolute dataset index
-    pos       position in the index list
-    block     block id
-    status    "correct" | "wrong" | "timeout"
-    rounds    solver round at which the puzzle was accepted (-1 if never)
-    calls     model calls while the puzzle occupied a solver slot
-    forwards  single-chain forwards if run unbatched
-    n_resets  chain resets
-    solution  the accepted prediction, benchmark-specific string encoding
-    deduced, unsound, cls
-              soundness diagnostics: candidates eliminated over the
-              puzzle's chain-rounds, how many were the solution's own, and
-              the conflict head's [tp, fp, fn, tn] against true conflicts
-    verified  rule check of `solution` against the puzzle (never used for
-              acceptance; recorded for portfolio selection and auditing);
-              null where the benchmark has no rule check (Snowflake)
-Optional fields:
-    forwards_seq  forwards if one chain ran sequentially (drained-chain
-                  estimate; only with `solve.estimate_sequential`)
-    label         Maze only: the exact-vs-alternate-path outcome
+Block contents do not depend on the stop rule, so it is not hashed: a looser
+or tighter rule reuses and extends the same blocks.
 """
 
 from __future__ import annotations
@@ -43,7 +20,9 @@ import math
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import ClassVar, Literal
 
+from lattice_diffusion.config import stable_hash
 from lattice_diffusion.eval.scheduler import Row, ScheduleResult
 from lattice_diffusion.eval.stats import (
     binomial_upper, confidence_sequence, inverse_binomial_rate,
@@ -52,11 +31,13 @@ from lattice_diffusion.eval.stats import (
 
 @dataclass
 class EvalSpec:
-    """Everything that determines an eval's results. Fields in `_UNHASHED`
-    do not change any block's rows: the stop rule only decides how many
-    blocks are summarized, the rest only affect cost and wall-clock time."""
+    """Everything that determines an eval's results.
 
-    task: str                           # "sudoku" | "snowflake" | "maze"
+    Fields in `_UNHASHED` never change a block's rows: the stop rule only
+    decides how many blocks are summarized, the rest affect cost or provenance.
+    """
+
+    task: Literal["sudoku", "snowflake", "maze"]
     checkpoint: str
     index_list: str                     # named list, or "explicit"
     solve: dict                         # task-specific solver config
@@ -67,8 +48,8 @@ class EvalSpec:
     tag: str = "test"
     explicit_indices: list[int] | None = None
     explicit_split: str | None = None
-    # Task-specific restriction of the index list, applied in list order,
-    # e.g. {"orders": [7, 8, 9, 10]} for Snowflake (EvalTask.filter_indices).
+    # Task-specific restriction of the list, kept in list order (EvalTask.filter_indices),
+    # e.g. {"orders": [7, 8, 9, 10]} for Snowflake.
     index_filter: dict | None = None
     n_workers: int = 32
     max_in_flight: int | None = None    # None = n_workers
@@ -78,7 +59,7 @@ class EvalSpec:
     entry: str = ""
     code_sha: str = ""
 
-    _UNHASHED = ("stop", "n_workers", "max_in_flight", "keep_warm_s",
+    _UNHASHED: ClassVar[tuple[str, ...]] = ("stop", "n_workers", "max_in_flight", "keep_warm_s",
                  "exp_id", "entry", "code_sha")
 
     def hashed_fields(self) -> dict:
@@ -88,8 +69,11 @@ class EvalSpec:
         return d
 
     def spec_hash(self) -> str:
-        blob = json.dumps(self.hashed_fields(), sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(blob.encode()).hexdigest()[:12]
+        return stable_hash(self.hashed_fields())
+
+    @property
+    def provenance(self) -> dict:
+        return {"exp_id": self.exp_id, "entry": self.entry, "code_sha": self.code_sha}
 
     @property
     def window(self) -> int:
@@ -102,7 +86,7 @@ class EvalSpec:
         return json.dumps(asdict(self), sort_keys=True)
 
     @classmethod
-    def from_json(cls, s: str) -> "EvalSpec":
+    def from_json(cls, s: str) -> EvalSpec:
         return cls(**json.loads(s))
 
 
@@ -140,10 +124,18 @@ def check_or_write_spec(run_dir: Path, spec: EvalSpec) -> None:
             raise RuntimeError(f"{path} exists with a different spec")
         return
     run_dir.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({
-        "hashed": spec.hashed_fields(),
-        "provenance": {"exp_id": spec.exp_id, "entry": spec.entry, "code_sha": spec.code_sha},
-    }, sort_keys=True, indent=2))
+    path.write_text(json.dumps({"hashed": spec.hashed_fields(), "provenance": spec.provenance},
+                               sort_keys=True, indent=2))
+
+
+def check_or_write_digest(run_dir: Path, digest: str, name: str) -> None:
+    """Record which index list a run's blocks index into; refuse a different one on resume."""
+    path = run_dir / "indices.sha256"
+    if path.exists():
+        if path.read_text().strip() != digest:
+            raise RuntimeError(f"{run_dir} was evaluated on a different {name} list")
+        return
+    path.write_text(digest + "\n")
 
 
 def _percentile(sorted_vals: list[float], q: float) -> float | None:
@@ -158,7 +150,7 @@ def _call_stats(rows: list[Row]) -> dict:
     vals = sorted(r["calls"] for r in rows)
     return {
         "mean": sum(vals) / len(vals) if vals else None,
-        **{f"p{int(q * 100)}": _percentile(vals, q) for q in (0.5, 0.75, 0.9, 0.95, 0.99)},
+        **{f"p{q}": _percentile(vals, q / 100) for q in (50, 75, 90, 95, 99)},
     }
 
 
@@ -207,31 +199,29 @@ class Summary:
     startup_seconds: float              # worker time loading/compiling the model
     alpha: float = 0.05
     soundness: dict = field(default_factory=dict)   # pooled over the reported prefix
-    extra: dict = field(default_factory=dict)
 
 
 def summarize(spec: EvalSpec, run_dir: Path, result: ScheduleResult,
               wall_seconds: float, gpu_seconds: float, startup_seconds: float = 0.0,
               alpha: float = 0.05) -> Summary:
     c = result.counts
-    n = c.n
     return Summary(
         spec=asdict(spec),
         run_dir=str(run_dir),
-        n=n,
+        n=c.n,
         stop_reason=result.stop_reason,
         correct=c.correct,
         wrong=c.wrong,
         timeout=c.timeout,
-        accuracy=c.correct / n if n else 0.0,
-        accuracy_cs=confidence_sequence(c.correct, n, alpha),
-        failure_rate=c.failures / n if n else 0.0,
-        failure_rate_inverse_binomial=inverse_binomial_rate(c.failures, n),
-        wrong_rate_upper=binomial_upper(c.wrong, n, alpha),
+        accuracy=c.correct / c.n if c.n else 0.0,
+        accuracy_cs=confidence_sequence(c.correct, c.n, alpha),
+        failure_rate=c.failures / c.n if c.n else 0.0,
+        failure_rate_inverse_binomial=inverse_binomial_rate(c.failures, c.n),
+        wrong_rate_upper=binomial_upper(c.wrong, c.n, alpha),
         calls_all=_call_stats(result.rows),
         calls_correct=_call_stats([r for r in result.rows if r["status"] == "correct"]),
         n_evaluated=result.n_evaluated,
-        overshoot=result.n_evaluated - n,
+        overshoot=result.n_evaluated - c.n,
         wall_seconds=wall_seconds,
         gpu_seconds=gpu_seconds,
         startup_seconds=startup_seconds,

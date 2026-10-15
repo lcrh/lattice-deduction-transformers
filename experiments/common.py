@@ -71,7 +71,7 @@ class Experiment:
 
     def eval_spec(self, checkpoint: str, **kw) -> EvalSpec:
         return build_spec(self.BENCHMARK, checkpoint, self.eval, self.solve_dict(),
-                          provenance=dataclasses.asdict(self.provenance), **kw)
+                          provenance=self.provenance, **kw)
 
     def to_json(self) -> str:
         return json.dumps(cfglib.to_dict(self))

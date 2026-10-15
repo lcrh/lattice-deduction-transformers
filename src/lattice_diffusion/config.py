@@ -21,6 +21,7 @@ import yaml
 
 
 def to_dict(obj) -> dict:
+    """JSON-compatible dict of a dataclass (tuples become lists)."""
     return json.loads(json.dumps(dataclasses.asdict(obj)))
 
 
@@ -35,8 +36,7 @@ def _dataclass_type(hint) -> type | None:
 
 
 def from_dict(cls, data: dict, where: str = ""):
-    """Build dataclass `cls` from a plain dict, recursing into nested
-    dataclass fields and turning lists back into tuples where typed so."""
+    """Build dataclass `cls` from a dict, rebuilding nested dataclasses and tuples."""
     hints = typing.get_type_hints(cls)
     names = {f.name for f in dataclasses.fields(cls) if f.init}
     unknown = set(data) - names
@@ -85,6 +85,7 @@ def parse_overrides(text: str | list[str]) -> dict:
 
 
 def flatten(d: dict, prefix: str = "") -> dict[str, Any]:
+    """{"a": {"b": 1}} -> {"a.b": 1}."""
     out = {}
     for key, value in d.items():
         path = f"{prefix}{key}"
@@ -103,8 +104,12 @@ def load(cls, path: str | Path | None = None, overrides: str | list[str] = ""):
     """
     data = to_dict(cls())
     derived = set(getattr(cls, "DERIVED", ()))
-    for update in (yaml.safe_load(Path(path).read_text()) if path else None,
-                   parse_overrides(overrides) if overrides else None):
+    updates = []
+    if path:
+        updates.append(yaml.safe_load(Path(path).read_text()))
+    if overrides:
+        updates.append(parse_overrides(overrides))
+    for update in updates:
         if update:
             clash = derived & set(flatten(update))
             if clash:
@@ -114,5 +119,6 @@ def load(cls, path: str | Path | None = None, overrides: str | list[str] = ""):
 
 
 def stable_hash(d: dict, length: int = 12) -> str:
+    """Hex prefix of the SHA-256 of `d` as canonical JSON."""
     blob = json.dumps(d, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode()).hexdigest()[:length]

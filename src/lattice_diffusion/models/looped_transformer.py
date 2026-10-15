@@ -1,25 +1,28 @@
-"""Looped transformer with stable iteration mechanics.
+"""Looped transformer: `h = LayerNorm(h + h0 + backbone(h + h0))` per loop.
 
-Architecture: `h = LayerNorm(h + backbone(h))` with input re-injection each
-loop. Stable to 128+ loops with improving NLL — the plain residual
-`h = h + backbone(h)` diverges around ~96 loops, so the LayerNorm wrap on
-the outer residual is load-bearing.
+The LayerNorm on the outer residual keeps it stable past 128 loops; the plain
+residual diverges around 96.
 
-Default forward returns mean-across-iterations predictions (more stable,
-higher soundness). Use return_all=True for per-iteration outputs (training).
-
-Independent implementation. Related prior work on iterated / recurrent
-transformer backbones: Dehghani et al. 2019 (Universal Transformer);
-Wang et al. 2025 (HRM, arXiv:2506.21734); Jolicoeur-Martineau et al. 2025
-(TRM).
+Related work on recurrent transformer backbones: Universal Transformer
+(Dehghani et al. 2019), HRM (Wang et al. 2025), TRM (Jolicoeur-Martineau et al. 2025).
 """
 
 from dataclasses import dataclass
+from typing import Literal, get_args
 
 import torch
 import torch.nn as nn
 
 from lattice_diffusion.models.transformer2d import Transformer2D, Transformer2DConfig
+
+# Latent state carried from one solve step to the next (TRM-style):
+#   off    - none; each step sees only the lattice state
+#   h      - the final hidden state, fed back through `carry_proj`
+#   z      - a scratchpad stream: each of the n_loops/2 cycles spends one backbone
+#            pass updating the scratchpad and one refining the answer stream
+#   zero_z - the z architecture with the scratchpad zeroed every step (control)
+CarryMode = Literal["off", "h", "z", "zero_z"]
+CARRY_MODES = get_args(CarryMode)
 
 
 @dataclass
@@ -46,15 +49,7 @@ class LoopedTransformerConfig:
     use_rope: bool = False
     rope_base: float = 10000.0
 
-    # Latent state carried from one solve step to the next (TRM-style):
-    #   off    — none; each step sees only the lattice state
-    #   h      — the final hidden state, fed back through `carry_proj`
-    #   z      — a separate scratchpad stream: each of the n_loops/2 cycles
-    #            spends one backbone pass updating the scratchpad and one
-    #            refining the answer stream that the heads read
-    #   zero_z — the z architecture with the scratchpad reset to zero at
-    #            every step (control for z)
-    carry: str = "off"
+    carry: CarryMode = "off"
 
     def __post_init__(self):
         if self.carry not in CARRY_MODES:
@@ -74,24 +69,8 @@ class LoopedTransformerConfig:
         return self.carry in ("z", "zero_z")
 
 
-CARRY_MODES = ("off", "h", "z", "zero_z")
-
-
 class PowersetModel(nn.Module):
-    """Looped transformer with normalized residual and input re-injection.
-
-    Each loop:
-        h = h + h0                        # re-inject input
-        h = LayerNorm(h + backbone(h))     # normalized outer residual
-
-    Heads:
-    - bce_head: per-candidate keep/eliminate logits [B, S, C]
-    - softmax_head: per-cell digit prediction logits [B, S, C]
-    - conflict_head: grid-level SAT/UNSAT logit [B, 1] (requires cls_token=True)
-
-    Default forward returns mean-across-iterations (averaged sigmoid/logits).
-    return_all=True returns per-iteration outputs for training loss.
-    """
+    """Looped transformer with keep/eliminate, digit and (optional) conflict heads."""
 
     def __init__(self, cfg: LoopedTransformerConfig):
         super().__init__()
@@ -139,22 +118,20 @@ class PowersetModel(nn.Module):
         orig_x: torch.Tensor | None = None,
         carry: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor | list[torch.Tensor]]:
-        """Forward pass.
+        """Run the loop and read out the heads.
 
-        Default (return_all=False, use_final=False): returns mean-across-iterations.
-        use_final=True: returns only the last iteration's predictions.
-        return_all=True: returns list of per-iteration predictions (for training).
-        n_loops overrides the configured loop count (the weights are shared
-        across iterations, so a model can be run deeper or shallower than
-        it was trained).
-        With `cfg.carry` set, `carry` is the previous step's `carry_out`
-        ([B, S, dim]; None = zeros) and `orig_x` the original puzzle (z modes).
+        Args:
+            x: Lattice state [B, S, C].
+            return_all: Return per-loop lists (training).
+            use_final: Return only the last loop's outputs.
+            n_loops: Override cfg.n_loops (weights are shared across loops).
+            orig_x: Original puzzle; required for carry z / zero_z.
+            carry: Previous step's `carry_out` [B, S, dim]; None means zeros.
 
-        Returns dict with keys:
-        - "bce": [B, S, C] mean logits, or list of per-loop [B, S, C]
-        - "softmax": [B, S, C] mean logits, or list of per-loop [B, S, C]
-        - "cls": [B, dim] mean hidden, or list of per-loop [B, dim] (when cls_token=True)
-        - "carry_out": [B, S, dim] latent for the next step (carry h / z)
+        Returns:
+            "bce", "softmax" [B, S, C]; "cls" [B, dim] and "conflict" [B, 1] with
+            cls_token; "carry_out" [B, S, dim] for carry h / z. Values are averaged
+            over loops unless return_all / use_final.
         """
         n_loops = self.cfg.n_loops if n_loops is None else n_loops
         all_bce = []
@@ -169,7 +146,7 @@ class PowersetModel(nn.Module):
                 h = h + self.carry_proj(carry)
 
             for _ in range(n_loops):
-                h = h + h0  # re-inject input
+                h = h + h0
 
                 out = self.backbone(h)
                 if self.cfg.cls_token:
@@ -218,25 +195,17 @@ class PowersetModel(nn.Module):
                     all_conflict.append(self.conflict_head(cls_h))
             carry_out = z if self.cfg.carry == "z" else None
 
-        result = {}
+        per_loop = {"bce": all_bce, "softmax": all_softmax}
+        if self.cfg.cls_token:
+            per_loop |= {"cls": all_cls, "conflict": all_conflict}
         if return_all:
-            result["bce"] = all_bce
-            result["softmax"] = all_softmax
-            if self.cfg.cls_token:
-                result["cls"] = all_cls
-                result["conflict"] = all_conflict
+            result = per_loop
         elif use_final:
-            result["bce"] = all_bce[-1]
-            result["softmax"] = all_softmax[-1]
-            if self.cfg.cls_token:
-                result["cls"] = all_cls[-1]
-                result["conflict"] = all_conflict[-1]
+            result = {k: v[-1] for k, v in per_loop.items()}
         else:
-            # Mean across iterations
-            result["bce"] = torch.stack(all_bce, dim=0).mean(dim=0)
-            result["softmax"] = torch.stack(all_softmax, dim=0).mean(dim=0)
+            result = {k: torch.stack(v, dim=0).mean(dim=0)
+                      for k, v in per_loop.items() if k != "conflict"}
             if self.cfg.cls_token:
-                result["cls"] = torch.stack(all_cls, dim=0).mean(dim=0)
                 result["conflict"] = self.conflict_head(result["cls"])
 
         if carry_out is not None:

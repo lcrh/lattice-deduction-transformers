@@ -1,4 +1,4 @@
-"""Shared Modal image and volume definitions for training jobs."""
+"""Shared Modal image, volumes and secret for training and eval."""
 
 import modal
 
@@ -10,11 +10,11 @@ image = (
     .add_local_python_source("experiments")
 )
 
-# For caching the sudoku-extreme HF download across runs
+# Dataset caches (HF downloads, generated data)
 data_volume = modal.Volume.from_name("lattice-diffusion-data", create_if_missing=True)
 DATA_MOUNT = "/data"
 
-# For persisting checkpoints across runs
+# Checkpoints, eval runs and the launch ledger
 checkpoint_volume = modal.Volume.from_name("lattice-diffusion-checkpoints", create_if_missing=True)
 CHECKPOINT_MOUNT = "/checkpoints"
 

@@ -1,28 +1,23 @@
 """Modal deployment of the shared evaluator.
 
-`coordinate` runs on a CPU container and owns the run directory: it
-schedules blocks, writes block files and the summary, and commits the
-volume. `BlockWorker` runs on B200s; each container loads (and optionally
-compiles) the model once, then solves blocks. Benchmark entry scripts
-include `eval_app` into their own app and call
-`coordinate.remote(spec.to_json())`.
+`coordinate` (CPU) owns the run directory: it schedules blocks, writes block
+files and the summary, and commits the volume. `BlockWorker` (B200) loads the
+model once per container, then solves blocks.
 
-Workers are parametrized only by what determines the loaded model
-(checkpoint, task, eval dropout, compile). The solver config, eval seed and
-block are passed per call, so containers are reused across blocks of one
-eval and across evals of the same model (seeds, presets, solver sweeps).
-`keep_warm_s` keeps idle containers alive, e.g. while a slow block holds
-the scheduling window.
+Workers are parametrized only by what determines the loaded model, so a warm
+container serves every block of an eval and every eval of the same model.
 """
 
 import threading
 import time
+from dataclasses import dataclass
+from typing import TypedDict
 
 import modal
 
 from lattice_diffusion.eval.records import EvalSpec, format_summary
-from lattice_diffusion.eval.runner import run_eval, solve_block
-from lattice_diffusion.eval.scheduler import ThreadExecutor
+from lattice_diffusion.eval.runner import BlockArgs, run_eval, solve_block
+from lattice_diffusion.eval.scheduler import Row, ThreadExecutor
 from lattice_diffusion.eval.tasks import get_task
 from lattice_diffusion.modal.image import (
     CHECKPOINT_MOUNT, DATA_MOUNT, checkpoint_volume, data_volume, hf_secret, image,
@@ -32,6 +27,18 @@ from lattice_diffusion.provenance import header
 EVAL_ROOT = f"{CHECKPOINT_MOUNT}/eval"
 
 eval_app = modal.App("lattice-eval")
+
+
+class BlockResult(TypedDict):
+    rows: list[Row]
+    seconds: float              # time solving the block
+    startup_seconds: float      # container load/compile time, on its first block only
+
+
+@dataclass
+class WorkerTime:
+    blocks: float = 0.0
+    startup: float = 0.0
 
 
 @eval_app.cls(
@@ -48,21 +55,20 @@ class BlockWorker:
     @modal.enter()
     def load(self) -> None:
         t0 = time.time()
-        self._task = get_task(self.task, DATA_MOUNT)
-        self.model = self._task.load_model(self.checkpoint, float(self.dropout_p),
-                                           self.compile)
+        self.task_impl = get_task(self.task, DATA_MOUNT)
+        self.model = self.task_impl.load_model(self.checkpoint, float(self.dropout_p),
+                                               self.compile)
         if self.compile:
-            self._task.warmup(self.model)
+            self.task_impl.warmup(self.model)
         self.startup_seconds = time.time() - t0
 
     @modal.method()
-    def solve(self, args: dict) -> dict:
-        """Solve one block. The first call on each container also reports
-        that container's load/compile time."""
+    def solve(self, args: BlockArgs) -> BlockResult:
+        """Solve one block; the container's first call also reports its startup time."""
         t0 = time.time()
-        rows = solve_block(self._task, self.model, args)
+        rows = solve_block(self.task_impl, self.model, args)
         startup, self.startup_seconds = self.startup_seconds, 0.0
-        return {"rows": rows, "seconds": time.time() - t0, "startup_seconds": startup}
+        return BlockResult(rows=rows, seconds=time.time() - t0, startup_seconds=startup)
 
 
 @eval_app.function(
@@ -81,17 +87,16 @@ def coordinate(spec_json: str) -> dict:
         checkpoint=spec.checkpoint, task=spec.task,
         dropout_p=repr(float(spec.solve.get("dropout_p", 0.0))), compile=spec.compile,
     )
-    seconds = {"blocks": 0.0, "startup": 0.0}
+    time_spent = WorkerTime()
     lock = threading.Lock()
 
     def make_executor(block_args):
-        # One blocking remote call per in-flight block; the scheduler keeps
-        # at most `window` blocks in flight.
-        def solve(block: int) -> list:
+        # One blocking remote call per in-flight block; the scheduler bounds how many.
+        def solve(block: int) -> list[Row]:
             out = worker.solve.remote(block_args(block))
             with lock:
-                seconds["blocks"] += out["seconds"]
-                seconds["startup"] += out["startup_seconds"]
+                time_spent.blocks += out["seconds"]
+                time_spent.startup += out["startup_seconds"]
             return out["rows"]
 
         return ThreadExecutor(solve, n_workers=spec.window)
@@ -100,8 +105,8 @@ def coordinate(spec_json: str) -> dict:
     summary = run_eval(
         spec, EVAL_ROOT, make_executor,
         persist=checkpoint_volume.commit,
-        block_seconds=lambda: seconds["blocks"],
-        startup_seconds=lambda: seconds["startup"],
+        block_seconds=lambda: time_spent.blocks,
+        startup_seconds=lambda: time_spent.startup,
         split_size=task.split_size,
         filter_indices=task.filter_indices if spec.index_filter is not None else None,
     )

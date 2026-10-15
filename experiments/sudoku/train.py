@@ -33,7 +33,7 @@ import torch
 import torch.nn.functional as F
 
 from lattice_diffusion.data.sudoku_extreme import SudokuExtremeDataset, load_puzzles
-from lattice_diffusion.eval.indices import load as load_index_list
+from lattice_diffusion.eval import indices as index_lists
 from lattice_diffusion.models.looped_transformer import PowersetModel
 from lattice_diffusion.models.weighted_bce import weighted_bce_with_logits
 from lattice_diffusion.training.utils.checkpoint import save_checkpoint
@@ -237,7 +237,7 @@ def _losses(out, state, orig_y, given_mask, is_sat, gt_conflict_target,
 
 def _monitor_set(cache_dir: str, n: int, device) -> tuple[torch.Tensor, torch.Tensor]:
     """First `n` puzzles of the held-out `sudoku_val` list."""
-    idx = load_index_list("sudoku_val").indices[:n]
+    idx = index_lists.load("sudoku_val").indices[:n]
     x, y = load_puzzles(cache_dir, "train", idx)
     return x.to(device).float(), y.to(device).float()
 

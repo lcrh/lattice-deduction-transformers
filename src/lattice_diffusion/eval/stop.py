@@ -1,20 +1,25 @@
 """Stopping rules for sequential evaluation.
 
-A rule is consulted after every puzzle of the contiguous evaluated prefix
-(in index-list order) and returns a stop reason or None. Rules only see
-prefix counts, so where a run stops depends on the index list, the eval
-seed and the block size, never on how many workers ran it.
+A rule is checked after every puzzle of the contiguous evaluated prefix, in
+index-list order. It only sees prefix counts, so where a run stops never
+depends on how many workers ran it.
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import ClassVar, Literal
 
 from lattice_diffusion.eval.stats import confidence_sequence
+
+Status = Literal["correct", "wrong", "timeout"]
+StopReason = Literal["failures", "half_width", "fixed_n", "exhausted"]
 
 
 @dataclass
 class PrefixCounts:
+    """Outcome counts over the evaluated prefix."""
+
     n: int = 0
     correct: int = 0
     wrong: int = 0
@@ -24,42 +29,36 @@ class PrefixCounts:
     def failures(self) -> int:
         return self.wrong + self.timeout
 
-    def add(self, status: str) -> None:
-        self.n += 1
-        if status == "correct":
-            self.correct += 1
-        elif status == "wrong":
-            self.wrong += 1
-        elif status == "timeout":
-            self.timeout += 1
-        else:
+    def add(self, status: Status) -> None:
+        if status not in ("correct", "wrong", "timeout"):
             raise ValueError(f"unknown status {status!r}")
+        self.n += 1
+        setattr(self, status, getattr(self, status) + 1)
 
 
 @dataclass(frozen=True)
 class NoStop:
     """Evaluate every index."""
 
-    limit = None
+    KIND: ClassVar[str] = "none"
+    limit: ClassVar[int | None] = None
 
-    def should_stop(self, counts: PrefixCounts) -> str | None:
+    def should_stop(self, counts: PrefixCounts) -> StopReason | None:
         return None
 
     def to_dict(self) -> dict:
-        return {"kind": "none"}
+        return {"kind": self.KIND, **asdict(self)}
 
 
 @dataclass(frozen=True)
 class SequentialStop:
-    """Stop once the error rate is pinned down.
+    """Stop at `max_failures` failures or a CS half-width <= `half_width`, never before `n_min`.
 
-    Fires on the first of:
-      - `failures`:   wrong + timeout >= max_failures;
-      - `half_width`: the confidence-sequence half-width on accuracy is
-                      <= half_width (checked every `check_every` puzzles);
-    but never before `n_min` puzzles. Running out of indices is reported by
-    the scheduler as `exhausted`.
+    The half-width is checked every `check_every` puzzles.
     """
+
+    KIND: ClassVar[str] = "sequential"
+    limit: ClassVar[int | None] = None
 
     max_failures: int = 100
     half_width: float = 0.001
@@ -67,9 +66,7 @@ class SequentialStop:
     alpha: float = 0.05
     check_every: int = 100
 
-    limit = None
-
-    def should_stop(self, counts: PrefixCounts) -> str | None:
+    def should_stop(self, counts: PrefixCounts) -> StopReason | None:
         if counts.n < self.n_min:
             return None
         if counts.failures >= self.max_failures:
@@ -81,14 +78,14 @@ class SequentialStop:
         return None
 
     def to_dict(self) -> dict:
-        return {"kind": "sequential", **asdict(self)}
+        return {"kind": self.KIND, **asdict(self)}
 
 
 @dataclass(frozen=True)
 class FixedN:
-    """Evaluate exactly the first `n` indices (`fixed_n`), or the whole list
-    if it is shorter (`exhausted`). Used for ablation tables, so every arm is
-    scored on the same puzzles."""
+    """Evaluate exactly the first `n` indices, so every ablation arm sees the same puzzles."""
+
+    KIND: ClassVar[str] = "fixed_n"
 
     n: int
 
@@ -96,11 +93,11 @@ class FixedN:
     def limit(self) -> int:
         return self.n
 
-    def should_stop(self, counts: PrefixCounts) -> str | None:
+    def should_stop(self, counts: PrefixCounts) -> StopReason | None:
         return "fixed_n" if counts.n >= self.n else None
 
     def to_dict(self) -> dict:
-        return {"kind": "fixed_n", "n": self.n}
+        return {"kind": self.KIND, **asdict(self)}
 
 
 StopRule = NoStop | SequentialStop | FixedN
@@ -111,14 +108,13 @@ PRESETS: dict[str, StopRule] = {
     "ablation": FixedN(1000),
 }
 
+_RULES = {rule.KIND: rule for rule in (NoStop, SequentialStop, FixedN)}
+
 
 def stop_from_dict(d: dict) -> StopRule:
+    """Inverse of `StopRule.to_dict`."""
     d = dict(d)
     kind = d.pop("kind")
-    if kind == "none":
-        return NoStop()
-    if kind == "sequential":
-        return SequentialStop(**d)
-    if kind == "fixed_n":
-        return FixedN(**d)
-    raise ValueError(f"unknown stop rule kind {kind!r}")
+    if kind not in _RULES:
+        raise ValueError(f"unknown stop rule kind {kind!r}")
+    return _RULES[kind](**d)
