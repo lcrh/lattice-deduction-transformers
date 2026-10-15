@@ -1,0 +1,16 @@
+# Snowflake order transfer with mix-in (appendix): orders 4-6 plus 50 of the
+# 500 training puzzles drawn from orders 7-10; evaluated on orders 7-10.
+# Varied-topology dataset, 500 training puzzles, 4K steps (the budget the
+# archived order-transfer runs used; Table 2 uses 1K). Everything not set
+# here is the paper recipe (paper.yaml).
+name: ood_4to6_mixin50
+
+data:
+  train_orders: null
+  train_order_counts: {4: 150, 5: 150, 6: 150, 7: 13, 8: 13, 9: 12, 10: 12}
+
+train:
+  steps: 4000
+
+eval:
+  index_filter: {orders: [7, 8, 9, 10]}

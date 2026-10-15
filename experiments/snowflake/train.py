@@ -6,7 +6,8 @@ covering-grid setup:
     (`state[..., :6]` = vocab powerset, `state[..., 6]` = in-puzzle bit
     locked at 1 for in-puzzle cells, 0 elsewhere). The model has
     `n_channels=7` so the mask is just an extra "always-on" vocab slot
-    the operator never touches.
+    the operator never touches. With `constraint_group_embed`, constraint-
+    group membership channels follow as further locked inputs.
   - All deduce / decide / loss / GT-conflict logic gates on
     `in_puzzle_mask` so out-of-puzzle cells are inert.
   - Augmentation is digit-perm only (no spatial dihedral): the covering
@@ -42,7 +43,9 @@ from experiments.sudoku.dpll import StepConfig, dpll_step
 from experiments.sudoku.ema import ModelEMA
 from experiments.sudoku.train import format_monitor, monitor_solve
 
-from experiments.snowflake.data import SnowflakeDataset, _load_puzzles, load_states
+from experiments.snowflake.data import (
+    MAX_CONSTRAINT_GROUPS, SnowflakeDataset, _load_puzzles, load_states, split_name, split_path,
+)
 
 if TYPE_CHECKING:
     from experiments.snowflake.config import SnowflakeExperiment
@@ -50,10 +53,14 @@ if TYPE_CHECKING:
 
 # Snowflake recipe constants (must stay consistent with data.py).
 VOCAB = 6           # vocab channels (digits 1..6)
-N_CHANNELS = 7      # vocab + 1 mask channel
+N_CHANNELS = 7      # vocab + 1 mask channel (+ MAX_CONSTRAINT_GROUPS with group channels)
 GRID_ROWS = 15
 GRID_COLS = 10
 SEQ_LEN = GRID_ROWS * GRID_COLS  # 150
+
+
+def n_channels(constraint_group_embed: bool) -> int:
+    return N_CHANNELS + (MAX_CONSTRAINT_GROUPS if constraint_group_embed else 0)
 
 
 def snowflake_step(**kw) -> StepConfig:
@@ -87,22 +94,27 @@ class TrainConfig:
     ema_decay: float = 0.999
 
     log_every: int = 20
-    # In-training monitoring on a seeded sample of `monitor_data_path`
-    # (relative to the data dir); logging only, see sudoku/train.py.
+    # In-training monitoring on a seeded sample of the dataset's validation
+    # split; logging only, see sudoku/train.py.
     monitor_every: int = 100
     monitor_n_puzzles: int = 200
     monitor_max_rounds: int = 5
     monitor_n_chains: int = 64
-    monitor_data_path: str = "snowflake_test.parquet"
 
 
-def _build_state(orig_x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    """Build [B, S, 7] state from snowflake [B, S, 6] vocab + [B, S] mask.
+def _build_state(orig_x: torch.Tensor, mask: torch.Tensor,
+                 groups: torch.Tensor | None = None) -> torch.Tensor:
+    """Build [B, S, C] state from snowflake [B, S, 6] vocab + [B, S] mask
+    (+ [B, S, G] constraint-group channels).
 
-    Channel 6 is the in-puzzle mask, locked at 1 for in-puzzle cells.
-    Out-of-puzzle cells have all-zero state (vocab + mask).
+    Channel 6 is the in-puzzle mask, locked at 1 for in-puzzle cells; group
+    channels follow. The operator only edits the 6 vocab channels.
+    Out-of-puzzle cells have all-zero state.
     """
-    return torch.cat([orig_x, mask.unsqueeze(-1).float()], dim=-1)
+    pieces = [orig_x, mask.unsqueeze(-1).float()]
+    if groups is not None:
+        pieces.append(groups.float())
+    return torch.cat(pieces, dim=-1)
 
 
 def _gt_conflict(
@@ -169,12 +181,11 @@ def _losses(
 ):
     """Compute losses over vocab channels only, gated by in_puzzle_mask.
 
-    `state` and `orig_y` arrive as [B, S, N_CHANNELS=7] (orig_y is padded
-    with a zero-valued mask channel by the caller so that aug functions
-    can permute it homogeneously with state). `out["bce"][i]` and
-    `out["softmax"][i]` are also [B, S, N_CHANNELS]. We slice all three
-    to `[..., :VOCAB]` for loss math so the auxiliary mask channel gets
-    no gradient signal (the model learns to ignore it).
+    `state` and `orig_y` arrive as [B, S, C] (orig_y is zero-padded past
+    the vocab by the caller so that aug functions can permute it
+    homogeneously with state). `out["bce"][i]` and `out["softmax"][i]` are
+    also [B, S, C]. We slice all three to `[..., :VOCAB]` for loss math so
+    the locked auxiliary channels get no gradient signal.
 
     BCE reduction matches sudoku's `weighted_bce_with_logits(...).mean()`
     semantics: per-bit loss multiplied by an in-puzzle mask, then mean
@@ -231,12 +242,14 @@ def _losses(
     return total / len(iterations)
 
 
-def _monitor_set(path: str, n: int, device):
+def _monitor_set(path: str, n: int, device, group_embed: bool):
     puzzles = _load_puzzles(path)
-    idx = np.random.default_rng(200).permutation(len(puzzles))[:n]
-    x, y, mask = load_states(puzzles, idx)
+    rng = np.random.default_rng(200)
+    idx = rng.permutation(len(puzzles))[:n]
+    x, y, mask, groups = load_states(puzzles, idx, rng if group_embed else None)
     x, y, mask = x.to(device), y.to(device), mask.to(device)
-    return _build_state(x, mask), y, _given_mask(x), mask
+    groups = groups.to(device) if groups is not None else None
+    return _build_state(x, mask, groups), y, _given_mask(x), mask
 
 
 def train(exp: SnowflakeExperiment, ckpt_path: str | Path,
@@ -260,9 +273,11 @@ def train(exp: SnowflakeExperiment, ckpt_path: str | Path,
     dataset = SnowflakeDataset(dataclasses.replace(exp.data, batch_size=cfg.batch_size))
 
     if cfg.monitor_every > 0:
+        monitor_split = split_name(exp.data.dataset, "val")
         eval_state, eval_y, eval_given, eval_in_puzzle = _monitor_set(
-            str(Path(exp.data.data_dir) / cfg.monitor_data_path), cfg.monitor_n_puzzles, device)
-        print(f"Monitoring set: {eval_state.shape[0]} puzzles from {cfg.monitor_data_path} "
+            str(split_path(exp.data.data_dir, exp.data.dataset, "val")), cfg.monitor_n_puzzles,
+            device, exp.data.constraint_group_embed)
+        print(f"Monitoring set: {eval_state.shape[0]} puzzles from {monitor_split} "
               f"(every {cfg.monitor_every} steps, "
               f"K={cfg.monitor_n_chains}, max_rounds={cfg.monitor_max_rounds})", flush=True)
 
@@ -278,22 +293,23 @@ def train(exp: SnowflakeExperiment, ckpt_path: str | Path,
               f"{len(ema.shadow)} param tensors", flush=True)
 
     def fresh_batch(n: int):
-        """Return `(x, solutions, mask)` with `solutions: [n, K=1, S, vocab_dim]`."""
-        bx, by, bm = [], [], []
+        """Return `(x, solutions, mask, state)` with `solutions: [n, K=1, S,
+        vocab_dim]` and `state` the full input lattice (incl. locked channels)."""
+        bx, by, bm, bg = [], [], [], []
         while sum(t.shape[0] for t in bx) < n:
-            x_b, y_b, m_b, _ = dataset.next_batch()
-            bx.append(x_b); by.append(y_b); bm.append(m_b)
+            x_b, y_b, m_b, _, g_b = dataset.next_batch()
+            bx.append(x_b); by.append(y_b); bm.append(m_b); bg.append(g_b)
         x = torch.cat(bx, dim=0)[:n].to(device).float()
         y = torch.cat(by, dim=0)[:n].to(device).float()
         m = torch.cat(bm, dim=0)[:n].to(device).bool()
+        g = torch.cat(bg, dim=0)[:n].to(device) if bg[0] is not None else None
         solutions = y.unsqueeze(1)  # [n, 1, S, VOCAB]
-        return x, solutions, m
+        return x, solutions, m, _build_state(x, m, g)
 
     # Pool: stores canonical-frame state (with mask channel), orig_x (vocab
     # only), solutions ([P, K, S, VOCAB]), in_puzzle_mask, age.
     pool_size = cfg.batch_size
-    pool_orig_x, pool_solutions, pool_in_puzzle = fresh_batch(pool_size)
-    pool_state = _build_state(pool_orig_x, pool_in_puzzle)
+    pool_orig_x, pool_solutions, pool_in_puzzle, pool_state = fresh_batch(pool_size)
     # Fresh-state α: all K solutions survive (orig_x permissive over vocab).
     # Equals OR-over-K-solutions per (cell, channel). For K=1 = solutions[:,0].
     pool_last_alpha = pool_solutions.bool().any(dim=1).float()  # [P, S, VOCAB]
@@ -326,11 +342,11 @@ def train(exp: SnowflakeExperiment, ckpt_path: str | Path,
         gt_conflict_pre = _gt_conflict(state, orig_y, in_puzzle_mask)
         is_sat_pre = ~gt_conflict_pre
 
-        # Pad orig_y to N_CHANNELS so apply_aug_state's digit-perm gather
-        # (sized to N_CHANNELS=7) works homogeneously on state and orig_y.
-        # The trailing channel stays 0 (digit-perm has identity on slots
-        # >=vocab_dim), and `_losses` slices back to vocab.
-        orig_y_padded = F.pad(orig_y, (0, N_CHANNELS - VOCAB))   # [B, S, N_CHANNELS]
+        # Pad orig_y to the state width so apply_aug_state's digit-perm gather
+        # works homogeneously on state and orig_y. The trailing channels stay
+        # 0 (digit-perm is the identity on slots >= vocab_dim), and `_losses`
+        # slices back to vocab.
+        orig_y_padded = F.pad(orig_y, (0, state.shape[-1] - VOCAB))   # [B, S, C]
 
         # ---- forward + losses (grad-tracked; aug applied via aug_forward) ----
         model.train()
@@ -391,13 +407,13 @@ def train(exp: SnowflakeExperiment, ckpt_path: str | Path,
         n_to_replace = int(discard.sum().item())
         new_last_alpha = orig_y.clone()
         if n_to_replace > 0:
-            fx, f_solutions, fm = fresh_batch(n_to_replace)
+            fx, f_solutions, fm, f_state = fresh_batch(n_to_replace)
             new_state = new_state.clone()
             new_orig_x = orig_x.clone()
             new_solutions = solutions.clone()
             new_in_puzzle = in_puzzle_mask.clone()
             new_age = new_age.clone()
-            new_state[discard] = _build_state(fx, fm)
+            new_state[discard] = f_state
             new_orig_x[discard] = fx
             new_solutions[discard] = f_solutions
             new_in_puzzle[discard] = fm

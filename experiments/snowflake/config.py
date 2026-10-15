@@ -1,5 +1,7 @@
 """Snowflake Sudoku experiment config. Defaults are the paper recipe
-(configs/snowflake/paper.yaml spells them out)."""
+(configs/snowflake/paper.yaml spells them out): the varied-topology dataset,
+trained and evaluated on orders 4-8. Order-transfer (OOD) configs are in
+configs/snowflake/ood_*.yaml."""
 
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig
 from experiments.common import Experiment
 from experiments.snowflake.data import SnowflakeConfig
 from experiments.snowflake.train import (
-    GRID_COLS, GRID_ROWS, N_CHANNELS, SEQ_LEN, VOCAB, TrainConfig, snowflake_step,
+    GRID_COLS, GRID_ROWS, SEQ_LEN, VOCAB, TrainConfig, n_channels, snowflake_step,
 )
 from experiments.sudoku.config import check_options
 from experiments.sudoku.solve import SolveConfig
@@ -30,16 +32,20 @@ class SnowflakeExperiment(Experiment):
     name: str = "paper"
     model: LoopedTransformerConfig = field(
         default_factory=lambda: LoopedTransformerConfig(cls_token=True))
-    data: SnowflakeConfig = field(default_factory=lambda: SnowflakeConfig(n_puzzles=500))
+    data: SnowflakeConfig = field(default_factory=lambda: SnowflakeConfig(
+        dataset="varied", n_puzzles=500, train_orders=[4, 5, 6, 7, 8], translate_aug=True))
     train: TrainConfig = field(default_factory=TrainConfig)
     solve: SolveConfig = field(default_factory=lambda: SolveConfig(
         step=snowflake_step(cls_threshold=0.6, augment=True),
         max_rounds=1000, n_chains=64, batch_size=512))
     eval: EvalConfig = field(default_factory=lambda: EvalConfig(
-        index_list="snowflake_test", stop="full", workers=8))
+        index_list="snowflake_varied_test", index_filter={"orders": [4, 5, 6, 7, 8]},
+        stop="full", workers=8))
 
     def __post_init__(self):
-        self.model = dataclasses.replace(self.model, n_channels=N_CHANNELS, seq_len=SEQ_LEN,
+        self.model = dataclasses.replace(self.model,
+                                         n_channels=n_channels(self.data.constraint_group_embed),
+                                         seq_len=SEQ_LEN,
                                          grid_rows=GRID_ROWS, grid_cols=GRID_COLS)
         self.train = dataclasses.replace(self.train, step=dataclasses.replace(
             self.train.step, vocab_dim=VOCAB, augment_dihedral=False))

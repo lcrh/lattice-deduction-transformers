@@ -11,13 +11,15 @@ the same order and silent drift (e.g. a numpy change) fails loudly.
   training pool (`SudokuExtremeDataset` excludes them) and used for choosing
   defaults, never for reported numbers.
 - `maze_test`: the 1,000-puzzle Maze-Hard test split.
-- `snowflake_test`: the generated Snowflake test split. Its size is only
-  known once the dataset is generated, so the list is unpinned: the caller
-  supplies the split size and each run directory records the digest it
-  used (runner.py), so a regenerated dataset is caught on resume.
-  TODO: pin split_size and sha256 once the camera-ready Snowflake data is
-  generated; also add a `snowflake_val` list once the generator writes a
-  validation split.
+- `snowflake_varied_test` / `snowflake_varied_val`: the varied-topology
+  Snowflake test and validation splits (the paper's Snowflake dataset);
+  `snowflake_test` / `snowflake_val` are the canonical-topology ones.
+  Their sizes are only known once the data is generated, so they start
+  unpinned: the caller supplies the split size and each run directory
+  records the digest it used (runner.py), so a regenerated dataset is
+  caught on resume. `experiments/snowflake/gen_data.py` prints the values
+  to pin after generating.
+  TODO: pin snowflake_varied_{test,val} once the camera-ready data exists.
 """
 
 from __future__ import annotations
@@ -56,6 +58,18 @@ SPECS: dict[str, IndexListSpec] = {
     ),
     "snowflake_test": IndexListSpec(
         task="snowflake", split="test", split_size=None, seed=20261018,
+        length=None, sha256=None,
+    ),
+    "snowflake_val": IndexListSpec(
+        task="snowflake", split="val", split_size=None, seed=20261019,
+        length=None, sha256=None,
+    ),
+    "snowflake_varied_test": IndexListSpec(
+        task="snowflake", split="varied_test", split_size=None, seed=20261020,
+        length=None, sha256=None,
+    ),
+    "snowflake_varied_val": IndexListSpec(
+        task="snowflake", split="varied_val", split_size=None, seed=20261021,
         length=None, sha256=None,
     ),
 }
@@ -106,6 +120,12 @@ def load(name: str, split_size: int | None = None) -> IndexList:
                          f"checksum; refusing to evaluate on a different list")
     return IndexList(name=name, task=spec.task, split=spec.split, indices=indices,
                      split_size=spec.split_size)
+
+
+def filter_tag(index_filter: dict) -> str:
+    """Short stable name for an index filter, e.g. orders=7,8,9,10."""
+    return ";".join(f"{k}={','.join(map(str, v)) if isinstance(v, list) else v}"
+                    for k, v in sorted(index_filter.items()))
 
 
 def explicit(task: str, split: str, indices, name: str = "explicit") -> IndexList:

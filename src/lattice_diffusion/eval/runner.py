@@ -28,8 +28,22 @@ from lattice_diffusion.eval.tasks import EvalTask
 
 def resolve_index_list(
     spec: EvalSpec, split_size: Callable[[str], int] | None = None,
+    filter_indices: Callable[[str, np.ndarray, dict], np.ndarray] | None = None,
 ) -> index_lists.IndexList:
-    """`split_size(split)` is consulted for unpinned named lists only."""
+    """`split_size(split)` is consulted for unpinned named lists only;
+    `filter_indices(split, indices, index_filter)` applies spec.index_filter."""
+    lst = _named_or_explicit(spec, split_size)
+    if spec.index_filter is None:
+        return lst
+    if filter_indices is None:
+        raise ValueError("spec has an index_filter but no filter_indices was given")
+    kept = np.asarray(filter_indices(lst.split, lst.indices, spec.index_filter), dtype=np.int64)
+    tag = index_lists.filter_tag(spec.index_filter)
+    return index_lists.IndexList(name=f"{lst.name}[{tag}]", task=lst.task, split=lst.split,
+                                 indices=kept, split_size=lst.split_size)
+
+
+def _named_or_explicit(spec: EvalSpec, split_size) -> index_lists.IndexList:
     if spec.index_list == "explicit":
         if spec.explicit_indices is None or spec.explicit_split is None:
             raise ValueError("explicit index list needs explicit_indices and explicit_split")
@@ -106,6 +120,7 @@ def run_eval(
     block_seconds: Callable[[], float] = lambda: 0.0,
     startup_seconds: Callable[[], float] = lambda: 0.0,
     split_size: Callable[[str], int] | None = None,
+    filter_indices: Callable[[str, np.ndarray, dict], np.ndarray] | None = None,
 ) -> Summary:
     """Run (or resume) an eval and write its summary.
 
@@ -113,9 +128,9 @@ def run_eval(
     after block files are written (e.g. volume commit); `block_seconds()`
     reports total worker time on blocks and `startup_seconds()` total
     container load/compile time, both for the summary. `split_size(split)`
-    sizes unpinned index lists.
+    sizes unpinned index lists; `filter_indices` applies spec.index_filter.
     """
-    lst = resolve_index_list(spec, split_size)
+    lst = resolve_index_list(spec, split_size, filter_indices)
     run_dir = spec.run_dir(root)
     check_or_write_spec(run_dir, spec)
     check_or_write_digest(run_dir, lst)

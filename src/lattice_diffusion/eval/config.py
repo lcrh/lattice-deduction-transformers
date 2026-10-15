@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from lattice_diffusion.eval.indices import filter_tag
 from lattice_diffusion.eval.records import EvalSpec
 from lattice_diffusion.eval.stop import PRESETS
 
@@ -15,6 +16,9 @@ class EvalConfig:
     index_list: str = "sudoku_test_perm"
     split: str | None = None
     n: int | None = None
+    # Task-specific restriction of the list (kept in list order), e.g.
+    # {"orders": [7, 8, 9, 10]} for Snowflake order-transfer evals.
+    index_filter: dict | None = None
     stop: str = "sequential"            # stop-rule preset (lattice_diffusion.eval.stop)
     dropout_p: float = 0.05             # eval-time dropout, used as search noise
     eval_seed: int = 0
@@ -47,6 +51,8 @@ def build_spec(task: str, checkpoint: str, cfg: EvalConfig, solve: dict,
         index_list = "explicit"
     else:
         tag = cfg.tag or index_list
+        if cfg.index_filter is not None and not cfg.tag:
+            tag = f"{tag}[{filter_tag(cfg.index_filter)}]"
     return EvalSpec(
         task=task,
         checkpoint=checkpoint,
@@ -59,6 +65,7 @@ def build_spec(task: str, checkpoint: str, cfg: EvalConfig, solve: dict,
         tag=tag,
         explicit_indices=explicit_indices,
         explicit_split=explicit_split,
+        index_filter=cfg.index_filter,
         n_workers=cfg.workers,
         max_in_flight=cfg.max_in_flight,
         keep_warm_s=cfg.keep_warm_s,

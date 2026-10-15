@@ -33,6 +33,10 @@ class EvalTask(ABC):
     def load_model(self, checkpoint: str, dropout_p: float, compile: bool) -> nn.Module:
         """Load `checkpoint` for evaluation."""
 
+    def filter_indices(self, split: str, indices: np.ndarray, index_filter: dict) -> np.ndarray:
+        """Entries of `indices`, in order, that match `index_filter`."""
+        raise NotImplementedError(f"{type(self).__name__} does not support index filters")
+
     @abstractmethod
     def warmup(self, model: nn.Module) -> None:
         """Run a tiny solve so torch.compile happens before timed blocks."""
