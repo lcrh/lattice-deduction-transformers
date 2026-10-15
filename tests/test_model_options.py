@@ -12,7 +12,7 @@ from lattice_diffusion.models.looped_transformer import PowersetModel
 from experiments.registry import experiment_class
 from experiments.sudoku.dpll import StepConfig
 from experiments.sudoku.solve import SolveConfig, solve
-from experiments.sudoku.train import _losses
+from experiments.sudoku.train import TrainConfig, _losses
 from tests.equivalence import fakes
 
 
@@ -85,10 +85,11 @@ def test_final_only_supervision_uses_the_last_readout():
     state = fakes.random_lattice(B, S, C, seed=2)
     y = torch.nn.functional.one_hot(torch.randint(0, C, (B, S)), C).float()
     args = (state, y, torch.zeros(B, S, dtype=torch.bool), torch.ones(B, dtype=torch.bool),
-            torch.zeros(B, dtype=torch.bool), 4.0, 0.5, 0.2, 0.1)
+            torch.zeros(B, dtype=torch.bool))
+    final, all_ = TrainConfig(supervise="final"), TrainConfig()
     last = {k: v[-1:] for k, v in out.items()}
-    assert torch.isclose(_losses(out, *args, supervise="final"), _losses(last, *args))
-    assert not torch.isclose(_losses(out, *args), _losses(last, *args))
+    assert torch.isclose(_losses(out, *args, final), _losses(last, *args, all_))
+    assert not torch.isclose(_losses(out, *args, all_), _losses(last, *args, all_))
 
 
 def test_cross_option_checks():

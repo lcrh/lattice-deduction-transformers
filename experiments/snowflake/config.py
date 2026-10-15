@@ -12,10 +12,8 @@ from lattice_diffusion.eval.config import EvalConfig
 from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig
 
 from experiments.common import Experiment
-from experiments.snowflake.data import SnowflakeConfig
-from experiments.snowflake.train import (
-    GRID_COLS, GRID_ROWS, SEQ_LEN, VOCAB, TrainConfig, n_channels, snowflake_step,
-)
+from experiments.snowflake.data import GRID_COLS, GRID_ROWS, SEQ_LEN, VOCAB, SnowflakeConfig
+from experiments.snowflake.train import TrainConfig, n_channels, snowflake_step
 from experiments.sudoku.config import check_options
 from experiments.sudoku.solve import SolveConfig
 
