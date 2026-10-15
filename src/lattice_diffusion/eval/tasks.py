@@ -11,32 +11,44 @@ experiment code until a task is actually used.
 from __future__ import annotations
 
 import importlib
-from typing import Protocol
+from abc import ABC, abstractmethod
 
 import numpy as np
+from torch import nn
 
 from lattice_diffusion.eval.scheduler import Row
 
 
-class EvalTask(Protocol):
-    name: str
+class EvalTask(ABC):
+    """A benchmark the shared evaluator can run."""
 
-    def __init__(self, data_dir: str) -> None: ...
+    def __init__(self, data_dir: str) -> None:
+        self.data_dir = data_dir
 
-    def split_size(self, split: str) -> int: ...
+    @abstractmethod
+    def split_size(self, split: str) -> int:
+        """Number of puzzles in `split`."""
 
-    def default_solve(self) -> dict: ...
+    @abstractmethod
+    def default_solve(self) -> dict:
+        """Default solver settings for evaluation."""
 
-    def load_model(self, checkpoint: str, dropout_p: float, compile: bool): ...
+    @abstractmethod
+    def load_model(self, checkpoint: str, dropout_p: float, compile: bool) -> nn.Module:
+        """Load `checkpoint` for evaluation."""
 
-    def warmup(self, model) -> None:
+    @abstractmethod
+    def warmup(self, model: nn.Module) -> None:
         """Run a tiny solve so torch.compile happens before timed blocks."""
-        ...
 
-    def solve_block(self, model, split: str, indices: np.ndarray, solve: dict) -> list[Row]:
-        """Rows for `indices` in order, with every field in records.py except
-        `pos` and `block` (added by the caller)."""
-        ...
+    @abstractmethod
+    def solve_block(self, model: nn.Module, split: str, indices: np.ndarray,
+                    solve: dict) -> list[Row]:
+        """Rows for `indices`, in order.
+
+        Rows have every field in records.py except `pos` and `block`, which the
+        caller adds.
+        """
 
 
 TASKS: dict[str, str] = {

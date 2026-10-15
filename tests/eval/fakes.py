@@ -11,17 +11,24 @@ from lattice_diffusion.eval import indices as index_lists
 from lattice_diffusion.eval.records import EvalSpec
 from lattice_diffusion.eval.runner import block_args, solve_block
 from lattice_diffusion.eval.stop import SequentialStop
+from lattice_diffusion.eval.tasks import EvalTask
 
 _TORCH_LOCK = threading.Lock()
 
 
-class FakeTask:
-    """Outcome of each puzzle drawn from the (block-seeded) torch RNG, like
-    the real solver's sampling: ~3% wrong/timeout."""
-
-    name = "fake"
+class FakeTask(EvalTask):
+    """Draws each puzzle's outcome from the block-seeded torch RNG (~3% wrong/timeout)."""
 
     def __init__(self, data_dir: str = "") -> None:
+        super().__init__(data_dir)
+
+    def default_solve(self) -> dict:
+        return {"p_correct": 0.97}
+
+    def load_model(self, checkpoint, dropout_p, compile):
+        return None
+
+    def warmup(self, model) -> None:
         pass
 
     def split_size(self, split: str) -> int:

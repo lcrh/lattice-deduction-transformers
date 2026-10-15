@@ -16,6 +16,7 @@ from torch import nn
 from lattice_diffusion.data.sudoku_extreme import _download_and_cache
 from lattice_diffusion.eval.records import EvalSpec
 from lattice_diffusion.eval.stop import PRESETS
+from lattice_diffusion.eval.tasks import EvalTask
 from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig, PowersetModel
 from lattice_diffusion.training.utils.checkpoint import load_checkpoint
 
@@ -25,8 +26,7 @@ from experiments.sudoku.solve import SolveConfig, solve
 
 
 def default_solve() -> dict:
-    """Paper eval settings: eval-time CLS threshold 0.6, 64 chains, 1000
-    rounds per puzzle, dropout 0.05 at eval."""
+    """Default solver settings for evaluation."""
     return {
         "step": asdict(StepConfig(cls_threshold=0.6, augment=True)),
         "max_rounds": 1000,
@@ -68,7 +68,7 @@ def make_eval_spec(
     explicit_indices: list[int] | None = None,
     split: str | None = None,
 ) -> EvalSpec:
-    """Build an EvalSpec from paper eval defaults plus any overrides."""
+    """EvalSpec from the default solver settings plus any overrides."""
     solve = default_solve()
     for key, val in (("threshold", threshold), ("temp_decide", temp_decide),
                      ("cls_threshold", cls_threshold), ("augment", augment)):
@@ -158,11 +158,11 @@ def is_valid_solution(grid: str, puzzle: torch.Tensor) -> bool:
     return True
 
 
-class SudokuTask:
-    name = "sudoku"
+class SudokuTask(EvalTask):
+    """Sudoku-Extreme, read straight from the cached dataset tensors."""
 
     def __init__(self, data_dir: str) -> None:
-        self.data_dir = data_dir
+        super().__init__(data_dir)
         self._pools: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
