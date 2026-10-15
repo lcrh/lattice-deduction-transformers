@@ -221,11 +221,6 @@ def train(exp: MazeExperiment, ckpt_path: str | Path,
     print(f"Pool size: {pool_size}  (bs={cfg.batch_size}, mult={cfg.pool_size_mult})  "
           f"augment={cfg.step.augment}", flush=True)
 
-    # Let `aug_forward` build cell_perms lazily on its first call (it caches
-    # nothing, but the cost is one perm-table build per device which is
-    # negligible). dpll_step has its own _CELL_PERMS_CACHE for the no-grad
-    # path. Pass None and let aug_forward derive (H, W) from `state.shape[1]`.
-    cell_perms_train = None
 
     n_solved_total = 0
     n_tp_conflict_total = 0
@@ -259,18 +254,7 @@ def train(exp: MazeExperiment, ckpt_path: str | Path,
         # cfg.step.augment=False this is a strict pass-through.
         model.train()
         optimizer.zero_grad(set_to_none=True)
-        # `permute_digits=False` mirrors dpll_step: digit-perm becomes
-        # identity (vocab_dim=0). Maze channels (wall/free/S/G/path) aren't
-        # interchangeable so we only do dihedral here.
-        aug_vocab_dim = 0 if not cfg.step.permute_digits else cfg.step.vocab_dim
-        out, aug_info = aug_forward(
-            model, state, given_mask, orig_y=orig_y,
-            augment=cfg.step.augment,
-            augment_dihedral=cfg.step.augment_dihedral,
-            cell_perms=cell_perms_train,
-            vocab_dim=aug_vocab_dim,
-            return_all=True,
-        )
+        out, aug_info = aug_forward(model, state, given_mask, cfg.step, orig_y=orig_y)
         loss = _losses(
             out,
             aug_info["aug_state"], aug_info["aug_orig_y"], aug_info["aug_given_mask"],
@@ -297,7 +281,7 @@ def train(exp: MazeExperiment, ckpt_path: str | Path,
         want_info_stats = (step % cfg.log_every == 0)
         with torch.no_grad():
             new_state, detected_conflict, solved, _, info = dpll_step(
-                model, state, given_mask, cfg.step, orig_y=orig_y,
+                model, state, given_mask, cfg.step,
                 want_stats=want_info_stats,
             )
         gt_conflict_post = _gt_conflict(new_state, orig_y)

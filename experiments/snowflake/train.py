@@ -318,9 +318,6 @@ def train(exp: SnowflakeExperiment, ckpt_path: str | Path,
           f"augment={cfg.step.augment} (digit-perm only; "
           f"vocab_dim={cfg.step.vocab_dim})", flush=True)
 
-    # No dihedral cell perms — the covering grid is hex (S=150 isn't a
-    # perfect square); aug_forward will skip the spatial step.
-    cell_perms_train = None
 
     n_solved_total = 0
     n_tp_conflict_total = 0
@@ -351,14 +348,7 @@ def train(exp: SnowflakeExperiment, ckpt_path: str | Path,
         # ---- forward + losses (grad-tracked; aug applied via aug_forward) ----
         model.train()
         optimizer.zero_grad(set_to_none=True)
-        out, aug_info = aug_forward(
-            model, state, given_mask, orig_y=orig_y_padded,
-            augment=cfg.step.augment,
-            augment_dihedral=cfg.step.augment_dihedral,
-            cell_perms=cell_perms_train,
-            vocab_dim=cfg.step.vocab_dim,
-            return_all=True,
-        )
+        out, aug_info = aug_forward(model, state, given_mask, cfg.step, orig_y=orig_y_padded)
         # In-puzzle mask is permuted-by-cell only (no dihedral here), so it's
         # frame-invariant. aug_forward doesn't return aug_in_puzzle_mask;
         # since we only do digit-perm (no spatial), the mask is unchanged.
@@ -388,7 +378,6 @@ def train(exp: SnowflakeExperiment, ckpt_path: str | Path,
         with torch.no_grad():
             new_state, detected_conflict, solved, _, info = dpll_step(
                 model, state, given_mask, cfg.step,
-                orig_y=orig_y_padded,
                 in_puzzle_mask=in_puzzle_mask,
                 want_stats=want_info_stats,
             )

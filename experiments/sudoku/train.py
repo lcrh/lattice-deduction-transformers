@@ -41,7 +41,6 @@ from lattice_diffusion.training.utils.scheduler import make_cosine_scheduler
 
 from experiments.sudoku.aug import (
     aug_forward,
-    build_dihedral_cell_perms,
 )
 from experiments.sudoku.dpll import StepConfig, dpll_step
 from experiments.sudoku.ema import ModelEMA
@@ -321,19 +320,6 @@ def train(exp: SudokuExperiment, ckpt_path: str | Path,
     print(f"Pool size: {pool_size}  (= bs={cfg.batch_size})  "
           f"augment={cfg.step.augment}", flush=True)
 
-    # Sudoku-specific dihedral cell permutations for spatial aug — built
-    # once and reused by both `aug_forward` (grad path) and `dpll_step`
-    # (no-grad path; dpll.py caches its own copy keyed by device).
-    S_pool = pool_state.shape[1]
-    n_grid = int(round(S_pool ** 0.5))
-    if cfg.step.augment:
-        assert n_grid * n_grid == S_pool, (
-            f"augment=True but S={S_pool} is not a perfect square"
-        )
-        cell_perms_train = build_dihedral_cell_perms(n=n_grid, device=device)
-    else:
-        cell_perms_train = None
-
     n_solved_total = 0
     n_tp_conflict_total = 0
     n_examples_seen = 0
@@ -380,13 +366,8 @@ def train(exp: SudokuExperiment, ckpt_path: str | Path,
         # cfg.step.augment=False this is a strict pass-through.
         model.train()
         optimizer.zero_grad(set_to_none=True)
-        out, aug_info = aug_forward(
-            model, state, given_mask, orig_y=orig_y,
-            augment=cfg.step.augment,
-            cell_perms=cell_perms_train,
-            return_all=True,
-            carry_kw=carry_kw,
-        )
+        out, aug_info = aug_forward(model, state, given_mask, cfg.step,
+                                    orig_y=orig_y, carry_kw=carry_kw)
         loss = _losses(
             out,
             aug_info["aug_state"], aug_info["aug_orig_y"], aug_info["aug_given_mask"],
@@ -413,7 +394,7 @@ def train(exp: SudokuExperiment, ckpt_path: str | Path,
         want_info_stats = (step % cfg.log_every == 0)
         with torch.no_grad():
             new_state, detected_conflict, solved, _, info = dpll_step(
-                model, state, given_mask, cfg.step, orig_y=orig_y,
+                model, state, given_mask, cfg.step,
                 want_stats=want_info_stats, carry_kw=carry_kw,
             )
         new_carry = info["carry_out"].clone() if pool_carry is not None else None
