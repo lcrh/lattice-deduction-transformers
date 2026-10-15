@@ -51,17 +51,36 @@ of use.
 
 Every experiment is a Modal app with a `local_entrypoint`. Run it with
 `uv run modal run --detach <path>` (the `--detach` lets the run survive
-your laptop sleeping). Each run trains a checkpoint, evaluates it, and
-writes a `<ckpt>.eval.json` + `<ckpt>.eval.jsonl` next to the checkpoint
-on the `lattice-diffusion-checkpoints` Modal volume.
+your laptop sleeping). Each run trains a checkpoint and evaluates it; results
+are written to the `lattice-diffusion-checkpoints` Modal volume (for
+Snowflake and Maze, as `<ckpt>.eval.json` + `<ckpt>.eval.jsonl` next to the
+checkpoint; for Sudoku, see below).
 
 ### Sudoku-Extreme (Table 1)
 
 The four LDT rows of Table 1 are the same `run.py` at four configurations.
-The `run.py` default `--n-eval-puzzles 200` is the inline quick-check; pass
-`--n-eval-puzzles 4000` to evaluate on a larger test sample, or re-eval a
-saved checkpoint on the full test split with the parallel `eval_only.py`
-script.
+After training, `run.py` evaluates the checkpoint with the shared evaluator
+(`lattice_diffusion/eval/`): it walks a fixed random ordering of the full
+422,786-puzzle test split in blocks across B200 workers and, with the default
+`--eval-stop sequential`, stops once the error rate is pinned down (100
+failures, or a 95% confidence-sequence half-width of 0.1 points, after at
+least 1,000 puzzles). `--eval-stop full` evaluates every test puzzle. Results
+are written to `/checkpoints/eval/<checkpoint>/<tag>-<hash>/` on the
+checkpoint volume (one JSONL file per block, plus a `summary-*.json` per stop
+rule).
+
+To (re-)evaluate a saved checkpoint, e.g. with more workers, another stop
+preset, or a different solver setting:
+
+```bash
+uv run modal run --detach experiments/sudoku/evaluate.py \
+    --checkpoint /checkpoints/sudoku/<name>.pt --stop full --workers 100
+```
+
+Rerunning the same command resumes from the blocks already on disk; a
+`--stop full` run after a sequential one reuses the blocks it already has.
+Training pools exclude 10,000 held-out train puzzles (`sudoku_val`), which
+are reserved for choosing defaults.
 
 > **Note.** As reported, these runs match the Sudoku-Extreme solve rate in
 > Table 1 (100%). We have since realized, however, that the reported figure
@@ -74,15 +93,15 @@ script.
 ```bash
 # LDT, 4K train steps (Table 1 top row)
 uv run modal run --detach experiments/sudoku/run.py \
-    --steps 4000 --n-train-puzzles 1000 --n-eval-puzzles 4000
+    --steps 4000 --n-train-puzzles 1000 --eval-stop full --eval-workers 100
 
 # LDT, 1K and 2K train steps (Table 1 mid-rows)
-uv run modal run --detach experiments/sudoku/run.py --steps 1000 --n-train-puzzles 1000 --n-eval-puzzles 4000
-uv run modal run --detach experiments/sudoku/run.py --steps 2000 --n-train-puzzles 1000 --n-eval-puzzles 4000
+uv run modal run --detach experiments/sudoku/run.py --steps 1000 --n-train-puzzles 1000
+uv run modal run --detach experiments/sudoku/run.py --steps 2000 --n-train-puzzles 1000
 
 # No-augmentation variant (last row)
 uv run modal run --detach experiments/sudoku/run.py \
-    --steps 4000 --n-train-puzzles 1000 --n-eval-puzzles 4000 \
+    --steps 4000 --n-train-puzzles 1000 --eval-stop full --eval-workers 100 \
     --no-augment --no-data-augment-digit-perm --no-data-augment-dihedral
 ```
 
