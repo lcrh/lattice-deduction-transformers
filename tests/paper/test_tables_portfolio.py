@@ -14,7 +14,7 @@ from paper.tables.common import eval_rule, paired_vs
 
 def _write_rows(tmp_path, key, statuses):
     path = tmp_path / f"{key}.jsonl"
-    path.write_text("".join(json.dumps({"idx": 1000 + p, "pos": p, "status": s, "calls": p + 1,
+    path.write_text("".join(json.dumps({"idx": 1000 + p, "pos": p, "status": s, "calls": p + 1, "forwards_seq": 64 * (p + 1),
                                         "solution": f"s{p}"}) + "\n"
                             for p, s in enumerate(statuses)))
     return path.name
@@ -134,7 +134,7 @@ def test_figures_and_main_tables_render(tmp_path):
                for x in (500, 4000) for s in (0, 1)]
     curves = fig2.percentile_curves(records, root=tmp_path)
     assert list(curves) == [500, 4000]
-    assert fig2.plot(curves, fig2.solved_calls(records[-1], tmp_path))[:4] == b"%PDF"
+    assert fig2.plot(curves, fig2.solved_forwards(records[-1], tmp_path))[:4] == b"%PDF"
     assert fig3.plot(fig3.k_curve(records))[:4] == b"%PDF"
 
     baseline = {"label": "TRM", "result": {"n": 10000, "exact_accuracy": 0.79, "wrong": 2100,
