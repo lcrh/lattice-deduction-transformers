@@ -78,6 +78,45 @@ class StepConfig:
     # `augment=False`.
     permute_digits: bool = True
 
+    # ----- Deduction -----
+    # Forward + threshold-eliminate passes on the same state before the one
+    # decision of a round. "fixpoint" repeats until a pass eliminates nothing
+    # (or every row is in conflict / solved), at most `deduce_pass_cap` times.
+    deduce_passes: int | str = 1
+    deduce_pass_cap: int = 16
+    # Model loop count at inference (None = the trained `n_loops`).
+    n_loops: int | None = None
+
+    # ----- Decision -----
+    # Which multi-candidate cell to branch on:
+    #   uniform     — uniformly at random
+    #   mrv         — fewest remaining candidates
+    #   min_entropy / max_entropy — of the softmax head over alive candidates
+    # Deterministic choices break ties uniformly at random.
+    cell_policy: str = "uniform"
+    # Which candidate to commit to at that cell:
+    #   sample  — softmax head at `temp_decide` (argmax if temp_decide <= 0)
+    #   argmax  — highest softmax logit
+    #   rank_k  — the k-th best candidate for the k-th chain of a puzzle
+    #             (`decide_rank`; rank 0 = argmax when no rank is given)
+    digit_policy: str = "sample"
+
+    def __post_init__(self):
+        if self.cell_policy not in CELL_POLICIES:
+            raise ValueError(f"cell_policy must be one of {sorted(CELL_POLICIES)}, "
+                             f"got {self.cell_policy!r}")
+        if self.digit_policy not in DIGIT_POLICIES:
+            raise ValueError(f"digit_policy must be one of {sorted(DIGIT_POLICIES)}, "
+                             f"got {self.digit_policy!r}")
+        if not (self.deduce_passes == "fixpoint"
+                or (isinstance(self.deduce_passes, int) and self.deduce_passes >= 1)):
+            raise ValueError(f"deduce_passes must be >= 1 or 'fixpoint', "
+                             f"got {self.deduce_passes!r}")
+
+    @property
+    def max_passes(self) -> int:
+        return self.deduce_pass_cap if self.deduce_passes == "fixpoint" else self.deduce_passes
+
 
 # Cache of per-(n, device) cell permutations so we don't rebuild them on
 # every dpll_step call. Keyed by (n, device.type, device.index).
@@ -93,6 +132,101 @@ def _get_cell_perms(n: int, device: torch.device) -> torch.Tensor:
     return cached
 
 
+def _sample_frame(cfg: StepConfig, state, given_mask, orig_y, in_puzzle_mask):
+    """Fresh per-row augmentation (or the identity) and the inputs mapped
+    into that frame: (digit_perm, dih_idx, cell_perms, state, given_mask,
+    orig_y, in_puzzle_mask)."""
+    if not cfg.augment:
+        return None, None, None, state, given_mask, orig_y, in_puzzle_mask
+    B, S, C = state.shape
+    device = state.device
+    if cfg.augment_dihedral:
+        n_grid = int(round(S ** 0.5))
+        assert n_grid * n_grid == S, (
+            f"augment_dihedral=True but S={S} is not a perfect square"
+        )
+        cell_perms = _get_cell_perms(n_grid, device)
+    else:
+        cell_perms = None
+    # `permute_digits=False` overrides cfg.vocab_dim with 0, yielding an
+    # identity channel-perm (digit-perm becomes a no-op). Used by maze.
+    aug_vd = 0 if not cfg.permute_digits else cfg.vocab_dim
+    digit_perm, dih_idx = sample_chain_augs(
+        B, C, device, with_dihedral=cfg.augment_dihedral, vocab_dim=aug_vd,
+    )
+    return (
+        digit_perm, dih_idx, cell_perms,
+        apply_aug_state(state, digit_perm, dih_idx, cell_perms),
+        apply_aug_mask(given_mask, dih_idx, cell_perms),
+        apply_aug_state(orig_y, digit_perm, dih_idx, cell_perms) if orig_y is not None else None,
+        apply_aug_mask(in_puzzle_mask, dih_idx, cell_perms) if in_puzzle_mask is not None else None,
+    )
+
+
+# ----- Cell policies: (multi [N, S] float, cd_state, cd_sm, vd) -> cell [N] -----
+
+def _cell_uniform(multi, cd_state, cd_sm, vd):
+    return torch.multinomial(multi, 1).squeeze(-1)
+
+
+def _pick_extreme(score, multi, lowest: bool):
+    """Uniformly random cell among the multi-alive cells with the lowest
+    (or highest) score."""
+    multi = multi > 0.5
+    fill = float("inf") if lowest else float("-inf")
+    score = torch.where(multi, score, torch.full_like(score, fill))
+    if lowest:
+        tie_set = multi & (score <= score.min(dim=-1, keepdim=True).values + 1e-6)
+    else:
+        tie_set = multi & (score >= score.max(dim=-1, keepdim=True).values - 1e-6)
+    return torch.multinomial(tie_set.float(), 1).squeeze(-1)
+
+
+def _alive_entropy(cd_state, cd_sm, vd):
+    """Entropy of the softmax head renormalized over each cell's alive
+    vocab candidates. [N, S]"""
+    C = cd_state.shape[-1]
+    alive = cd_state > 0.5
+    if vd < C:
+        alive[..., vd:] = False
+    logp = torch.log_softmax(cd_sm.masked_fill(~alive, float("-inf")), dim=-1)
+    return -(logp.exp() * logp).nan_to_num(0.0).sum(dim=-1)
+
+
+CELL_POLICIES = {
+    "uniform": _cell_uniform,
+    "mrv": lambda multi, cd_state, cd_sm, vd: _pick_extreme(
+        cd_state[..., :vd].sum(dim=-1), multi, lowest=True),
+    "min_entropy": lambda multi, cd_state, cd_sm, vd: _pick_extreme(
+        _alive_entropy(cd_state, cd_sm, vd), multi, lowest=True),
+    "max_entropy": lambda multi, cd_state, cd_sm, vd: _pick_extreme(
+        _alive_entropy(cd_state, cd_sm, vd), multi, lowest=False),
+}
+
+
+# ----- Digit policies: (logits [N, C] with dead = -inf, cfg, rank [N]) -> digit [N] -----
+
+def _digit_sample(logits, cfg, rank):
+    if cfg.temp_decide > 0:
+        return torch.multinomial(torch.softmax(logits / cfg.temp_decide, dim=-1), 1).squeeze(-1)
+    return logits.argmax(dim=-1)
+
+
+def _digit_rank_k(logits, cfg, rank):
+    """The rank-th best alive candidate (clamped to the number alive)."""
+    alive = torch.isfinite(logits).sum(dim=-1).clamp(min=1)
+    rank = torch.minimum(rank.clamp(min=0), alive - 1)
+    order = logits.argsort(dim=-1, descending=True)
+    return order.gather(-1, rank.unsqueeze(-1)).squeeze(-1)
+
+
+DIGIT_POLICIES = {
+    "sample": _digit_sample,
+    "argmax": lambda logits, cfg, rank: logits.argmax(dim=-1),
+    "rank_k": _digit_rank_k,
+}
+
+
 def dpll_step(
     model,
     state: torch.Tensor,        # [B, S, C], float, CANONICAL
@@ -102,20 +236,31 @@ def dpll_step(
     orig_y: torch.Tensor | None = None,   # [B, S, C] one-hot GT; train-only; CANONICAL
     in_puzzle_mask: torch.Tensor | None = None,   # [B, S] bool, CANONICAL — cells active in this puzzle
     want_stats: bool = True,
+    decide_rank: torch.Tensor | None = None,   # [B] long, for digit_policy="rank_k"
 ):
     """One unified DPLL-style step (unit propagation + branching +
     conflict detection). Returns (new_state, conflict, solved, out, info).
 
     Inputs are CANONICAL (original-puzzle frame); outputs are likewise
     canonical (`new_state`, `info["deduce_mask"]` inverted before
-    return). `out` (model logits) is in the AUGMENTED frame — callers
-    that need it for losses must use `info["aug_state"]`,
-    `info["aug_given_mask"]`, `info["aug_orig_y"]` to match the frame.
+    return). `out` (model logits) is in the AUGMENTED frame of the last
+    deduction pass — callers that need it for losses must use
+    `info["aug_state"]`, `info["aug_given_mask"]`, `info["aug_orig_y"]` to
+    match the frame.
 
     Always deterministic threshold deduction. `orig_y` is unused by the
     operator itself, but the parameter is retained so callers / aug
     helpers can permute it under the chosen frame for the trainer's grad
     path. Pass `None` if you don't need to track GT under augmentation.
+
+    With `cfg.deduce_passes` > 1 (or "fixpoint"), forward + eliminate is
+    repeated on the same state, each pass under a fresh augmentation, before
+    the single decision; the loop ends early once a pass eliminates nothing
+    or every row is in conflict or solved. Conflict / solved / decision come
+    from the last pass, `info["deduce_mask"]` is the union of all passes'
+    eliminations, `info["n_passes"]` counts the forwards spent, and
+    `info["pass_deduce_masks"]` lists each pass's eliminations (multi-pass
+    only).
 
     `want_stats` (default True): when True, `info` contains the full diagnostic
     dict — `n_deduced`, `n_decided`, `n_conflict`, `n_conflict_empty`,
@@ -129,86 +274,78 @@ def dpll_step(
     B, S, C = state.shape
     device = state.device
     vd = cfg.vocab_dim if cfg.vocab_dim is not None else C
+    model_kw = {} if cfg.n_loops is None else {"n_loops": cfg.n_loops}
 
-    # ----- Sample fresh per-row aug (or identity) -----
-    if cfg.augment:
-        if cfg.augment_dihedral:
-            n_grid = int(round(S ** 0.5))
-            assert n_grid * n_grid == S, (
-                f"augment_dihedral=True but S={S} is not a perfect square"
-            )
-            cell_perms = _get_cell_perms(n_grid, device)
+    max_passes = cfg.max_passes
+    cur_state = state
+    deduce_union = None
+    pass_masks: list[torch.Tensor] = []
+    for n_passes in range(1, max_passes + 1):
+        (digit_perm, dih_idx, cell_perms,
+         state_aug, gm_aug, orig_y_aug, ip_aug) = _sample_frame(
+            cfg, cur_state, given_mask, orig_y, in_puzzle_mask)
+
+        out = model(state_aug, use_final=True, **model_kw)
+        bce_logits = out["bce"]
+        sm_logits = out["softmax"]
+
+        # ===== Deduction (deterministic threshold) — in aug frame =====
+        probs = torch.sigmoid(bce_logits)
+        deduce_mask_aug = (probs < cfg.threshold) & (state_aug > 0.5)
+        deduce_mask_aug = deduce_mask_aug & ~gm_aug.unsqueeze(-1)
+        if ip_aug is not None:
+            # Don't deduce on out-of-puzzle cells (they're permanently zero anyway,
+            # but explicit gating keeps soundness diagnostics clean).
+            deduce_mask_aug = deduce_mask_aug & ip_aug.unsqueeze(-1)
+        if vd < C:
+            # Don't touch the auxiliary (post-vocab) channels — e.g. snowflake's
+            # locked mask channel. Build an explicit vocab-only mask and AND it in.
+            vocab_mask = torch.zeros(C, dtype=torch.bool, device=device)
+            vocab_mask[:vd] = True
+            deduce_mask_aug = deduce_mask_aug & vocab_mask
+
+        new_state_aug = state_aug.masked_fill(deduce_mask_aug, 0.0)
+
+        # ===== Status (post-deduce, pre-decide) — in aug frame =====
+        # Count alive bits over vocab channels only (auxiliary channels are
+        # always-on locks — counting them would double-count and break the
+        # singleton check).
+        n_alive = new_state_aug[..., :vd].sum(dim=-1)            # [B, S]
+        if ip_aug is not None:
+            # Only in-puzzle cells participate in empty / singleton checks.
+            # Out-of-puzzle cells have all-zero state by construction; ignoring
+            # them avoids false empty_cell / false-not-all-singleton firings.
+            empty_cell = ((n_alive == 0) & ip_aug).any(dim=-1)
+            all_singleton = ((n_alive == 1) | ~ip_aug).all(dim=-1)
         else:
-            cell_perms = None
-        # `permute_digits=False` overrides cfg.vocab_dim with 0, yielding an
-        # identity channel-perm (digit-perm becomes a no-op). Used by maze.
-        aug_vd = 0 if not cfg.permute_digits else cfg.vocab_dim
-        digit_perm, dih_idx = sample_chain_augs(
-            B, C, device, with_dihedral=cfg.augment_dihedral, vocab_dim=aug_vd,
-        )
-        state_aug = apply_aug_state(state, digit_perm, dih_idx, cell_perms)
-        gm_aug = apply_aug_mask(given_mask, dih_idx, cell_perms)
-        orig_y_aug = (
-            apply_aug_state(orig_y, digit_perm, dih_idx, cell_perms)
-            if orig_y is not None else None
-        )
-        ip_aug = (
-            apply_aug_mask(in_puzzle_mask, dih_idx, cell_perms)
-            if in_puzzle_mask is not None else None
-        )
-    else:
-        cell_perms = None
-        digit_perm = None
-        dih_idx = None
-        state_aug = state
-        gm_aug = given_mask
-        orig_y_aug = orig_y
-        ip_aug = in_puzzle_mask
+            empty_cell = (n_alive == 0).any(dim=-1)        # [B] — soundness-head collapse
+            all_singleton = (n_alive == 1).all(dim=-1)     # [B] (frame-invariant boolean)
+        cls_fires = torch.zeros_like(empty_cell)
+        if "conflict" in out:
+            cls_sigmoid = torch.sigmoid(out["conflict"]).squeeze(-1)
+            cls_fires = cls_sigmoid > cfg.cls_threshold
+        conflict = empty_cell | cls_fires           # [B] (frame-invariant boolean)
+        solved = all_singleton & ~conflict
 
-    out = model(state_aug, use_final=True)
-    bce_logits = out["bce"]
-    sm_logits = out["softmax"]
-
-    # ===== Deduction (deterministic threshold) — in aug frame =====
-    probs = torch.sigmoid(bce_logits)
-    deduce_mask_aug = (probs < cfg.threshold) & (state_aug > 0.5)
-    deduce_mask_aug = deduce_mask_aug & ~gm_aug.unsqueeze(-1)
-    if ip_aug is not None:
-        # Don't deduce on out-of-puzzle cells (they're permanently zero anyway,
-        # but explicit gating keeps soundness diagnostics clean).
-        deduce_mask_aug = deduce_mask_aug & ip_aug.unsqueeze(-1)
-    if vd < C:
-        # Don't touch the auxiliary (post-vocab) channels — e.g. snowflake's
-        # locked mask channel. Build an explicit vocab-only mask and AND it in.
-        vocab_mask = torch.zeros(C, dtype=torch.bool, device=device)
-        vocab_mask[:vd] = True
-        deduce_mask_aug = deduce_mask_aug & vocab_mask
-
-    new_state_aug = state_aug.masked_fill(deduce_mask_aug, 0.0)
-
-    # ===== Status (post-deduce, pre-decide) — in aug frame =====
-    # Count alive bits over vocab channels only (auxiliary channels are
-    # always-on locks — counting them would double-count and break the
-    # singleton check).
-    n_alive = new_state_aug[..., :vd].sum(dim=-1)            # [B, S]
-    if ip_aug is not None:
-        # Only in-puzzle cells participate in empty / singleton checks.
-        # Out-of-puzzle cells have all-zero state by construction; ignoring
-        # them avoids false empty_cell / false-not-all-singleton firings.
-        empty_cell = ((n_alive == 0) & ip_aug).any(dim=-1)
-        all_singleton = ((n_alive == 1) | ~ip_aug).all(dim=-1)
-    else:
-        empty_cell = (n_alive == 0).any(dim=-1)        # [B] — soundness-head collapse
-        all_singleton = (n_alive == 1).all(dim=-1)     # [B] (frame-invariant boolean)
-    cls_fires = torch.zeros_like(empty_cell)
-    if "conflict" in out:
-        cls_sigmoid = torch.sigmoid(out["conflict"]).squeeze(-1)
-        cls_fires = cls_sigmoid > cfg.cls_threshold
-    conflict = empty_cell | cls_fires           # [B] (frame-invariant boolean)
-    solved = all_singleton & ~conflict
+        if max_passes == 1:
+            break
+        # Multi-pass: carry the deduced state (canonical) into the next pass.
+        if cfg.augment:
+            pass_mask = invert_aug_state(
+                deduce_mask_aug.float(), digit_perm, dih_idx, cell_perms) > 0.5
+            cur_state = invert_aug_state(new_state_aug, digit_perm, dih_idx, cell_perms)
+        else:
+            pass_mask = deduce_mask_aug
+            cur_state = new_state_aug
+        pass_masks.append(pass_mask)
+        deduce_union = pass_mask if deduce_union is None else deduce_union | pass_mask
+        if n_passes == max_passes:
+            break
+        if bool((conflict | all_singleton).all()) or not bool(pass_mask.any()):
+            break
     can_decide = ~conflict & ~solved            # [B]
 
-    # ===== Decision: uniform multi-alive cell, softmax-sample digit (aug) =====
+    # ===== Decision: pick a multi-alive cell, pin one candidate (aug frame) =====
     if can_decide.any():
         cd_b_idx = can_decide.nonzero(as_tuple=True)[0]              # [N_cd]
         cd_state = new_state_aug[cd_b_idx]                           # [N_cd, S, C]
@@ -219,7 +356,8 @@ def dpll_step(
             # Mask out out-of-puzzle cells from the decision pool — they
             # have sum>1.5 only by accident, but explicit gate is safer.
             cd_multi_alive = cd_multi_alive * ip_aug[cd_b_idx].float()
-        cell_idx = torch.multinomial(cd_multi_alive, 1).squeeze(-1)
+        cell_idx = CELL_POLICIES[cfg.cell_policy](
+            cd_multi_alive, cd_state, sm_logits[cd_b_idx], vd)
 
         N_cd = cd_b_idx.shape[0]
         cd_arange = torch.arange(N_cd, device=device)
@@ -229,12 +367,9 @@ def dpll_step(
         if vd < C:
             # Don't ever pin to a non-vocab channel.
             sm_at_cell[..., vd:] = float("-inf")
-
-        if cfg.temp_decide > 0:
-            sm_probs = torch.softmax(sm_at_cell / cfg.temp_decide, dim=-1)
-            digit = torch.multinomial(sm_probs, 1).squeeze(-1)
-        else:
-            digit = sm_at_cell.argmax(dim=-1)
+        rank = (decide_rank[cd_b_idx].long() if decide_rank is not None
+                else torch.zeros(N_cd, dtype=torch.long, device=device))
+        digit = DIGIT_POLICIES[cfg.digit_policy](sm_at_cell, cfg, rank)
 
         # Zero only the vocab channels — auxiliary channels (e.g. snowflake's
         # locked mask channel) must not be touched by the decision step.
@@ -247,32 +382,27 @@ def dpll_step(
     # ===== Invert aug on new_state and deduce_mask before returning =====
     if cfg.augment:
         new_state = invert_aug_state(new_state_aug, digit_perm, dih_idx, cell_perms)
-        # invert_aug_state works on float; cast deduce_mask round-trip.
-        deduce_mask = invert_aug_state(
+        deduce_mask = deduce_union if deduce_union is not None else invert_aug_state(
             deduce_mask_aug.float(), digit_perm, dih_idx, cell_perms,
         ) > 0.5
     else:
         new_state = new_state_aug
-        deduce_mask = deduce_mask_aug
+        deduce_mask = deduce_union if deduce_union is not None else deduce_mask_aug
 
+    info = {"deduce_mask": deduce_mask, "n_passes": n_passes, "pass_deduce_masks": pass_masks}
     if want_stats:
-        info = {
+        info.update({
             "n_deduced": int(deduce_mask.sum().item()),
             "n_decided": int(can_decide.sum().item()),
             "n_conflict": int(conflict.sum().item()),
             "n_conflict_empty": int(empty_cell.sum().item()),
             "n_conflict_cls": int(cls_fires.sum().item()),
             "n_solved": int(solved.sum().item()),
-            "deduce_mask": deduce_mask,
-        }
-    else:
-        # Skip the 6 .item() calls entirely. `deduce_mask` is a tensor and
-        # free to include; `solve()` reads it for soundness diagnostics.
-        info = {"deduce_mask": deduce_mask}
-    # Always expose aug params and aug-frame inputs alongside info — the
-    # trainer's grad forward typically uses `aug_forward()` directly to
-    # get its own aug, but exposing the no-grad aug here keeps the
-    # contract honest if a caller wants to inspect it.
+        })
+    # Always expose aug params and aug-frame inputs (of the last pass)
+    # alongside info — the trainer's grad forward typically uses
+    # `aug_forward()` directly to get its own aug, but exposing the no-grad
+    # aug here keeps the contract honest if a caller wants to inspect it.
     info["digit_perm"] = digit_perm
     info["dih_idx"] = dih_idx
     info["aug_state"] = state_aug

@@ -21,6 +21,10 @@ Row fields (every benchmark):
     forwards  single-chain forwards if run unbatched
     n_resets  chain resets
     solution  the accepted prediction, benchmark-specific string encoding
+    deduced, unsound, cls
+              soundness diagnostics: candidates eliminated over the
+              puzzle's chain-rounds, how many were the solution's own, and
+              the conflict head's [tp, fp, fn, tn] against true conflicts
     verified  rule check of `solution` against the puzzle (never used for
               acceptance; recorded for portfolio selection and auditing);
               null where the benchmark has no rule check (Snowflake)
@@ -147,6 +151,28 @@ def _call_stats(rows: list[Row]) -> dict:
     }
 
 
+def _soundness(rows: list[Row]) -> dict:
+    """Pooled soundness diagnostics, when the rows carry them."""
+    if not rows or "deduced" not in rows[0]:
+        return {}
+    deduced = sum(r["deduced"] for r in rows)
+    unsound = sum(r["unsound"] for r in rows)
+    tp, fp, fn, tn = (sum(r["cls"][i] for r in rows) for i in range(4))
+    out = {
+        "deduced": deduced, "unsound": unsound,
+        "unsound_rate": unsound / deduced if deduced else 0.0,
+        "cls_precision": tp / (tp + fp) if tp + fp else None,
+        "cls_recall": tp / (tp + fn) if tp + fn else None,
+        "cls_counts": [tp, fp, fn, tn],
+    }
+    if "pass_deduced_unsound" in rows[0]:
+        n_pass = len(rows[0]["pass_deduced_unsound"])
+        per_pass = [[sum(r["pass_deduced_unsound"][i][k] for r in rows) for k in (0, 1)]
+                    for i in range(n_pass)]
+        out["unsound_rate_per_pass"] = [u / d if d else None for d, u in per_pass]
+    return out
+
+
 @dataclass
 class Summary:
     spec: dict
@@ -169,6 +195,7 @@ class Summary:
     gpu_seconds: float                  # worker time spent solving blocks
     startup_seconds: float              # worker time loading/compiling the model
     alpha: float = 0.05
+    soundness: dict = field(default_factory=dict)   # pooled over the reported prefix
     extra: dict = field(default_factory=dict)
 
 
@@ -198,6 +225,7 @@ def summarize(spec: EvalSpec, run_dir: Path, result: ScheduleResult,
         gpu_seconds=gpu_seconds,
         startup_seconds=startup_seconds,
         alpha=alpha,
+        soundness=_soundness(result.rows),
     )
 
 

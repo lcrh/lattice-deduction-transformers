@@ -54,6 +54,8 @@ def result_rows(res, indices, cfg: SolveConfig, solutions: list[str],
     rounds, calls = res.round_solved.tolist(), res.puzzle_calls.tolist()
     resets = res.n_resets.tolist()
     forwards_seq = res.forwards_seq.tolist() if cfg.estimate_sequential else None
+    diag = res.puzzle_diag.tolist()
+    pass_diag = res.puzzle_pass_diag.tolist() if res.puzzle_pass_diag is not None else None
     rows = []
     for j, dataset_idx in enumerate(indices.tolist()):
         status = "correct" if correct[j] else ("wrong" if wrong[j] else "timeout")
@@ -67,6 +69,13 @@ def result_rows(res, indices, cfg: SolveConfig, solutions: list[str],
             **({"forwards_seq": forwards_seq[j]} if forwards_seq is not None else {}),
             "solution": solutions[j] if status != "timeout" else "",
             "verified": verified[j] if status != "timeout" else False,
+            # Soundness diagnostics over the puzzle's chain-rounds: candidates
+            # eliminated, of those the solution's own (unsound), and the
+            # conflict head's [tp, fp, fn, tn] against true conflicts.
+            "deduced": diag[j][0],
+            "unsound": diag[j][1],
+            "cls": diag[j][2:],
+            **({"pass_deduced_unsound": pass_diag[j]} if pass_diag is not None else {}),
             **(extra[j] if extra else {}),
         })
     return rows
