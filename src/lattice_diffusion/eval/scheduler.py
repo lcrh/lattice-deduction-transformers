@@ -34,7 +34,7 @@ class Executor(Protocol):
 @dataclass
 class ScheduleResult:
     n: int                          # reported prefix length (puzzles)
-    stop_reason: str                # "failures" | "half_width" | "exhausted"
+    stop_reason: str                # "failures" | "half_width" | "fixed_n" | "exhausted"
     counts: PrefixCounts
     rows: list[Row]                 # the reported prefix, in index-list order
     n_evaluated: int                # every puzzle evaluated, including overshoot
@@ -69,6 +69,10 @@ def run_blocks(
     if max_in_flight < 1:
         raise ValueError("max_in_flight must be >= 1")
     total_blocks = n_blocks(n_items, block_size)
+    # A rule with a fixed `limit` never needs blocks past the one holding its
+    # last item. Blocks stay full-size, so they are shared with other rules.
+    if stop.limit is not None:
+        total_blocks = min(total_blocks, n_blocks(stop.limit, block_size))
     done: dict[int, list[Row]] = dict(completed or {})
     in_flight: set[int] = set()
     next_block = 0          # lowest block id not yet submitted or done

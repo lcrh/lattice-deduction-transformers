@@ -23,34 +23,35 @@ refers to the *original* puzzle's givens, not the current state's
 
 from __future__ import annotations
 
-import time
+import dataclasses
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Callable
 
 import torch
 
-from experiments.maze.data import (
-    MazeConfig, MazeDataset, grid_dims, rescore,
-)
-from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig, PowersetModel
+from experiments.maze.data import MazeDataset, grid_dims, rescore
+from lattice_diffusion.models.looped_transformer import PowersetModel
 from lattice_diffusion.training.utils.checkpoint import save_checkpoint
 from lattice_diffusion.training.utils.scheduler import make_cosine_scheduler
 
 from experiments.sudoku.aug import aug_forward
 from experiments.sudoku.dpll import StepConfig, dpll_step
 from experiments.sudoku.ema import ModelEMA
-from experiments.sudoku.solve import SolveConfig, solve
 from experiments.sudoku.train import (
-    _alpha_surviving, _gt_conflict, _given_mask, _losses,
+    _alpha_surviving, _gt_conflict, _given_mask, _losses, format_monitor, monitor_solve,
 )
+
+if TYPE_CHECKING:
+    from experiments.maze.config import MazeExperiment
 
 
 @dataclass
 class TrainConfig:
-    steps: int = 1000
-    batch_size: int = 512
+    steps: int = 20000
+    batch_size: int = 192
     lr: float = 3e-3
-    weight_decay: float = 0.01
+    weight_decay: float = 0.1
     betas: tuple[float, float] = (0.9, 0.95)
     grad_clip: float = 1.0
     warmup_fraction: float = 0.1   # warmup_steps = int(steps * warmup_fraction)
@@ -59,67 +60,56 @@ class TrainConfig:
     bce_pos_mult: float = 4.0
     bce_neg_mult: float = 0.5
     softmax_loss_weight: float = 0.2
-    conflict_loss_weight: float = 1.0
+    conflict_loss_weight: float = 0.1
 
-    # Augment toggle lives at `step.augment` (StepConfig). Both the
-    # grad-tracked forward (`aug_forward`) and the no-grad
-    # `dpll_step` read from there.
-    step: StepConfig = field(default_factory=StepConfig)
+    # Maze's operator: dihedral augmentation only (the 5 channels — wall /
+    # free / start / goal / path — are not interchangeable, so no digit-perm).
+    step: StepConfig = field(default_factory=lambda: maze_step(threshold=0.5, augment=True))
     max_age: int = 100  # age = train steps since backfill (counts up regardless of sampling)
     # Pool-size multiplier over batch_size. >1.0 gives a larger persistent
     # pool than the per-step sample, so older / harder entries hang around
-    # longer (variety + curriculum effect). Default 1.0 = pool == batch.
-    pool_size_mult: float = 1.0
+    # longer (variety + curriculum effect).
+    pool_size_mult: float = 2.0
     compile: bool = True
 
     # EMA of trainable params, evaluated at eval time. TRM paper recommends
-    # decay=0.999. Shadow + live state are both saved — eval (in run.py)
-    # auto-swaps EMA into the live model if `ema_state_dict` is present in
-    # the checkpoint extras.
+    # decay=0.999. Shadow + live state are both saved — eval auto-swaps EMA
+    # into the live model if `ema_state_dict` is present in the checkpoint.
     use_ema: bool = False
     ema_decay: float = 0.999
 
     log_every: int = 20
-    eval_every: int = 100             # in-train mini-solve frequency
-    # In-train eval: same 200-puzzle set as final eval, same K=64, but a
-    # very tight `max_rounds`. Reports how many puzzles solve in the
-    # trivial-deduction tail. With M = batch_size/K = 8, each puzzle gets
-    # ≤ eval_max_rounds forwards in its slot, total forwards ≤
-    # 200/M * eval_max_rounds = 25*5 ≈ 125 forwards = ~3s wall.
-    eval_n_puzzles: int = 200
-    eval_max_rounds: int = 5
-    eval_n_chains: int = 64
+    # In-training monitoring: tight-budget mini-solve on held-out puzzles
+    # (Maze-Hard test split, or a seed-200 synthetic pool); logging only,
+    # see sudoku/train.py.
+    monitor_every: int = 100
+    monitor_n_puzzles: int = 200
+    monitor_max_rounds: int = 5
+    monitor_n_chains: int = 64
 
-    out_dir: str = "checkpoints/maze"
-    name: str = ""
-
-    # Resume support. If `resume_path` is set, the trainer:
-    #   - Saves a full {model, optimizer, scheduler, step, RNG} snapshot to
-    #     `resume_path` every `checkpoint_every` steps (overwriting the file).
-    #   - On startup, if `resume_path` exists, loads that snapshot and starts
-    #     from `step+1` (skips the steps already completed).
-    # `commit_volume` (when True) imports the modal checkpoint volume and
-    # commits after each snapshot — required for resume after preemption since
-    # uncommitted writes aren't visible to a fresh container. Kept as a flag
-    # rather than a callable to keep TrainConfig deepcopy-safe (functions /
-    # bound methods can carry _contextvars.Context which fails to pickle).
+    # Every `checkpoint_every` steps a full {model, optimizer, scheduler,
+    # step, RNG} snapshot is written next to the checkpoint
+    # (`<ckpt>.resume.pt`, plus a `<ckpt>.step<N>.pt` copy); a restarted run
+    # resumes from it. 0 disables snapshots.
     checkpoint_every: int = 1000
-    resume_path: str | None = None
-    commit_volume: bool = False
-
-    model: LoopedTransformerConfig = field(default_factory=LoopedTransformerConfig)
-    data: MazeConfig = field(default_factory=MazeConfig)
 
 
-def train(cfg: TrainConfig):
+def maze_step(**kw) -> StepConfig:
+    return StepConfig(augment_dihedral=True, permute_digits=False, **kw)
+
+
+def train(exp: MazeExperiment, ckpt_path: str | Path,
+          commit: Callable[[], None] = lambda: None) -> Path:
+    """Train `exp` and save the checkpoint to `ckpt_path`, resuming from a
+    snapshot if a previous attempt left one; `commit` persists snapshots."""
+    cfg = exp.train
+    ckpt_path = Path(ckpt_path)
+    resume_path = ckpt_path.with_suffix(".resume.pt") if cfg.checkpoint_every > 0 else None
     torch.manual_seed(cfg.seed)
     torch.set_float32_matmul_precision("high")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    out_dir = Path(cfg.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    ckpt_path = out_dir / f"{cfg.name}_{ts}.pt"
 
-    model = PowersetModel(cfg.model).to(device)
+    model = PowersetModel(exp.model).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"device={device}  params={n_params:,}  steps={cfg.steps}  bs={cfg.batch_size}",
           flush=True)
@@ -127,44 +117,27 @@ def train(cfg: TrainConfig):
         print("torch.compile(dynamic=False) …", flush=True)
         model = torch.compile(model, dynamic=False)
 
-    cfg.data.batch_size = cfg.batch_size
-    dataset = MazeDataset(cfg.data)
+    dataset = MazeDataset(dataclasses.replace(exp.data, batch_size=cfg.batch_size))
 
-    # Snapshot a fixed batch of held-out puzzles for in-train eval.
-    # For maze_hard: pull from the test split (seed=200 shuffles).
-    # For synthetic: there's no "split", so we use a separate dataset with
-    # seed=200 + augment off (deterministic eval frame).
-    eval_data_cfg = MazeConfig(
-        dataset=cfg.data.dataset,
-        cache_dir=cfg.data.cache_dir,
-        split="test" if cfg.data.dataset == "maze_hard" else "train",  # split unused for synthetic
-        n_puzzles=cfg.eval_n_puzzles,
-        batch_size=cfg.eval_n_puzzles,
-        seed=200,
-        # Synthetic-only fields propagated for grid sizing.
-        grid_size=cfg.data.grid_size,
-        wall_frac_lo=cfg.data.wall_frac_lo,
-        wall_frac_hi=cfg.data.wall_frac_hi,
-        hard=cfg.data.hard,
-        # Eval is in canonical frame: no aug from the data layer.
-        augment_dihedral=False,
-        augment_swap_endpoints=False,
-        prefetch_batches=cfg.data.prefetch_batches,
-        simplify_to_straight_line=cfg.data.simplify_to_straight_line,
-    )
-    _H_eval, _W_eval = grid_dims(eval_data_cfg)
-    eval_ds = MazeDataset(eval_data_cfg)
-    # In-train eval ds is K=1 (eval_data_cfg has no k_solutions override);
-    # next_batch returns (x, solutions=[B, 1, S, C], is_sat). Unwrap the K dim.
-    ex_x, ex_sols, ex_sat = eval_ds.next_batch()
-    eval_ds.close()
-    sat_mask = ex_sat.bool()
-    eval_x = ex_x[sat_mask][:cfg.eval_n_puzzles].to(device).float()
-    eval_y = ex_sols[sat_mask, 0][:cfg.eval_n_puzzles].to(device).float()
-    eval_given = (eval_x.sum(dim=-1) == 1)
-    print(f"In-train eval set: {eval_x.shape[0]} SAT puzzles "
-          f"(every {cfg.eval_every} steps, "
-          f"K={cfg.eval_n_chains}, max_rounds={cfg.eval_max_rounds})", flush=True)
+    if cfg.monitor_every > 0:
+        # Maze-Hard: the test split. Synthetic: a separate seed-200 pool.
+        eval_data_cfg = dataclasses.replace(
+            exp.data, split="test" if exp.data.dataset == "maze_hard" else "train",
+            n_puzzles=cfg.monitor_n_puzzles, batch_size=cfg.monitor_n_puzzles, seed=200,
+            k_solutions=1, augment_dihedral=False, augment_swap_endpoints=False,
+            cache_suffix="",
+        )
+        _H_eval, _W_eval = grid_dims(eval_data_cfg)
+        eval_ds = MazeDataset(eval_data_cfg)
+        ex_x, ex_sols, ex_sat = eval_ds.next_batch()
+        eval_ds.close()
+        sat_mask = ex_sat.bool()
+        eval_x = ex_x[sat_mask][:cfg.monitor_n_puzzles].to(device).float()
+        eval_y = ex_sols[sat_mask, 0][:cfg.monitor_n_puzzles].to(device).float()
+        eval_given = (eval_x.sum(dim=-1) == 1)
+        print(f"Monitoring set: {eval_x.shape[0]} puzzles "
+              f"(every {cfg.monitor_every} steps, "
+              f"K={cfg.monitor_n_chains}, max_rounds={cfg.monitor_max_rounds})", flush=True)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
                                    weight_decay=cfg.weight_decay, betas=cfg.betas)
@@ -179,9 +152,9 @@ def train(cfg: TrainConfig):
 
     # Resume support.
     start_step = 1
-    if cfg.resume_path and Path(cfg.resume_path).exists():
-        print(f"[resume] loading snapshot from {cfg.resume_path}", flush=True)
-        rckpt = torch.load(cfg.resume_path, map_location=device, weights_only=False)
+    if resume_path is not None and resume_path.exists():
+        print(f"[resume] loading snapshot from {resume_path}", flush=True)
+        rckpt = torch.load(resume_path, map_location=device, weights_only=False)
         model.load_state_dict(rckpt["model_state_dict"])
         optimizer.load_state_dict(rckpt["optimizer_state_dict"])
         scheduler.load_state_dict(rckpt["scheduler_state_dict"])
@@ -203,8 +176,8 @@ def train(cfg: TrainConfig):
             print(f"[resume] RNG state restore skipped: {e}", flush=True)
         print(f"[resume] resumed at step {start_step} "
               f"(of {cfg.steps}; {cfg.steps - start_step + 1} remaining)", flush=True)
-    elif cfg.resume_path:
-        print(f"[resume] no snapshot at {cfg.resume_path}; starting from step 1",
+    elif resume_path is not None:
+        print(f"[resume] no snapshot at {resume_path}; starting from step 1",
               flush=True)
 
     # Leftover-puzzle buffer so we don't waste a whole dataset batch when
@@ -369,74 +342,32 @@ def train(cfg: TrainConfig):
         pool_age[sample_idx] = new_age
 
         # ---- periodic resume snapshot + unique step checkpoint ----
-        if (cfg.resume_path
-                and cfg.checkpoint_every > 0
-                and step % cfg.checkpoint_every == 0):
+        if resume_path is not None and step % cfg.checkpoint_every == 0:
             ckpt_payload = {
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "scheduler_state_dict": scheduler.state_dict(),
                 "ema_state_dict": (ema.shadow if ema is not None else None),
                 "step": step,
-                "model_cfg": asdict(cfg.model),
+                "model_cfg": asdict(exp.model),
                 "torch_rng": torch.get_rng_state(),
                 "cuda_rng": (torch.cuda.get_rng_state()
                               if torch.cuda.is_available() else None),
             }
-            torch.save(ckpt_payload, cfg.resume_path)
-            # Also save a unique-named copy alongside so callers can probe
-            # intermediate steps later (the resume_path file gets overwritten
-            # each save, so without this the only checkpoint we'd retain is
-            # the final one).
-            unique_path = (Path(cfg.resume_path).with_suffix("")
-                           .as_posix() + f".step{step:07d}.pt")
+            torch.save(ckpt_payload, resume_path)
+            # Also keep a per-step copy so intermediate steps can be probed
+            # later (the resume snapshot is overwritten each time).
+            unique_path = ckpt_path.with_suffix(f".step{step:07d}.pt")
             torch.save(ckpt_payload, unique_path)
-            if cfg.commit_volume:
-                # Local import to keep train.py decoupled from Modal in the
-                # default (non-Modal) path.
-                from lattice_diffusion.modal.image import checkpoint_volume
-                checkpoint_volume.commit()
-            print(f"  [resume ckpt] saved at step {step} → {cfg.resume_path}  "
+            commit()
+            print(f"  [resume ckpt] saved at step {step} → {resume_path}  "
                   f"(also: {unique_path})", flush=True)
 
-        # ---- in-train eval (mini-solve on held-out SAT puzzles) ----
-        if cfg.eval_every > 0 and step % cfg.eval_every == 0:
-            model.eval()
-            ema_backup = ema.swap_in(model) if ema is not None else None
-            with torch.no_grad():
-                eval_solve_cfg = SolveConfig(
-                    step=cfg.step,  # solve() doesn't pass orig_y, so deduction is deterministic;
-                                    # `cfg.step.augment` controls eval-time aug
-                    max_rounds=cfg.eval_max_rounds,
-                    n_chains=cfg.eval_n_chains,
-                    # Match training batch shape so torch.compile reuses its kernel.
-                    batch_size=cfg.batch_size,
-                )
-                eval_res = solve(
-                    model, eval_x, eval_y, eval_given, eval_solve_cfg,
-                    verbose=False,
-                )
-            if ema is not None and ema_backup is not None:
-                ema.swap_out(model, ema_backup)
-            # Maze-aware rescoring: any valid minimal path counts.
-            (n_cor_e, n_gt_e, n_alt_e,
-             n_wr_e, n_wv_e, n_wi_e, n_to_e) = rescore(eval_res, eval_y, _H_eval, _W_eval)
-            n_e = eval_res.solved.shape[0]
-            den = max(eval_res.diag_total_deduced, 1)
-            unsound_rate_e = eval_res.diag_total_unsound_deductions / den
-            cls_p_e = eval_res.diag_conflict_tp / max(
-                eval_res.diag_conflict_tp + eval_res.diag_conflict_fp, 1)
-            cls_r_e = eval_res.diag_conflict_tp / max(
-                eval_res.diag_conflict_tp + eval_res.diag_conflict_fn, 1)
-            print(
-                f"  [intrain-eval step={step}, max_rounds={cfg.eval_max_rounds}] "
-                f"correct={n_cor_e}/{n_e}  (gt={n_gt_e} alt={n_alt_e})  "
-                f"wr={n_wr_e}(v={n_wv_e}/i={n_wi_e})  to={n_to_e}  "
-                f"calls={eval_res.model_calls}  "
-                f"unsound={unsound_rate_e:.3%}  "
-                f"cls:P={cls_p_e:.2f}/R={cls_r_e:.2f}",
-                flush=True,
-            )
+        # ---- in-train monitoring (any valid minimal path counts) ----
+        if cfg.monitor_every > 0 and step % cfg.monitor_every == 0:
+            res = monitor_solve(model, ema, eval_x, eval_y, eval_given, cfg)
+            rescore(res, eval_y, _H_eval, _W_eval)
+            print(format_monitor(res, step, cfg.monitor_max_rounds), flush=True)
 
         # ---- logging ----
         if step % cfg.log_every == 0:
@@ -550,8 +481,9 @@ def train(cfg: TrainConfig):
     if ema is not None:
         extra["ema_state_dict"] = ema.state_dict()
         extra["ema_decay"] = cfg.ema_decay
+    extra.update(exp.checkpoint_meta())
     save_checkpoint(
-        path=ckpt_path, model=model, model_cfg=cfg.model, train_cfg=cfg,
+        path=ckpt_path, model=model, model_cfg=exp.model, train_cfg=cfg,
         extra=extra,
     )
     print(f"Saved: {ckpt_path}", flush=True)

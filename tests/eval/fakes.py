@@ -22,9 +22,6 @@ class FakeTask(EvalTask):
     def __init__(self, data_dir: str = "") -> None:
         super().__init__(data_dir)
 
-    def default_solve(self) -> dict:
-        return {"p_correct": 0.97}
-
     def load_model(self, checkpoint, dropout_p, compile):
         return None
 

@@ -30,10 +30,6 @@ class EvalTask(ABC):
         """Number of puzzles in `split`."""
 
     @abstractmethod
-    def default_solve(self) -> dict:
-        """Default solver settings for evaluation."""
-
-    @abstractmethod
     def load_model(self, checkpoint: str, dropout_p: float, compile: bool) -> nn.Module:
         """Load `checkpoint` for evaluation."""
 
@@ -53,6 +49,8 @@ class EvalTask(ABC):
 
 TASKS: dict[str, str] = {
     "sudoku": "experiments.sudoku.eval_task:SudokuTask",
+    "snowflake": "experiments.snowflake.eval_task:SnowflakeTask",
+    "maze": "experiments.maze.eval_task:MazeTask",
 }
 
 

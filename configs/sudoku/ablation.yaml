@@ -1,0 +1,12 @@
+# Base for the Sudoku-Extreme appendix ablations: the paper recipe at 2K
+# steps, each arm scored on the same first 1,000 puzzles of
+# sudoku_test_perm (the `ablation` stop preset). Ablation arms are this file
+# plus one --set override, e.g. --set "model.n_loops=4".
+name: ablation
+
+train:
+  steps: 2000
+
+eval:
+  index_list: sudoku_test_perm
+  stop: ablation

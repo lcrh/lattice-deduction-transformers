@@ -65,8 +65,8 @@ class BlockWorker:
 
 
 @eval_app.function(
-    image=image, cpu=2, memory=4096, timeout=24 * 3600,
-    volumes={CHECKPOINT_MOUNT: checkpoint_volume},
+    image=image, cpu=2, memory=4096, timeout=24 * 3600, secrets=[hf_secret],
+    volumes={DATA_MOUNT: data_volume, CHECKPOINT_MOUNT: checkpoint_volume},
 )
 def coordinate(spec_json: str) -> dict:
     spec = EvalSpec.from_json(spec_json)
@@ -97,6 +97,7 @@ def coordinate(spec_json: str) -> dict:
         persist=checkpoint_volume.commit,
         block_seconds=lambda: seconds["blocks"],
         startup_seconds=lambda: seconds["startup"],
+        split_size=lambda split: get_task(spec.task, DATA_MOUNT).split_size(split),
     )
     print(format_summary(summary), flush=True)
     return {"run_dir": summary.run_dir, "summary": format_summary(summary)}

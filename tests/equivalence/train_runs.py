@@ -1,7 +1,8 @@
 """Three-step training runs on synthetic data, one per benchmark.
 
 Each returns the trained model's state_dict. The settings match the ones
-the reference fixtures were captured with.
+the reference fixtures were captured with; `train_kw` overrides TrainConfig
+fields (e.g. to switch on monitoring).
 """
 
 from pathlib import Path
@@ -17,58 +18,56 @@ def _state(path) -> dict:
     return torch.load(path, weights_only=False)["model_state_dict"]
 
 
-def sudoku(tmp: Path) -> dict:
+def sudoku(tmp: Path, **train_kw) -> dict:
+    from experiments.sudoku.config import SudokuExperiment
     from experiments.sudoku.train import TrainConfig, train
 
     fakes.write_sudoku_caches(tmp)
+    exp = SudokuExperiment(
+        model=fakes.tiny_model_cfg(),
+        data=SudokuExtremeConfig(cache_dir=str(tmp), seed=42, n_puzzles=100),
+        train=TrainConfig(**{**dict(steps=3, batch_size=16, seed=0, step=StepConfig(augment=True),
+                                    compile=False, monitor_every=0, log_every=1), **train_kw}),
+    )
     with fakes.small_sudoku_val():
-        path = train(TrainConfig(
-            steps=3, batch_size=16, seed=0, weight_decay=0.1, conflict_loss_weight=0.1,
-            step=StepConfig(augment=True), compile=False, eval_every=0, log_every=1,
-            model=fakes.tiny_model_cfg(),
-            data=SudokuExtremeConfig(cache_dir=str(tmp), batch_size=16, seed=42, n_puzzles=100),
-            out_dir=str(tmp / "ck"), name="sudoku",
-        ))
-    return _state(path)
+        train(exp, tmp / "sudoku.pt")
+    return _state(tmp / "sudoku.pt")
 
 
-def snowflake(tmp: Path) -> dict:
+def snowflake(tmp: Path, **train_kw) -> dict:
+    from experiments.snowflake.config import SnowflakeExperiment
     from experiments.snowflake.data import SnowflakeConfig
-    from experiments.snowflake.train import TrainConfig, train
+    from experiments.snowflake.train import TrainConfig, snowflake_step, train
 
     fakes.write_snowflake_parquet(tmp / "snowflake_train.parquet", 60, seed=31)
     fakes.write_snowflake_parquet(tmp / "snowflake_test.parquet", 10, seed=32)
-    path = train(TrainConfig(
-        steps=3, batch_size=16, seed=0, weight_decay=0.1, conflict_loss_weight=0.1,
-        step=StepConfig(augment=True, augment_dihedral=False, vocab_dim=6),
-        compile=False, eval_every=0, log_every=1,
-        model=fakes.tiny_model_cfg(n_channels=7, seq_len=150, grid_rows=15, grid_cols=10),
-        data=SnowflakeConfig(data_path=str(tmp / "snowflake_train.parquet"),
-                             batch_size=16, seed=42, n_puzzles=40),
-        eval_data=SnowflakeConfig(data_path=str(tmp / "snowflake_test.parquet"),
-                                  n_puzzles=200, batch_size=200, seed=200,
-                                  zero_hint_weight=1.0, correct_hint_weight=0.0,
-                                  error_hint_weight=0.0),
-        out_dir=str(tmp / "ck"), name="snowflake",
-    ))
-    return _state(path)
+    exp = SnowflakeExperiment(
+        model=fakes.tiny_model_cfg(),
+        data=SnowflakeConfig(data_dir=str(tmp), seed=42, n_puzzles=40),
+        train=TrainConfig(**{**dict(steps=3, batch_size=16, seed=0,
+                                    step=snowflake_step(augment=True), compile=False,
+                                    monitor_every=0, log_every=1), **train_kw}),
+    )
+    train(exp, tmp / "snowflake.pt")
+    return _state(tmp / "snowflake.pt")
 
 
-def maze(tmp: Path) -> dict:
+def maze(tmp: Path, **train_kw) -> dict:
+    from experiments.maze.config import MazeExperiment
     from experiments.maze.data import MazeConfig
-    from experiments.maze.train import TrainConfig, train
+    from experiments.maze.train import TrainConfig, maze_step, train
 
-    path = train(TrainConfig(
-        steps=3, batch_size=16, seed=0, weight_decay=0.1, conflict_loss_weight=0.1,
-        step=StepConfig(augment=True, augment_dihedral=True, permute_digits=False,
-                        threshold=0.5),
-        pool_size_mult=2.0, compile=False, eval_every=0, log_every=1, eval_n_puzzles=4,
-        model=fakes.tiny_model_cfg(n_channels=5, seq_len=49, grid_rows=7, grid_cols=7),
-        data=MazeConfig(dataset="synthetic", cache_dir=str(tmp), batch_size=16, seed=42,
-                        grid_size=7, hard=False, n_puzzles=40, k_solutions=2),
-        out_dir=str(tmp / "ck"), name="maze",
-    ))
-    return _state(path)
+    exp = MazeExperiment(
+        model=fakes.tiny_model_cfg(),
+        data=MazeConfig(dataset="synthetic", cache_dir=str(tmp), seed=42, grid_size=7,
+                        hard=False, n_puzzles=40, k_solutions=2),
+        train=TrainConfig(**{**dict(steps=3, batch_size=16, seed=0,
+                                    step=maze_step(threshold=0.5, augment=True),
+                                    pool_size_mult=2.0, compile=False, monitor_every=0,
+                                    log_every=1, checkpoint_every=0), **train_kw}),
+    )
+    train(exp, tmp / "maze.pt")
+    return _state(tmp / "maze.pt")
 
 
 RUNS = {"sudoku": sudoku, "snowflake": snowflake, "maze": maze}

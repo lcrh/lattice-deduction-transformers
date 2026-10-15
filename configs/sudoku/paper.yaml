@@ -1,0 +1,58 @@
+# Sudoku-Extreme, paper recipe (Table 1, 4K-step row). These are also the
+# SudokuExperiment defaults; tests/test_configs.py checks that they agree.
+name: paper
+
+model:
+  dim: 128
+  num_layers: 4
+  n_heads: 4
+  n_loops: 16
+  dropout: 0.1
+  attn_dropout: 0.1
+  ffn_dropout: 0.1
+  cls_token: true          # conflict head; trained iff train.conflict_loss_weight > 0
+  pre_norm: true
+  use_rope: false
+
+data:
+  n_puzzles: 1000          # training puzzles, drawn with `seed` (sudoku_val excluded)
+  seed: 42
+  zero_hint_weight: 0.20
+  correct_hint_weight: 0.55
+  error_hint_weight: 0.25
+  augment_digit_perm: true
+  augment_dihedral: true
+
+train:
+  steps: 4000
+  batch_size: 512
+  lr: 0.003
+  weight_decay: 0.1
+  warmup_fraction: 0.1
+  seed: 0
+  bce_pos_mult: 4.0
+  bce_neg_mult: 0.5
+  softmax_loss_weight: 0.2
+  conflict_loss_weight: 0.1
+  max_age: 100
+  step:                    # operator that advances pool states during training
+    threshold: 0.10
+    cls_threshold: 0.5
+    temp_decide: 1.5
+    augment: true
+
+solve:                     # operator and search budget at evaluation
+  step:
+    threshold: 0.10
+    cls_threshold: 0.6
+    temp_decide: 1.5
+    augment: true
+  max_rounds: 1000
+  n_chains: 64
+  batch_size: 512
+
+eval:
+  index_list: sudoku_test_perm
+  stop: sequential
+  dropout_p: 0.05
+  workers: 32

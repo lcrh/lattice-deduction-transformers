@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import asdict
 from pathlib import Path
 
@@ -43,7 +44,11 @@ def save_checkpoint(
     if extra is not None:
         data.update(extra)
 
-    torch.save(data, path)
+    # Write-then-rename so an interrupted save never leaves a truncated file
+    # where a finished checkpoint is expected.
+    tmp = path.with_name(path.name + ".tmp")
+    torch.save(data, tmp)
+    os.replace(tmp, path)
     return path
 
 

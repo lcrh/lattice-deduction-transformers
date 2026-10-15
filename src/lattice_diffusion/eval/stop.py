@@ -40,6 +40,8 @@ class PrefixCounts:
 class NoStop:
     """Evaluate every index."""
 
+    limit = None
+
     def should_stop(self, counts: PrefixCounts) -> str | None:
         return None
 
@@ -65,6 +67,8 @@ class SequentialStop:
     alpha: float = 0.05
     check_every: int = 100
 
+    limit = None
+
     def should_stop(self, counts: PrefixCounts) -> str | None:
         if counts.n < self.n_min:
             return None
@@ -80,11 +84,31 @@ class SequentialStop:
         return {"kind": "sequential", **asdict(self)}
 
 
-StopRule = NoStop | SequentialStop
+@dataclass(frozen=True)
+class FixedN:
+    """Evaluate exactly the first `n` indices (`fixed_n`), or the whole list
+    if it is shorter (`exhausted`). Used for ablation tables, so every arm is
+    scored on the same puzzles."""
+
+    n: int
+
+    @property
+    def limit(self) -> int:
+        return self.n
+
+    def should_stop(self, counts: PrefixCounts) -> str | None:
+        return "fixed_n" if counts.n >= self.n else None
+
+    def to_dict(self) -> dict:
+        return {"kind": "fixed_n", "n": self.n}
+
+
+StopRule = NoStop | SequentialStop | FixedN
 
 PRESETS: dict[str, StopRule] = {
     "sequential": SequentialStop(),
     "full": NoStop(),
+    "ablation": FixedN(1000),
 }
 
 
@@ -95,4 +119,6 @@ def stop_from_dict(d: dict) -> StopRule:
         return NoStop()
     if kind == "sequential":
         return SequentialStop(**d)
+    if kind == "fixed_n":
+        return FixedN(**d)
     raise ValueError(f"unknown stop rule kind {kind!r}")
