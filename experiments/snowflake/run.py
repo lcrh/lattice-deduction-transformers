@@ -31,11 +31,13 @@ app.include(eval_app)
     secrets=[hf_secret],
     volumes={DATA_MOUNT: data_volume, CHECKPOINT_MOUNT: checkpoint_volume},
 )
-def run(config_json: str) -> dict:
+def run(config_json: str, evaluate: bool = True) -> dict:
     return run_experiment(SnowflakeExperiment.from_json(config_json), train,
-                          CHECKPOINT_MOUNT, DATA_MOUNT, checkpoint_volume.commit)
+                          CHECKPOINT_MOUNT, DATA_MOUNT, checkpoint_volume.commit,
+                          evaluate=evaluate)
 
 
 @app.local_entrypoint()
-def entrypoint(config: str = "configs/snowflake/paper.yaml", set: str = "", wait: bool = True):
-    launch(SnowflakeExperiment, run, config, set, wait)
+def entrypoint(config: str = "configs/snowflake/paper.yaml", set: str = "", wait: bool = True,
+               evaluate: bool = True):
+    launch(SnowflakeExperiment, app, run, config, set, wait, evaluate)

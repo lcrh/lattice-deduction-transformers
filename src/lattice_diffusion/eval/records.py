@@ -3,7 +3,8 @@
 Layout under the eval root (on the checkpoint volume):
 
     <root>/<checkpoint stem>/<tag>-<spec hash>/
-        spec.json            the resolved EvalSpec (hashed fields only)
+        spec.json            the resolved EvalSpec's hashed fields, plus the
+                             provenance of the launch that created the run
         blocks/000000.jsonl  one row per puzzle, in index-list order
         summary-<rule>.json  one per stop rule the blocks were summarized with
 
@@ -72,8 +73,13 @@ class EvalSpec:
     n_workers: int = 32
     max_in_flight: int | None = None    # None = n_workers
     keep_warm_s: int = 300              # idle seconds before a worker scales down
+    # Provenance (lattice_diffusion.provenance): recorded, never hashed.
+    exp_id: str = ""
+    entry: str = ""
+    code_sha: str = ""
 
-    _UNHASHED = ("stop", "n_workers", "max_in_flight", "keep_warm_s")
+    _UNHASHED = ("stop", "n_workers", "max_in_flight", "keep_warm_s",
+                 "exp_id", "entry", "code_sha")
 
     def hashed_fields(self) -> dict:
         d = asdict(self)
@@ -129,13 +135,15 @@ def read_blocks(run_dir: Path) -> dict[int, list[Row]]:
 def check_or_write_spec(run_dir: Path, spec: EvalSpec) -> None:
     """Refuse to mix blocks from different specs in one run directory."""
     path = run_dir / "spec.json"
-    hashed = json.dumps(spec.hashed_fields(), sort_keys=True, indent=2)
     if path.exists():
-        if path.read_text() != hashed:
+        if json.loads(path.read_text())["hashed"] != spec.hashed_fields():
             raise RuntimeError(f"{path} exists with a different spec")
         return
     run_dir.mkdir(parents=True, exist_ok=True)
-    path.write_text(hashed)
+    path.write_text(json.dumps({
+        "hashed": spec.hashed_fields(),
+        "provenance": {"exp_id": spec.exp_id, "entry": spec.entry, "code_sha": spec.code_sha},
+    }, sort_keys=True, indent=2))
 
 
 def _percentile(sorted_vals: list[float], q: float) -> float | None:

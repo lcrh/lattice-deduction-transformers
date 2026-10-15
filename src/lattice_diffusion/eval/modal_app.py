@@ -27,6 +27,7 @@ from lattice_diffusion.eval.tasks import get_task
 from lattice_diffusion.modal.image import (
     CHECKPOINT_MOUNT, DATA_MOUNT, checkpoint_volume, data_volume, hf_secret, image,
 )
+from lattice_diffusion.provenance import header
 
 EVAL_ROOT = f"{CHECKPOINT_MOUNT}/eval"
 
@@ -70,6 +71,9 @@ class BlockWorker:
 )
 def coordinate(spec_json: str) -> dict:
     spec = EvalSpec.from_json(spec_json)
+    print(header("eval", exp_id=spec.exp_id, entry=spec.entry, spec_hash=spec.spec_hash(),
+                 code=spec.code_sha, checkpoint=spec.checkpoint,
+                 run_dir=spec.run_dir(EVAL_ROOT)), flush=True)
     checkpoint_volume.reload()
     worker = BlockWorker.with_options(
         max_containers=spec.n_workers, scaledown_window=spec.keep_warm_s,

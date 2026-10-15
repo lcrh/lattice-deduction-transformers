@@ -17,15 +17,22 @@ Usage:
     # Explicit puzzle list (e.g. a portfolio failure set), one index per line
     uv run modal run --detach experiments/evaluate.py --checkpoint <ckpt> \
         --indices-file hard.txt --split test --set "eval.stop=full solve.max_rounds=50000"
+
+    # Submit and return (with --detach the eval keeps running)
+    uv run modal run --detach experiments/evaluate.py --checkpoint <ckpt> --no-wait
 """
 
+import dataclasses
 from pathlib import Path
 
 import modal
 
 from lattice_diffusion import config as cfglib
-from lattice_diffusion.eval.modal_app import coordinate, eval_app
+from lattice_diffusion.eval.modal_app import EVAL_ROOT, coordinate, eval_app
 from lattice_diffusion.modal.image import CHECKPOINT_MOUNT, checkpoint_volume, image
+from lattice_diffusion.provenance import (
+    LedgerRecord, Provenance, announce, app_run_name, app_url, require_clean_sha, write_ledger,
+)
 
 from experiments.registry import experiment_class
 
@@ -47,16 +54,20 @@ def checkpoint_experiment(checkpoint: str) -> dict:
 
 
 @app.local_entrypoint()
-def entrypoint(checkpoint: str, set: str = "", indices_file: str = "", split: str = "test"):
+def entrypoint(checkpoint: str, set: str = "", indices_file: str = "", split: str = "test",
+               wait: bool = True):
     stored = checkpoint_experiment.remote(checkpoint)
     cls = experiment_class(stored["benchmark"])
     data = stored["experiment"]
+    data.setdefault("provenance", dataclasses.asdict(Provenance()))
     if set:
         overrides = cfglib.parse_overrides(set)
-        if overrides.keys() - {"eval", "solve"}:
-            raise ValueError("evaluate.py only overrides the eval and solve blocks")
+        if overrides.keys() - {"eval", "solve", "provenance"}:
+            raise ValueError("evaluate.py only overrides the eval, solve and provenance blocks")
         data = cfglib.merge(data, overrides)
     exp = cfglib.from_dict(cls, data)
+    exp = dataclasses.replace(exp, provenance=dataclasses.replace(
+        exp.provenance, code_sha=require_clean_sha()))
 
     explicit = None
     if indices_file:
@@ -66,5 +77,17 @@ def entrypoint(checkpoint: str, set: str = "", indices_file: str = "", split: st
     print(f"Eval spec ({stored['benchmark']}): index_list={spec.index_list} "
           f"stop={spec.stop['kind']} tag={spec.tag} "
           f"explicit={len(explicit or [])} solve={spec.solve}", flush=True)
-    result = coordinate.remote(spec.to_json())
-    print(f"\n{result['run_dir']}\n{result['summary']}", flush=True)
+    call = coordinate.spawn(spec.to_json())
+    record = LedgerRecord(
+        kind="eval", exp_id=spec.exp_id, entry=spec.entry,
+        # `modal run -n <name>` sets the run's description (modal.runner.run_app).
+        app_name=app.description or app_run_name(spec.exp_id, spec.entry, exp.train_hash(),
+                                                 spec.spec_hash()),
+        app_id=app.app_id, app_url=app_url(app), call_id=call.object_id,
+        code_sha=spec.code_sha, checkpoint=checkpoint, train_hash=exp.train_hash(),
+        eval_run_dir=str(spec.run_dir(EVAL_ROOT)), eval_hash=spec.spec_hash(),
+    )
+    announce(record, write_ledger(checkpoint_volume, record))
+    if wait:
+        result = call.get()
+        print(f"\n{result['run_dir']}\n{result['summary']}", flush=True)
