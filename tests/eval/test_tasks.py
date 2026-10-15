@@ -49,3 +49,20 @@ def test_task_solves_a_block(benchmark, split):
     assert rows == again        # block-seeded: rerunning a block reproduces it
     if benchmark == "maze":
         assert all("label" in r for r in rows)
+
+
+@pytest.mark.parametrize("estimate", [False, True])
+def test_drained_chain_estimate_is_recorded_only_when_enabled(estimate):
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        train_runs.RUNS["sudoku"](tmp)
+        ckpt = str(tmp / "sudoku.pt")
+        exp, solve = _small_solve("sudoku")
+        solve["estimate_sequential"] = estimate
+        task = get_task("sudoku", str(tmp))
+        model = task.load_model(ckpt, 0.05, False)
+        lst = index_lists.explicit("sudoku", "test", np.arange(4))
+        spec = build_spec("sudoku", ckpt, exp.eval, solve,
+                          explicit_indices=lst.indices.tolist(), explicit_split="test")
+        rows = solve_block(task, model, block_args(spec, lst, 0))
+    assert all(("forwards_seq" in r) == estimate for r in rows)

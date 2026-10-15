@@ -26,8 +26,8 @@ Row fields (every benchmark):
               null where the benchmark has no rule check (Snowflake)
 Optional fields:
     forwards_seq  forwards if one chain ran sequentially (drained-chain
-                  estimate; only with solve.estimate_sequential)
-    label         Maze only: exact vs. alternate shortest path
+                  estimate; only with `solve.estimate_sequential`)
+    label         Maze only: the exact-vs-alternate-path outcome
 """
 
 from __future__ import annotations
