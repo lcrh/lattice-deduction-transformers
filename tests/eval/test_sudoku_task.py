@@ -28,3 +28,13 @@ def test_invalid_grids_fail():
     assert not is_valid_solution("0" + g[1:], puzzle)
     relabeled = g.translate(str.maketrans("12", "21"))   # valid sudoku, wrong given
     assert not is_valid_solution(relabeled, _puzzle(g, [i for i in range(81) if g[i] == "1"]))
+
+
+def test_sequential_estimate_flags_reach_the_solver_config():
+    from experiments.sudoku.eval_task import build_solve_config, make_eval_spec
+
+    default = build_solve_config(make_eval_spec("ckpt.pt").solve)
+    on = build_solve_config(make_eval_spec("ckpt.pt", estimate_sequential=True,
+                                           seq_drain_max_rounds=50).solve)
+    assert not default.estimate_sequential
+    assert on.estimate_sequential and on.seq_drain_max_rounds == 50

@@ -56,6 +56,8 @@ def entrypoint(
     batch_size: int | None = None,
     max_rounds: int | None = None,
     dropout_p: float | None = None,
+    estimate_sequential: bool | None = None,
+    seq_drain_max_rounds: int | None = None,
     indices_file: str = "",
     split: str = "test",
 ):
@@ -68,6 +70,7 @@ def entrypoint(
         eval_seed=eval_seed, tag=tag, compile=compile, threshold=threshold, temp_decide=temp_decide,
         cls_threshold=cls_threshold, augment=augment, n_chains=n_chains,
         batch_size=batch_size, max_rounds=max_rounds, dropout_p=dropout_p,
+        estimate_sequential=estimate_sequential, seq_drain_max_rounds=seq_drain_max_rounds,
         explicit_indices=explicit, split=split,
     )
     print(f"Eval spec: {asdict(spec) | {'explicit_indices': len(explicit or [])}}", flush=True)

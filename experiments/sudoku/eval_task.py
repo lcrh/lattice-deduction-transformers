@@ -33,6 +33,8 @@ def default_solve() -> dict:
         "n_chains": 64,
         "batch_size": 512,
         "dropout_p": 0.05,
+        "estimate_sequential": False,
+        "seq_drain_max_rounds": 200,
     }
 
 
@@ -61,6 +63,8 @@ def make_eval_spec(
     batch_size: int | None = None,
     max_rounds: int | None = None,
     dropout_p: float | None = None,
+    estimate_sequential: bool | None = None,
+    seq_drain_max_rounds: int | None = None,
     explicit_indices: list[int] | None = None,
     split: str | None = None,
 ) -> EvalSpec:
@@ -71,7 +75,9 @@ def make_eval_spec(
         if val is not None:
             solve["step"][key] = val
     for key, val in (("n_chains", n_chains), ("batch_size", batch_size),
-                     ("max_rounds", max_rounds), ("dropout_p", dropout_p)):
+                     ("max_rounds", max_rounds), ("dropout_p", dropout_p),
+                     ("estimate_sequential", estimate_sequential),
+                     ("seq_drain_max_rounds", seq_drain_max_rounds)):
         if val is not None:
             solve[key] = val
     if explicit_indices is not None:
@@ -192,6 +198,7 @@ class SudokuTask:
         correct, wrong = res.correct.tolist(), res.wrong.tolist()
         rounds, calls = res.round_solved.tolist(), res.puzzle_calls.tolist()
         resets = res.n_resets.tolist()
+        forwards_seq = res.forwards_seq.tolist() if cfg.estimate_sequential else None
         solution, x = res.solution.cpu(), x.cpu()
         rows = []
         for j, dataset_idx in enumerate(indices.tolist()):
@@ -204,6 +211,7 @@ class SudokuTask:
                 "calls": calls[j],
                 "forwards": ((rounds[j] + 1) if correct[j] else cfg.max_rounds) * cfg.n_chains,
                 "n_resets": resets[j],
+                **({"forwards_seq": forwards_seq[j]} if forwards_seq is not None else {}),
                 "solution": grid,
                 "verified": bool(grid) and is_valid_solution(grid, x[j]),
             })

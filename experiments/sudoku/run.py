@@ -43,6 +43,8 @@ _RUN_PARAMS: tuple[tuple[str, object], ...] = (
     ("use_ema",                  False),
     ("ema_decay",                0.999),
     ("eval_dropout_p",           0.05),
+    ("estimate_sequential",      False),
+    ("seq_drain_max_rounds",     200),
     ("eval_stop",                "sequential"),
     ("eval_workers",             32),
     ("n_loops",                  16),
@@ -124,6 +126,8 @@ def run(
     use_ema: bool = False,
     ema_decay: float = 0.999,
     eval_dropout_p: float = 0.05,
+    estimate_sequential: bool = False,
+    seq_drain_max_rounds: int = 200,
     eval_stop: Literal["sequential", "full"] = "sequential",
     eval_workers: int = 32,
     n_loops: int = 16,
@@ -186,6 +190,7 @@ def run(
         cls_threshold=eval_cls_threshold, augment=augment,
         n_chains=eval_n_chains, batch_size=eval_batch_size,
         max_rounds=eval_max_rounds, dropout_p=eval_dropout_p,
+        estimate_sequential=estimate_sequential, seq_drain_max_rounds=seq_drain_max_rounds,
     )
     eval_call = coordinate.spawn(spec.to_json())
     print(f"Spawned eval {spec.run_dir(EVAL_ROOT)} "
@@ -220,6 +225,8 @@ def entrypoint(
     use_ema: bool = False,
     ema_decay: float = 0.999,
     eval_dropout_p: float = 0.05,
+    estimate_sequential: bool = False,
+    seq_drain_max_rounds: int = 200,
     eval_stop: Literal["sequential", "full"] = "sequential",
     eval_workers: int = 32,
     n_loops: int = 16,
@@ -248,6 +255,8 @@ def entrypoint(
         use_ema=use_ema,
         ema_decay=ema_decay,
         eval_dropout_p=eval_dropout_p,
+        estimate_sequential=estimate_sequential,
+        seq_drain_max_rounds=seq_drain_max_rounds,
         eval_stop=eval_stop,
         eval_workers=eval_workers,
         n_loops=n_loops,

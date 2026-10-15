@@ -23,6 +23,9 @@ Row fields (every benchmark):
     solution  the accepted prediction, benchmark-specific string encoding
     verified  rule check of `solution` against the puzzle (never used for
               acceptance; recorded for portfolio selection and auditing)
+Optional fields:
+    forwards_seq  forwards if one chain ran sequentially (drained-chain
+                  estimate; only with solve.estimate_sequential)
 """
 
 from __future__ import annotations
