@@ -31,17 +31,17 @@ modal secret create huggingface-secret HF_TOKEN=<your HF token>
 modal secret create wandb-secret WANDB_API_KEY=<your W&B key>  # training logs to W&B
 
 # Eval the RELEASED checkpoints (no training needed):
-uv run modal run repro/hrm_eval/modal_eval.py::main    # HRM
-uv run modal run repro/trm_eval/modal_eval.py::main    # TRM
+uv run modal run baselines/hrm_trm/hrm_eval/modal_eval.py::main    # HRM
+uv run modal run baselines/hrm_trm/trm_eval/modal_eval.py::main    # TRM
 
 # Augmentation study (each train script ~24h on a B200):
-./repro/train_with_aug.sh  &&  ./repro/eval_with_aug.sh
-./repro/train_no_aug.sh    &&  ./repro/eval_no_aug.sh   # the eval scripts also plot
+./baselines/hrm_trm/train_with_aug.sh  &&  ./baselines/hrm_trm/eval_with_aug.sh
+./baselines/hrm_trm/train_no_aug.sh    &&  ./baselines/hrm_trm/eval_no_aug.sh   # the eval scripts also plot
 ```
 
 Training streams to **Weights & Biases** (online via `wandb-secret`) and writes a
 persistent `<run_name>.train.log` to the checkpoint volume. Eval sweeps + plots
-land in `repro/results/` (committed once runs complete).
+land in `baselines/hrm_trm/results/` (committed once runs complete).
 
 ## Results — released checkpoints, full 1,000-puzzle test set
 | model | params | exact | lenient (any optimal path) |

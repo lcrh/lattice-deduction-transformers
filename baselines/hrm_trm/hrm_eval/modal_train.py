@@ -7,9 +7,9 @@ onto PYTHONPATH so the `pretrain.py` subprocess picks it up:
 The real adam-atan2 CUDA kernel is built into `train_image` (see below).
 
 Usage:
-    uv run modal run repro/hrm_eval/modal_train.py::run_train --aug
-    uv run modal run repro/hrm_eval/modal_train.py::run_train --no-aug
-    uv run modal run repro/hrm_eval/modal_train.py::check   # smoke-test adam-atan2
+    uv run modal run baselines/hrm_trm/hrm_eval/modal_train.py::run_train --aug
+    uv run modal run baselines/hrm_trm/hrm_eval/modal_train.py::run_train --no-aug
+    uv run modal run baselines/hrm_trm/hrm_eval/modal_train.py::check   # smoke-test adam-atan2
 """
 
 import os

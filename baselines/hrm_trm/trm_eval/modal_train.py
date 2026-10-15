@@ -4,8 +4,8 @@ CUDA-dev image's nvcc). Neither HRM nor TRM supports clean resume (both save
 weights only), so each run is bounded by Modal's 24h function timeout.
 
 Usage:
-    uv run modal run repro/trm_eval/modal_train.py::run_train --aug
-    uv run modal run repro/trm_eval/modal_train.py::run_train --no-aug
+    uv run modal run baselines/hrm_trm/trm_eval/modal_train.py::run_train --aug
+    uv run modal run baselines/hrm_trm/trm_eval/modal_train.py::run_train --no-aug
 """
 
 import os

@@ -16,7 +16,7 @@ dependencies are stubbed at runtime so nothing has to compile:
     the optimizer is only constructed by `init_train_state`).
 
 Usage:
-    uv run modal run experiments/hrm_eval/modal_eval.py
+    uv run modal run baselines/hrm_trm/hrm_eval/modal_eval.py
 """
 
 import os
@@ -258,7 +258,7 @@ def _list_ckpts(run_dir: str):
 
 @app.local_entrypoint()
 def sweep(run_dir: str = "Maze-30x30-hard-1k ACT-torch/HierarchicalReasoningModel_ACTV1 pistachio-myna",
-          out: str = "repro/results/hrm_aug_sweep.json"):
+          out: str = "baselines/hrm_trm/results/hrm_aug_sweep.json"):
     """Eval EVERY checkpoint in a run dir (exact+lenient) -> JSON for plotting."""
     import json
     ckpts = _list_ckpts.remote(run_dir)

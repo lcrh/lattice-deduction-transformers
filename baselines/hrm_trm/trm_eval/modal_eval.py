@@ -19,7 +19,7 @@ stubs are needed. We drive their own `run_eval_only.py` and verify its saved
 predictions.
 
 Usage:
-    uv run modal run experiments/trm_eval/modal_eval.py
+    uv run modal run baselines/hrm_trm/trm_eval/modal_eval.py
 """
 
 import os
@@ -204,7 +204,7 @@ def main(checkpoint: str = CKPT):
 
 @app.local_entrypoint()
 def sweep(run_dir: str = "Maze-30x30-hard-1k-ACT-torch/maze_aug_probe",
-          out: str = "repro/results/trm_aug_sweep.json"):
+          out: str = "baselines/hrm_trm/results/trm_aug_sweep.json"):
     """Eval EVERY checkpoint in a run dir (exact+lenient) and save a JSON of
     {step, exact, lenient} for plotting accuracy-over-training."""
     import json
