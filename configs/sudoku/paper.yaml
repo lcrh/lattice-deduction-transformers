@@ -13,6 +13,7 @@ model:
   cls_token: true          # conflict head; trained iff train.conflict_loss_weight > 0
   pre_norm: true
   use_rope: false
+  carry: "off"             # latent carried between solve steps: off | h | z | zero_z
 
 data:
   n_puzzles: 1000          # training puzzles, drawn with `seed` (sudoku_val excluded)
@@ -34,6 +35,7 @@ train:
   bce_neg_mult: 0.5
   softmax_loss_weight: 0.2
   conflict_loss_weight: 0.1
+  supervise: all           # deep supervision: all iterations, or final only
   max_age: 100
   step:                    # operator that advances pool states during training
     threshold: 0.10

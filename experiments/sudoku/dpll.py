@@ -237,6 +237,7 @@ def dpll_step(
     in_puzzle_mask: torch.Tensor | None = None,   # [B, S] bool, CANONICAL — cells active in this puzzle
     want_stats: bool = True,
     decide_rank: torch.Tensor | None = None,   # [B] long, for digit_policy="rank_k"
+    carry_kw: dict | None = None,              # orig_x / carry for latent-carry models
 ):
     """One unified DPLL-style step (unit propagation + branching +
     conflict detection). Returns (new_state, conflict, solved, out, info).
@@ -262,6 +263,11 @@ def dpll_step(
     `info["pass_deduce_masks"]` lists each pass's eliminations (multi-pass
     only).
 
+    `carry_kw` (latent-carry models: the original puzzle `orig_x` and the
+    previous step's `carry`) is passed to the model, and the model's
+    `carry_out` is returned as `info["carry_out"]`. A carried latent lives in
+    a fixed frame, so this needs `augment=False` and a single pass.
+
     `want_stats` (default True): when True, `info` contains the full diagnostic
     dict — `n_deduced`, `n_decided`, `n_conflict`, `n_conflict_empty`,
     `n_conflict_cls`, `n_solved`, `deduce_mask`. Each scalar count requires a
@@ -275,6 +281,10 @@ def dpll_step(
     device = state.device
     vd = cfg.vocab_dim if cfg.vocab_dim is not None else C
     model_kw = {} if cfg.n_loops is None else {"n_loops": cfg.n_loops}
+    if carry_kw:
+        if cfg.augment or cfg.max_passes != 1:
+            raise ValueError("latent carry needs augment=False and a single deduction pass")
+        model_kw.update(carry_kw)
 
     max_passes = cfg.max_passes
     cur_state = state
@@ -390,6 +400,8 @@ def dpll_step(
         deduce_mask = deduce_union if deduce_union is not None else deduce_mask_aug
 
     info = {"deduce_mask": deduce_mask, "n_passes": n_passes, "pass_deduce_masks": pass_masks}
+    if "carry_out" in out:
+        info["carry_out"] = out["carry_out"].detach()
     if want_stats:
         info.update({
             "n_deduced": int(deduce_mask.sum().item()),

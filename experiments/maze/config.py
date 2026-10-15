@@ -14,7 +14,7 @@ from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig
 from experiments.common import Experiment
 from experiments.maze.data import MazeConfig, grid_dims
 from experiments.maze.train import TrainConfig, maze_step
-from experiments.sudoku.config import check_cls_head
+from experiments.sudoku.config import check_options
 from experiments.sudoku.solve import SolveConfig
 
 
@@ -47,7 +47,7 @@ class MazeExperiment(Experiment):
             self.train.step, augment_dihedral=True, permute_digits=False))
         self.solve = dataclasses.replace(self.solve, step=dataclasses.replace(
             self.solve.step, augment_dihedral=True, permute_digits=False))
-        check_cls_head(self.model, self.train)
+        check_options(self.model, self.train, self.solve, carry_supported=False)
         if self.data.split != "train":
             raise ValueError("data.split must be train; evaluation splits live in eval")
 

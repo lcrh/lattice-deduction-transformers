@@ -61,6 +61,7 @@ class TrainConfig:
     bce_neg_mult: float = 0.5
     softmax_loss_weight: float = 0.2
     conflict_loss_weight: float = 0.1
+    supervise: str = "all"         # deep supervision: "all" iterations or the "final" one
 
     # Maze's operator: dihedral augmentation only (the 5 channels — wall /
     # free / start / goal / path — are not interchangeable, so no digit-perm).
@@ -275,7 +276,7 @@ def train(exp: MazeExperiment, ckpt_path: str | Path,
             aug_info["aug_state"], aug_info["aug_orig_y"], aug_info["aug_given_mask"],
             is_sat_pre, gt_conflict_pre,
             cfg.bce_pos_mult, cfg.bce_neg_mult,
-            cfg.softmax_loss_weight, cfg.conflict_loss_weight,
+            cfg.softmax_loss_weight, cfg.conflict_loss_weight, cfg.supervise,
         )
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)

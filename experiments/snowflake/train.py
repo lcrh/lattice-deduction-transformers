@@ -77,6 +77,7 @@ class TrainConfig:
     bce_neg_mult: float = 0.5
     softmax_loss_weight: float = 0.2
     conflict_loss_weight: float = 0.1
+    supervise: str = "all"         # deep supervision: "all" iterations or the "final" one
 
     step: StepConfig = field(default_factory=lambda: snowflake_step(augment=True))
     max_age: int = 100
@@ -164,6 +165,7 @@ def _losses(
     out, state, orig_y, given_mask, is_sat, gt_conflict_target,
     bce_pos_mult, bce_neg_mult, softmax_w, conflict_w,
     in_puzzle_mask,  # [B, S] — gates BCE/softmax to in-puzzle cells
+    supervise="all",
 ):
     """Compute losses over vocab channels only, gated by in_puzzle_mask.
 
@@ -196,9 +198,11 @@ def _losses(
     # mask is False everywhere → ce_mask covers all in-puzzle cells.
     multi_alive_target = orig_y_v.sum(dim=-1) > 1                       # [B, S]
 
+    # Normalized by the number of supervised iterations (see sudoku/train.py).
     n_loops = len(out["bce"])
+    iterations = range(n_loops) if supervise == "all" else (n_loops - 1,)
     total = torch.zeros((), device=device)
-    for i in range(n_loops):
+    for i in iterations:
         bce_logits = out["bce"][i][..., :VOCAB]                # [B, S, VOCAB]
         per_bit = weighted_bce_with_logits(
             bce_logits, bce_target, pos_w, neg_w, reduction="none",
@@ -224,7 +228,7 @@ def _losses(
             total = total + conflict_w * F.binary_cross_entropy_with_logits(
                 c_logits, gt_conflict_target.float(),
             )
-    return total / n_loops
+    return total / len(iterations)
 
 
 def _monitor_set(path: str, n: int, device):
@@ -352,7 +356,7 @@ def train(exp: SnowflakeExperiment, ckpt_path: str | Path,
             is_sat_pre, gt_conflict_pre,
             cfg.bce_pos_mult, cfg.bce_neg_mult,
             cfg.softmax_loss_weight, cfg.conflict_loss_weight,
-            aug_in_puzzle_mask,
+            aug_in_puzzle_mask, cfg.supervise,
         )
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
