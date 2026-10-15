@@ -23,6 +23,15 @@ dependencies = [
     "torch>=2.0.0",
 ]
 
+[project.optional-dependencies]
+# Fine-tuned LLM baseline (baselines/qwen_sft).
+llm = [
+    "accelerate>=1.14.0",
+    "pillow>=12.3.0",
+    "torchvision>=0.27.0",
+    "transformers>=5.0.0",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
