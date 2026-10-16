@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 uv run modal run baselines/hrm_trm/trm_eval/modal_eval.py::sweep \
-    --run-dir "maze-hard-repro/trm-maze-aug" --out baselines/hrm_trm/results/trm_aug_sweep.json
+    --run-dir "maze-hard-repro/trm-maze-aug" --out baselines/hrm_trm/results/trm_aug_sweep_lcycles4.json
 uv run modal run baselines/hrm_trm/hrm_eval/modal_eval.py::sweep \
     --run-dir "maze-hard-repro/hrm-maze-aug" --out baselines/hrm_trm/results/hrm_aug_sweep.json
 

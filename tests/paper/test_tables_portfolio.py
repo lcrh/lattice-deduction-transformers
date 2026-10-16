@@ -6,7 +6,7 @@ import random
 import pytest
 
 from paper import portfolio
-from paper.compute import ldt_forward_flops
+from paper.compute import BASELINES, ldt_forward_flops, swiglu_width
 from paper.tables import appendix
 from paper.tables.common import eval_rule, paired_vs
 
@@ -116,6 +116,14 @@ def test_random_orders_start_with_an_anchor():
               2: _attempt(2, ["correct"])}
     for order in portfolio.random_orders(firsts, 20, random.Random(0)):
         assert order[0].full and sorted(a.model for a in order) == [0, 1, 2]
+
+
+def test_baseline_flops_follow_the_upstream_layers():
+    assert swiglu_width(512, 4) == 1536 and swiglu_width(97, 4) == 512
+    mlp, att = BASELINES["trm_mlp_sudoku"], BASELINES["trm_att_sudoku"]
+    ffn = 3 * 512 * 1536 * 97
+    assert mlp.forward_flops() == 42 * 2 * (3 * 97 * 512 * 512 + ffn)
+    assert att.forward_flops() == 42 * 2 * (4 * 512 * 512 * 97 + 2 * 97 * 97 * 512 + ffn)
 
 
 def test_ldt_forward_flops():

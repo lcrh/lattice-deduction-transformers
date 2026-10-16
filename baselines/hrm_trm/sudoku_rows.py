@@ -17,11 +17,13 @@ not recorded.
 
 Evaluation is resumable: the index list is cut into chunks of CHUNK_SIZE,
 each chunk is written to `<out_dir>/chunks/` when it finishes, and a rerun
-evaluates only the missing chunks before merging.
+evaluates only the missing chunks before merging. `out_dir` is keyed by the
+checkpoint and batch size, so a different model never reuses another's chunks.
 
 Upstream token encoding: 0 = pad, 1 = blank, 2..10 = digits 1..9.
 """
 
+import hashlib
 import json
 import os
 
@@ -104,6 +106,13 @@ def build_rows(indices: list[int], label_tokens: np.ndarray,
     ]
 
 
+def out_dir(model: str, n: int, checkpoint: str, batch_size: int) -> str:
+    """Volume directory for one baseline eval, keyed by what changes its rows."""
+    key = json.dumps({"checkpoint": checkpoint, "batch_size": batch_size}, sort_keys=True)
+    digest = hashlib.sha256(key.encode()).hexdigest()[:8]
+    return f"/ldt_ckpt/eval/baselines/{model}/sudoku_test_perm_n{n}-{digest}"
+
+
 def chunks(indices: list[int]) -> list[tuple[int, int, list[int]]]:
     """(chunk id, start position, indices) for each CHUNK_SIZE slice of `indices`."""
     return [(c, start, indices[start:start + CHUNK_SIZE])
@@ -145,6 +154,9 @@ def merge_chunks(out_dir: str, n_chunks: int, **extra) -> dict:
             infos.append(json.load(fh))
     rows.sort(key=lambda r: r["pos"])
     seconds = sum(info.pop("eval_seconds") for info in infos)
+    if any(info != infos[0] for info in infos):
+        raise RuntimeError(f"chunks in {out_dir} come from different runs: "
+                           f"{[i for i in infos if i != infos[0]][0]} vs {infos[0]}")
     summary = summarize(rows, **infos[0], **extra,
                         eval_seconds=seconds, gpu_seconds=seconds, n_chunks=n_chunks)
     write_outputs(out_dir, rows, summary)

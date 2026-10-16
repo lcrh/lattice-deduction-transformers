@@ -21,9 +21,10 @@ REF = {
     "TRM": {"exact": 83.8, "lenient": 90.7},
     "HRM": {"exact": 74.4, "lenient": 81.6},
 }
-# (model, sweep-json basename) per condition
+# (model, sweep-json basename) per condition. The TRM files without the suffix
+# were evaluated with L_cycles=6 instead of the training value 4.
 PANELS = {
-    "TRM": {"aug": "trm_aug_sweep.json", "no-aug": "trm_noaug_sweep.json"},
+    "TRM": {"aug": "trm_aug_sweep_lcycles4.json", "no-aug": "trm_noaug_sweep_lcycles4.json"},
     "HRM": {"aug": "hrm_aug_sweep.json", "no-aug": "hrm_noaug_sweep.json"},
 }
 COND_COLOR = {"aug": "#c0563b", "no-aug": "#2f6f9f"}

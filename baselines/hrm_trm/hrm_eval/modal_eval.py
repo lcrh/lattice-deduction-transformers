@@ -316,7 +316,7 @@ def sudoku(n: int = 10_000, checkpoint: str = "", batch_size: int = 0,
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import sudoku_rows
 
-    out_dir = f"/ldt_ckpt/eval/baselines/hrm/sudoku_test_perm_n{n}"
+    out_dir = sudoku_rows.out_dir("hrm", n, checkpoint, batch_size)
     parts = sudoku_rows.chunks(sudoku_rows.first_n_of_test_perm(n))
     done = done_chunks.remote(out_dir)
     todo = [(c, start, idx, out_dir, checkpoint, batch_size)

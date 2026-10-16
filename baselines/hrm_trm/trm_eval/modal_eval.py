@@ -15,6 +15,7 @@ Usage:
 import json
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -90,8 +91,7 @@ def run(checkpoint: str = CKPT) -> dict:
 
     # 2) run TRM's own eval script (loads checkpoint from HF, EMA on by default,
     #    eval-only so no optimizer/adam-atan2 build). Saves preds to --outdir.
-    outdir = "/root/trm_out"
-    os.makedirs(outdir, exist_ok=True)
+    outdir = tempfile.mkdtemp(prefix="trm_out_")     # fresh per call on a reused container
     cmd = [
         sys.executable, "scripts/run_eval_only.py",
         "--config", "config/cfg_maze.yaml",
@@ -105,7 +105,7 @@ def run(checkpoint: str = CKPT) -> dict:
     proc = subprocess.run(cmd, cwd=TRM_REMOTE, capture_output=True, text=True)
     print(proc.stdout[-6000:], flush=True)
     if proc.returncode != 0:
-        print("[trm] stderr tail:\n" + proc.stderr[-4000:], flush=True)
+        raise RuntimeError("run_eval_only.py failed:\n" + proc.stderr[-4000:])
 
     # 3) score the saved predictions
     files = sorted(glob.glob(os.path.join(outdir, "*_all_preds.0")))
@@ -250,7 +250,7 @@ def sudoku(n: int = 10_000, variant: str = "mlp", checkpoint: str = "",
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import sudoku_rows
 
-    out_dir = f"/ldt_ckpt/eval/baselines/trm-{variant}/sudoku_test_perm_n{n}"
+    out_dir = sudoku_rows.out_dir(f"trm-{variant}", n, checkpoint, batch_size)
     parts = sudoku_rows.chunks(sudoku_rows.first_n_of_test_perm(n))
     done = done_chunks.remote(out_dir)
     todo = [(c, start, idx, out_dir, variant, checkpoint, batch_size)

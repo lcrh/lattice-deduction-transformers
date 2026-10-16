@@ -66,7 +66,8 @@ Each run:
   `scripts/run_eval_only.py` with EMA weights and bf16);
 - writes per-puzzle rows (`idx`, `pos`, `status`, `solution`, the
   `lattice_diffusion/eval/records.py` field names) and a summary to
-  `eval/baselines/<model>/sudoku_test_perm_n<N>/` on the
+  `eval/baselines/<model>/sudoku_test_perm_n<N>-<hash>/` (hash of the
+  checkpoint and batch size) on the
   `lattice-diffusion-checkpoints` volume;
 - writes the summary with a Clopper–Pearson interval and the eval time
   (`gpu_seconds`, single B200) to `baselines/hrm_trm/results/`.

@@ -24,13 +24,11 @@ from paper.tables.common import OUT, RESULTS, by_entry, mean, read_results, writ
 Mixer = Literal["attention", "mlp"]
 
 
-def layer_flops(tokens: int, dim: int, ffn_hidden: float, mixer: Mixer = "attention") -> float:
+def layer_flops(tokens: int, dim: int, ffn_hidden: float) -> float:
     """FLOPs of one transformer layer over `tokens` positions."""
     proj = 4 * dim * dim * tokens                           # Q, K, V, O
     scores = 2 * tokens * tokens * dim                      # QK^T and AV
     ffn = 2 * dim * ffn_hidden * tokens                     # up + down
-    if mixer == "mlp":                                      # token-mixing MLP over positions
-        return 2 * (2 * tokens * tokens * dim + ffn)
     return 2 * (proj + scores + ffn)
 
 
@@ -41,21 +39,31 @@ def ldt_forward_flops(dim: int, layers: int, loops: int, seq_len: int, ffn_mult:
     return loops * layers * layer_flops(tokens, dim, ffn_mult * dim)
 
 
+def swiglu_width(size: int, expansion: float) -> int:
+    """Intermediate width of the HRM/TRM SwiGLU: 2/3 * expansion * size, rounded up to 256."""
+    return -(round(expansion * size * 2 / 3) // -256) * 256
+
+
 @dataclass(frozen=True)
 class RecursiveArch:
     """HRM/TRM-style model: per ACT step, `applications` layer applications."""
 
     name: str
     dim: int
-    tokens: int
-    expansion: float            # SwiGLU: 3 matrices of dim x (2/3 * expansion * dim)
+    tokens: int                 # cells plus puzzle-embedding positions
+    expansion: float
     applications: int
     act_steps: int              # maximum ACT steps (halting can stop earlier)
     mixer: Mixer = "attention"
 
     def forward_flops(self) -> float:
-        ffn_hidden = 1.5 * (2 / 3) * self.expansion * self.dim     # SwiGLU's 3 matrices
-        return self.applications * layer_flops(self.tokens, self.dim, ffn_hidden, self.mixer)
+        t, d = self.tokens, self.dim
+        ffn = 3 * d * swiglu_width(d, self.expansion) * t          # SwiGLU: gate, up, down
+        if self.mixer == "mlp":                                    # SwiGLU across positions
+            mix = 3 * t * swiglu_width(t, self.expansion) * d
+        else:
+            mix = 4 * d * d * t + 2 * t * t * d
+        return self.applications * 2 * (mix + ffn)
 
     def max_inference_flops(self) -> float:
         return self.act_steps * self.forward_flops()
@@ -63,7 +71,8 @@ class RecursiveArch:
 
 # Upstream defaults (HRM arch/hrm_v1.yaml; TRM arch/trm.yaml plus the variant
 # overrides in baselines/hrm_trm/trm_eval/cfg_*.yaml): hidden 512, expansion 4,
-# 16 ACT steps, one puzzle-embedding token in front of the 81 cells.
+# 16 ACT steps. HRM puts one puzzle-embedding position in front of the cells,
+# TRM 16 (puzzle_emb_len).
 # HRM: per ACT step, H_cycles x (L_cycles x L_layers + H_layers) = 2 x (2x4 + 4).
 # TRM: per ACT step, H_cycles x (L_cycles + 1) x L_layers.
 _HRM_APPLICATIONS = 2 * (2 * 4 + 4)
@@ -74,15 +83,15 @@ def _trm_applications(l_cycles: int) -> int:
 
 
 BASELINES = {
-    "hrm_sudoku": RecursiveArch("HRM", dim=512, tokens=82, expansion=4,
+    "hrm_sudoku": RecursiveArch("HRM", dim=512, tokens=81 + 1, expansion=4,
                                 applications=_HRM_APPLICATIONS, act_steps=16),
-    "trm_mlp_sudoku": RecursiveArch("TRM-MLP", dim=512, tokens=82, expansion=4,
+    "trm_mlp_sudoku": RecursiveArch("TRM-MLP", dim=512, tokens=81 + 16, expansion=4,
                                     applications=_trm_applications(6), act_steps=16, mixer="mlp"),
-    "trm_att_sudoku": RecursiveArch("TRM-attention", dim=512, tokens=82, expansion=4,
+    "trm_att_sudoku": RecursiveArch("TRM-attention", dim=512, tokens=81 + 16, expansion=4,
                                     applications=_trm_applications(6), act_steps=16),
-    "trm_maze": RecursiveArch("TRM (maze)", dim=512, tokens=901, expansion=4,
+    "trm_maze": RecursiveArch("TRM (maze)", dim=512, tokens=900 + 16, expansion=4,
                               applications=_trm_applications(4), act_steps=16),
-    "hrm_maze": RecursiveArch("HRM (maze)", dim=512, tokens=901, expansion=4,
+    "hrm_maze": RecursiveArch("HRM (maze)", dim=512, tokens=900 + 1, expansion=4,
                               applications=_HRM_APPLICATIONS, act_steps=16),
 }
 

@@ -95,3 +95,13 @@ def test_chunks_resume_and_merge_in_order(tmp_path, monkeypatch):
     assert summary["n"] == 7 and summary["correct"] == 4 and summary["gpu_seconds"] == 4.5
     rows = [json.loads(line) for line in (tmp_path / "rows.jsonl").read_text().splitlines()]
     assert [r["idx"] for r in rows] == indices
+
+
+def test_merge_refuses_chunks_from_different_runs(tmp_path):
+    out = str(tmp_path)
+    for c, ckpt in enumerate(["a", "b"]):
+        sudoku_rows.write_chunk(out, c, [{"idx": c, "pos": c, "status": "correct"}],
+                                {"checkpoint": ckpt, "eval_seconds": 1.0})
+    with pytest.raises(RuntimeError, match="different runs"):
+        sudoku_rows.merge_chunks(out, 2)
+    assert sudoku_rows.out_dir("hrm", 10, "", 0) != sudoku_rows.out_dir("hrm", 10, "x", 0)
