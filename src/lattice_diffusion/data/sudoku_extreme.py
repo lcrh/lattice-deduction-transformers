@@ -21,6 +21,10 @@ class SudokuExtremeConfig:
     cache_dir: str = "data"  # where to cache the HF download (.pt file)
     split: str = "train"  # "train" or "test"
     n_puzzles: int | None = None  # subset size (None = all puzzles in split)
+    # Drop the held-out `sudoku_val` puzzles (lattice_diffusion.eval.indices)
+    # from the train split before subset selection, so no training pool ever
+    # contains a validation puzzle. Ignored for other splits.
+    exclude_val: bool = True
     seed: int = 42
 
     # Sample type weights (normalized internally)
@@ -207,13 +211,21 @@ class SudokuExtremeDataset:
         self.answers = data["y"].numpy()    # [N, 81, 9] uint8
         n_total = self.questions.shape[0]
 
+        # Absolute dataset indices of the pool, after holdout and subsetting.
+        pool = np.arange(n_total)
+        if cfg.split == "train" and cfg.exclude_val:
+            from lattice_diffusion.eval.indices import load as load_index_list
+            val = load_index_list("sudoku_val", split_size=n_total).indices
+            pool = np.setdiff1d(pool, val, assume_unique=True)
+
         # Select subset if requested
         self.rng = np.random.default_rng(cfg.seed)
-        if cfg.n_puzzles is not None and cfg.n_puzzles < n_total:
-            indices = self.rng.choice(n_total, size=cfg.n_puzzles, replace=False)
-            indices.sort()
-            self.questions = self.questions[indices]
-            self.answers = self.answers[indices]
+        if cfg.n_puzzles is not None and cfg.n_puzzles < len(pool):
+            pool = np.sort(self.rng.choice(pool, size=cfg.n_puzzles, replace=False))
+        if len(pool) < n_total:
+            self.questions = self.questions[pool]
+            self.answers = self.answers[pool]
+        self.pool_indices = pool
 
         self.n_puzzles = self.questions.shape[0]
 
