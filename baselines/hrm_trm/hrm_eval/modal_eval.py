@@ -82,10 +82,11 @@ def _install_stubs():
 
 
 def _load_weights(model, checkpoint: str) -> None:
-    """Load a state dict, dropping torch.compile's `_orig_mod.` prefix if present."""
+    """Load a state dict into `model`, compiled or not, whichever prefix the file has."""
     import torch
     state = torch.load(checkpoint, map_location="cuda")
-    model.load_state_dict({k.removeprefix("_orig_mod."): v for k, v in state.items()}, assign=True)
+    target = getattr(model, "_orig_mod", model)
+    target.load_state_dict({k.removeprefix("_orig_mod."): v for k, v in state.items()}, assign=True)
 
 
 @app.function(image=image, gpu="H100", timeout=3600, volumes={"/vol": ckpt_vol},
