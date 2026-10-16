@@ -1,5 +1,4 @@
-"""Model / training ablation options: latent carry, deep supervision, and
-the cross-option checks in the experiment configs."""
+"""Model and training options: latent carry, deep supervision, cross-option checks."""
 
 import tempfile
 from pathlib import Path
