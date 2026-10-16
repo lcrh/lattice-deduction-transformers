@@ -7,6 +7,7 @@ depends on how many workers ran it.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from typing import ClassVar, Literal
 
@@ -36,29 +37,38 @@ class PrefixCounts:
         setattr(self, status, getattr(self, status) + 1)
 
 
-@dataclass(frozen=True)
-class NoStop:
-    """Evaluate every index."""
+class StopRule(ABC):
+    """Decides, from prefix counts, when an eval has seen enough puzzles."""
 
-    KIND: ClassVar[str] = "none"
-    limit: ClassVar[int | None] = None
+    KIND: ClassVar[str]
+    limit: ClassVar[int | None] = None     # never needs items past this position
 
-    def should_stop(self, counts: PrefixCounts) -> StopReason | None:
-        return None
+    @abstractmethod
+    def should_stop(self, counts: PrefixCounts) -> StopReason | None: ...
 
     def to_dict(self) -> dict:
         return {"kind": self.KIND, **asdict(self)}
 
 
 @dataclass(frozen=True)
-class SequentialStop:
-    """Stop at `max_failures` failures or a CS half-width <= `half_width`, never before `n_min`.
+class NoStop(StopRule):
+    """Evaluate every index."""
 
-    The half-width is checked every `check_every` puzzles.
+    KIND: ClassVar[str] = "none"
+
+    def should_stop(self, counts: PrefixCounts) -> StopReason | None:
+        return None
+
+
+@dataclass(frozen=True)
+class SequentialStop(StopRule):
+    """Stop once failures or the accuracy interval's width cross their thresholds.
+
+    Fires at `max_failures` failures, or when the confidence-sequence half-width
+    is <= `half_width` (checked every `check_every` puzzles); never before `n_min`.
     """
 
     KIND: ClassVar[str] = "sequential"
-    limit: ClassVar[int | None] = None
 
     max_failures: int = 100
     half_width: float = 0.001
@@ -77,12 +87,9 @@ class SequentialStop:
                 return "half_width"
         return None
 
-    def to_dict(self) -> dict:
-        return {"kind": self.KIND, **asdict(self)}
-
 
 @dataclass(frozen=True)
-class FixedN:
+class FixedN(StopRule):
     """Evaluate exactly the first `n` indices, so every ablation arm sees the same puzzles."""
 
     KIND: ClassVar[str] = "fixed_n"
@@ -96,11 +103,6 @@ class FixedN:
     def should_stop(self, counts: PrefixCounts) -> StopReason | None:
         return "fixed_n" if counts.n >= self.n else None
 
-    def to_dict(self) -> dict:
-        return {"kind": self.KIND, **asdict(self)}
-
-
-StopRule = NoStop | SequentialStop | FixedN
 
 PRESETS: dict[str, StopRule] = {
     "sequential": SequentialStop(),

@@ -10,6 +10,7 @@ import torch
 from lattice_diffusion.eval import indices as index_lists
 from lattice_diffusion.eval.records import EvalSpec
 from lattice_diffusion.eval.runner import block_args, solve_block
+from lattice_diffusion.eval.scheduler import Executor
 from lattice_diffusion.eval.stop import SequentialStop
 from lattice_diffusion.eval.tasks import EvalTask
 
@@ -69,9 +70,8 @@ def block_solver(spec: EvalSpec, jitter_s: float = 0.0):
     return solve
 
 
-class ReorderExecutor:
-    """Completes submitted blocks one at a time in a random (seeded) order;
-    `slow` blocks only complete when nothing else is pending."""
+class ReorderExecutor(Executor):
+    """Completes blocks one at a time in a seeded random order; `slow` blocks finish last."""
 
     def __init__(self, solve, seed: int = 0, slow: frozenset = frozenset()):
         self.solve = solve

@@ -13,9 +13,10 @@ tests use local functions.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from typing import Callable, Protocol, TypedDict
+from typing import Callable, TypedDict
 
 from lattice_diffusion.eval.stop import PrefixCounts, Status, StopReason, StopRule
 
@@ -40,9 +41,13 @@ class Row(TypedDict, total=False):
     pass_deduced_unsound: list[list[int]]   # [deduced, unsound] per deduction pass
 
 
-class Executor(Protocol):
+class Executor(ABC):
+    """Runs blocks; the scheduler decides which and when."""
+
+    @abstractmethod
     def submit(self, block: int) -> None: ...
 
+    @abstractmethod
     def wait_any(self) -> list[tuple[int, list[Row]]]:
         """Wait for a submitted block; return every finished (block, rows) not yet returned."""
         ...
@@ -151,7 +156,7 @@ def run_blocks(
     )
 
 
-class ThreadExecutor:
+class ThreadExecutor(Executor):
     """Runs `solve_block(block) -> rows` on a local thread pool."""
 
     def __init__(self, solve_block: Callable[[int], list[Row]], n_workers: int):
