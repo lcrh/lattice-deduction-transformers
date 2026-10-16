@@ -137,9 +137,9 @@ def test_every_run_name_is_unique_within_a_manifest():
         assert len(set(named)) == len(named)
 
 
-def _ledger_record(entry, ts, call="fc-1", kind="train+eval"):
+def _ledger_record(entry, ts, call="fc-1", kind="train+eval", app="ap-1"):
     return LedgerRecord(kind=kind, exp_id=entry.split("/")[0], entry=entry, app_name="n",
-                        app_id="ap-1", app_url="u", call_id=call, code_sha="sha",
+                        app_id=app, app_url="u", call_id=call, code_sha="sha",
                         checkpoint="/checkpoints/x.pt", train_hash="h", ts=ts)
 
 
@@ -188,7 +188,7 @@ def _summary(n, correct, wrong=0, timeout=None):
 def test_status_of_each_run_state():
     runs = _by_key(_runs("appendix_d_soundness"))
     done_run, trained_run = runs["A0/default/seed0"], runs["A7/sym/seed0"]
-    running, failed = runs["A7/ratio2/seed0"], runs["A7/ratio32/seed0"]
+    running, stopped = runs["A7/ratio2/seed0"], runs["A7/ratio32/seed0"]
     partial = runs["A7/nocls/seed0"]
     files = {
         volume_path(done_run.checkpoint): b"",
@@ -197,14 +197,15 @@ def test_status_of_each_run_state():
         volume_path(partial.checkpoint): b"",
         volume_path(partial.run_dir) + "/blocks/000000.jsonl": b"{}\n",
     }
-    ledger = [_ledger_record(running.key, 1.0, call="fc-run"), _ledger_record(failed.key, 1.0, call="fc-bad")]
-    states = launch.statuses(list(runs.values()), FakeVolumeView(files), ledger,
-                        {"fc-run": "running", "fc-bad": "failed"}.get)
+    ledger = [_ledger_record(running.key, 1.0, app="ap-live"),
+              _ledger_record(stopped.key, 1.0, app="ap-gone"),
+              _ledger_record(partial.key, 1.0, app="ap-gone")]
+    states = launch.statuses(list(runs.values()), FakeVolumeView(files), ledger, {"ap-live"})
     assert states[done_run.key] == "done"
     assert states[trained_run.key] == "trained"
     assert states[running.key] == "running"
-    assert states[failed.key] == "failed"
-    assert states[partial.key] == "partial"
+    assert states[stopped.key] == "stopped"         # app ended without a result
+    assert states[partial.key] == "partial"         # app ended; finished blocks are kept
     assert states["A7/sym_matched/seed0"] == "trained"      # its checkpoint exists
     assert states["A7/ratio2_matched/seed0"] == "blocked"   # training still running
     assert states["A0/default/seed1"] == "not started"
@@ -278,14 +279,55 @@ def test_plan_waits_for_shared_targets_in_flight_under_another_key():
     record = dataclasses.replace(_ledger_record(m1.key, 1.0, call="fc-m1"),
                                  checkpoint=m1.checkpoint)
     runs = list(a0.values())
-    busy = launch.in_flight(runs, [record], {"fc-m1": "running"}.get)
+    busy = launch.in_flight(runs, [record], {"ap-1"})
     assert busy == {default.checkpoint}
     states = {r.key: "not started" for r in runs}
     plan = {p.run.key: p for p in launch.plan_launches(runs, states, busy=busy)}
     assert plan[default.key].cmd is None and "same checkpoint" in plan[default.key].reason
-    assert not launch.in_flight(runs, [record], {"fc-m1": "finished"}.get)
+    assert not launch.in_flight(runs, [record], set())
     # Two runs of one plan that share eval blocks evaluate them once.
     trained = {r.key: "trained" for r in runs}
     twice = [default, dataclasses.replace(default, key="A0/default_copy/seed0")]
     plan = launch.plan_launches(twice, {**trained, "A0/default_copy/seed0": "trained"})
     assert plan[0].cmd is not None and plan[1].cmd is None
+
+
+def test_stopped_runs_are_relaunched():
+    runs = _runs("appendix_b_supervision")
+    states = {r.key: "stopped" for r in runs}
+    plan = launch.plan_launches(runs, states)
+    assert all(p.cmd is not None for p in plan if p.run.kind != "eval")
+
+
+def _live(n_ldt, n_other=0):
+    live = {f"ap-l{i}": f"ldt-x-{i}" for i in range(n_ldt)}
+    live.update({f"ap-o{i}": f"other-{i}" for i in range(n_other)})
+    return live
+
+
+def test_launch_submits_up_to_the_running_cap(monkeypatch, capsys):
+    submitted = []
+    monkeypatch.setattr(launch, "_view", lambda offline: FakeVolumeView({}))
+    monkeypatch.setattr(launch, "live_apps", lambda: _live(5, n_other=3))
+    monkeypatch.setattr(launch, "require_clean_sha", lambda repo: "sha")
+    monkeypatch.setattr(launch.subprocess, "run",
+                        lambda cmd, cwd=None: submitted.append(cmd) or
+                        subprocess.CompletedProcess(cmd, 0))
+    launch.main(["launch", "appendix_b_supervision", "--max-running", "8"])
+    assert len(submitted) == 3                      # 8 - 5 live ldt apps; other apps ignored
+    out = capsys.readouterr().out
+    assert "submitting 3 of" in out and "deferred" in out
+    submitted.clear()
+    monkeypatch.setattr(launch, "live_apps", lambda: _live(9))
+    launch.main(["launch", "appendix_b_supervision"])
+    assert submitted == []                          # over the default cap: nothing new
+
+
+def test_live_apps_ignores_stopped(monkeypatch):
+    listing = [{"App ID": "ap-a", "Description": "ldt-a", "State": "ephemeral (detached)"},
+               {"App ID": "ap-b", "Description": "ldt-b", "State": "stopping..."},
+               {"App ID": "ap-c", "Description": "ldt-c", "State": "stopped"}]
+    monkeypatch.setattr(launch.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(listing)))
+    live = launch.live_apps()
+    assert set(live) == {"ap-a", "ap-b"} and launch.running_ldt_apps(live) == 2

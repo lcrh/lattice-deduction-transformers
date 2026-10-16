@@ -26,7 +26,7 @@ class EvalConfig:
     compile: bool = True                # torch.compile; GPU results then match only statistically
     tag: str = ""
     # Cost and wall-clock only; not part of the eval's identity.
-    workers: int = 32
+    workers: int = 1
     max_in_flight: int | None = None    # None = workers
     keep_warm_s: int = 300
 

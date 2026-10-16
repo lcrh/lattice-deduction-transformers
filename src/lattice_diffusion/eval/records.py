@@ -52,7 +52,7 @@ class EvalSpec:
     # Task-specific restriction of the list, kept in list order (EvalTask.filter_indices),
     # e.g. {"orders": [7, 8, 9, 10]} for Snowflake.
     index_filter: dict | None = None
-    n_workers: int = 32
+    n_workers: int = 1
     max_in_flight: int | None = None    # None = n_workers
     keep_warm_s: int = 300              # idle seconds before a worker scales down
     # Provenance (lattice_diffusion.provenance): recorded, never hashed.

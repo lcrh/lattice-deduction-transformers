@@ -63,4 +63,3 @@ eval:
   index_list: sudoku_test_perm
   stop: sequential
   dropout_p: 0.05
-  workers: 32

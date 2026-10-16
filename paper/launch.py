@@ -2,7 +2,7 @@
 
     uv run python -m paper.launch status  <manifest> [--offline] [--only GLOB]
     uv run python -m paper.launch launch  <manifest> [--dry-run] [--only GLOB] [--limit N]
-                                          [--retry-failed]
+                                          [--max-running N]
     uv run python -m paper.launch collect <manifest> [--rows]
     uv run python -m paper.launch ledger  [--exp A1]
     uv run python -m paper.launch list
@@ -10,12 +10,16 @@
 Every run is resolved locally (paper/manifest.py) to its checkpoint path and
 eval summary path, so status is read off the checkpoint volume: a run is done
 when its summary (or, for train-only runs, its checkpoint) exists. The launch
-ledger (`ledger/` on the volume, written by the entrypoints) adds which runs
-are in flight and their Modal app and call IDs.
+ledger (`ledger/` on the volume, written by the entrypoints) records each
+run's Modal app; a run is in flight while that app is live (one `modal app
+list` per command). A launched run whose app has stopped without a result is
+`stopped` and is relaunched like a missing one.
 
 `launch` submits only what is missing, one `modal run --detach -n <name>`
-per run, without waiting. A run whose checkpoint exists is only evaluated;
-eval-only runs wait for their training run. Launching refuses a dirty tree.
+per run, without waiting, and keeps at most `--max-running` ldt apps live in
+the environment; rerun it to submit the next batch. A run whose checkpoint
+exists is only evaluated; eval-only runs wait for their training run.
+Launching refuses a dirty tree.
 `collect` writes paper/results/<manifest>.csv (and with --rows the reported
 per-puzzle rows) for the table and figure scripts.
 """
@@ -32,7 +36,8 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal, get_args
+from collections.abc import Container
+from typing import Literal, get_args
 
 from lattice_diffusion.provenance import (
     LedgerRecord, announce, app_run_name, read_ledger, require_clean_sha, write_ledger,
@@ -44,29 +49,30 @@ from paper.manifest import (
 from paper.results import RESULTS
 from paper.volume import VOLUME_NAME, ModalVolumeView, SnapshotVolumeView, VolumeView
 
-State = Literal["done", "running", "launched", "partial", "trained", "blocked", "failed",
+State = Literal["done", "running", "launched", "partial", "trained", "blocked", "stopped",
                 "not started"]
 STATES = get_args(State)      # display order
-CallState = Literal["running", "finished", "failed"]
+MAX_RUNNING = 8               # default cap on live ldt apps per environment
 
 
 # --------------------------------------------------------------------------
 # Status
 # --------------------------------------------------------------------------
 
-def modal_call_state(call_id: str) -> CallState:
-    """State of a Modal function call; a finished training call reports its spawned eval's."""
-    import modal
+def live_apps() -> dict[str, str]:
+    """App ID -> description of every app in the Modal environment that has not stopped.
 
-    try:
-        result = modal.FunctionCall.from_id(call_id).get(timeout=0)
-    except (TimeoutError, modal.exception.TimeoutError):
-        return "running"
-    except Exception:
-        return "failed"
-    if isinstance(result, dict) and result.get("eval_call_id"):
-        return modal_call_state(result["eval_call_id"])
-    return "finished"
+    The environment comes from MODAL_ENVIRONMENT (or the profile default), as for `modal run`.
+    """
+    out = subprocess.run([sys.executable, "-m", "modal", "app", "list", "--json"],
+                         capture_output=True, text=True, check=True)
+    return {a["App ID"]: a["Description"] for a in json.loads(out.stdout)
+            if a["State"] != "stopped"}
+
+
+def running_ldt_apps(live: dict[str, str]) -> int:
+    """Live apps launched by this repo (all experiments, baselines included)."""
+    return sum(desc.startswith("ldt-") for desc in live.values())
 
 
 def latest_ledger(records: list[LedgerRecord]) -> dict[str, LedgerRecord]:
@@ -78,8 +84,8 @@ def latest_ledger(records: list[LedgerRecord]) -> dict[str, LedgerRecord]:
 
 
 def run_state(run: Run, view: VolumeView, ledger: dict[str, LedgerRecord],
-              call_state: Callable[[str], CallState] | None) -> State:
-    """A run's state; `call_state=None` means offline (no call lookups)."""
+              live: Container[str] | None) -> State:
+    """A run's state; `live` holds the live app IDs, None when offline."""
     if run.kind == "command":
         return "done" if run.result and (REPO / run.result).exists() else "not started"
     trained = view.exists(volume_path(run.checkpoint))
@@ -93,35 +99,32 @@ def run_state(run: Run, view: VolumeView, ledger: dict[str, LedgerRecord],
         return "blocked"
     record = ledger.get(run.key)
     if record is not None:
-        if call_state is None or record.call_id is None:
+        if live is None or record.app_id is None:
             return "launched"
-        state = call_state(record.call_id)
-        if state == "running":
+        if record.app_id in live:
             return "running"
-        if state == "failed":
-            return "failed"
     if run.spec is not None and view.listdir(volume_path(run.run_dir) + "/blocks"):
         return "partial"
     if run.kind == "eval" and not trained:
         return "blocked"
     if trained:
         return "trained"
-    return "not started" if record is None else "failed"
+    return "not started" if record is None else "stopped"
 
 
 def statuses(runs: list[Run], view: VolumeView, ledger: list[LedgerRecord],
-             call_state: Callable[[str], CallState] | None) -> dict[str, State]:
+             live: Container[str] | None) -> dict[str, State]:
     latest = latest_ledger(ledger)
-    return {r.key: run_state(r, view, latest, call_state) for r in runs}
+    return {r.key: run_state(r, view, latest, live) for r in runs}
 
 
 def in_flight(runs: list[Run], ledger: list[LedgerRecord],
-              call_state: Callable[[str], CallState] | None) -> set[str]:
-    """Checkpoints and eval run dirs of `runs` that a launch under any key is still writing.
+              live: Container[str] | None) -> set[str]:
+    """Checkpoints and eval run dirs of `runs` that a live launch under any key is writing.
 
     Manifests share checkpoints and eval blocks across keys, so a run's own
-    ledger entry is not enough. Offline (`call_state=None`), every launched
-    target counts as in flight.
+    ledger entry is not enough. Offline (`live=None`), every launched target
+    counts as in flight.
     """
     wanted = {r.checkpoint for r in runs if r.checkpoint} | {r.run_dir for r in runs if r.run_dir}
     busy: set[str] = set()
@@ -129,7 +132,7 @@ def in_flight(runs: list[Run], ledger: list[LedgerRecord],
         targets = {record.checkpoint, record.eval_run_dir} & wanted
         if not targets or record.kind == "command":
             continue
-        if call_state is None or record.call_id is None or call_state(record.call_id) == "running":
+        if live is None or record.app_id is None or record.app_id in live:
             busy |= targets
     return busy
 
@@ -186,7 +189,7 @@ def baseline_command(run: Run) -> list[str]:
     return ["uv", "run", "modal", "run", "-n", baseline_name(run), *run.command]
 
 
-def plan_launches(runs: list[Run], states: dict[str, State], retry_failed: bool = False,
+def plan_launches(runs: list[Run], states: dict[str, State],
                   busy: set[str] | frozenset[str] = frozenset()) -> list[Launch]:
     """One Launch per run, in manifest order.
 
@@ -200,8 +203,6 @@ def plan_launches(runs: list[Run], states: dict[str, State], retry_failed: bool 
         state = states[run.key]
         if state in ("done", "running", "launched", "blocked"):
             out.append(Launch(run, None, state))
-        elif state == "failed" and not retry_failed:
-            out.append(Launch(run, None, "failed (use --retry-failed)"))
         elif run.kind == "command":
             out.append(Launch(run, baseline_command(run), "baseline eval", baseline_name(run)))
         elif state in ("trained", "partial") and run.kind != "train":
@@ -374,11 +375,13 @@ def main(argv: list[str] | None = None) -> None:
         p.add_argument("--offline", action="store_true",
                        help="use the last saved volume listing; no network")
     sub.choices["launch"].add_argument("--dry-run", action="store_true",
-                                       help="print the plan and commands; implies --offline")
+                                       help="print the plan and commands; uses the saved "
+                                            "volume listing")
     sub.choices["launch"].add_argument("--limit", type=int, default=None,
                                        help="launch at most this many runs")
-    sub.choices["launch"].add_argument("--retry-failed", action="store_true",
-                                       help="relaunch runs whose last launch failed")
+    sub.choices["launch"].add_argument("--max-running", type=int, default=MAX_RUNNING,
+                                       help="keep at most this many ldt apps live in the "
+                                            f"environment (default {MAX_RUNNING})")
     sub.choices["collect"].add_argument("--rows", action="store_true",
                                         help="also download the reported per-puzzle rows")
     p = sub.add_parser("ledger")
@@ -390,8 +393,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.cmd == "list":
         print("\n".join(list_manifests()))
         return
-    offline = getattr(args, "offline", False) or getattr(args, "dry_run", False)
-    view = _view(offline)
+    offline = getattr(args, "offline", False)
+    view = _view(offline or getattr(args, "dry_run", False))
     ledger = load_ledger(view)
     if args.cmd == "ledger":
         for r in ledger:
@@ -402,7 +405,8 @@ def main(argv: list[str] | None = None) -> None:
 
     runs = load_manifest(args.manifest)
     runs = _filter(runs, args.only)
-    states = statuses(runs, view, ledger, None if offline else modal_call_state)
+    live = None if offline else live_apps()
+    states = statuses(runs, view, ledger, live)
     if isinstance(view, ModalVolumeView):
         view.save_snapshot()
 
@@ -411,11 +415,22 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "collect":
         print(f"wrote {collect(args.manifest, runs, view, states, with_rows=args.rows)}")
     elif args.cmd == "launch":
-        busy = in_flight(runs, ledger, None if offline else modal_call_state)
-        plan = plan_launches(runs, states, args.retry_failed, busy)
-        todo = [launch for launch in plan if launch.cmd is not None][:args.limit]
+        if live is None:
+            sys.exit("launch needs the live app list to enforce --max-running; drop --offline")
+        plan = plan_launches(runs, states, in_flight(runs, ledger, live))
+        launchable = [launch for launch in plan if launch.cmd is not None]
+        n_running = running_ldt_apps(live)
+        budget = max(0, args.max_running - n_running)
+        if args.limit is not None:
+            budget = min(budget, args.limit)
+        todo = launchable[:budget]
         for launch in plan:
             print(f"  {launch.run.key:<40} {launch.reason}")
+        print(f"{n_running} ldt apps live (cap {args.max_running}): submitting {len(todo)} "
+              f"of {len(launchable)}")
+        if len(todo) < len(launchable):
+            print(f"  {len(launchable) - len(todo)} deferred; rerun this command to submit "
+                  "the next batch once runs finish")
         if args.dry_run:
             for launch in todo:
                 print("  $ " + shlex.join(launch.cmd))

@@ -27,7 +27,6 @@ presets:
   # An explicit puzzle list (entry `indices_file`), every puzzle.
   explicit:
     eval.stop: full
-    eval.workers: 16
   # Snowflake / Maze: the config's own test list, every puzzle.
   whole:
     eval.stop: full

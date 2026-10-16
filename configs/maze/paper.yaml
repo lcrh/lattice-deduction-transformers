@@ -43,4 +43,3 @@ eval:
   stop: full
   dropout_p: 0.0
   block_size: 50
-  workers: 20
