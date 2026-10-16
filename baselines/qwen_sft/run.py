@@ -41,7 +41,7 @@ from typing import Any
 import modal
 
 from lattice_diffusion.modal.image import (
-    CHECKPOINT_MOUNT, DATA_MOUNT, checkpoint_volume, data_volume, hf_secret,
+    CHECKPOINT_MOUNT, DATA_MOUNT, HF_HOME, checkpoint_volume, data_volume, hf_secret,
 )
 
 MODEL_ID = "Qwen/Qwen3.5-0.8B"
@@ -198,6 +198,7 @@ llm_image = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install("git")
     .uv_sync(extras=["llm"])
+    .env({"HF_HOME": HF_HOME})
     .add_local_python_source("lattice_diffusion")
 )
 
@@ -226,11 +227,8 @@ def _print_summaries(summaries: list[dict], samples_per_puzzle: int) -> None:
 
 
 def _load_dataset(split: str):
-    import os
-
     from datasets import load_dataset
 
-    os.environ.setdefault("HF_HOME", f"{DATA_MOUNT}/huggingface")
     return load_dataset("sapientinc/sudoku-extreme", split=split)
 
 
