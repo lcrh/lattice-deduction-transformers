@@ -58,7 +58,7 @@ SPECS: dict[str, IndexListSpec] = {
         task="snowflake", split="canonical_val", split_size=None, seed=20261019,
         length=None, sha256=None,
     ),
-    # Varied-topology Snowflake splits (the paper's dataset).  TODO: pin once generated.
+    # Varied-topology Snowflake splits.  TODO: pin once generated.
     "snowflake_varied_test": IndexListSpec(
         task="snowflake", split="varied_test", split_size=None, seed=20261020,
         length=None, sha256=None,

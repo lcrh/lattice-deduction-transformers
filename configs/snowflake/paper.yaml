@@ -1,8 +1,6 @@
-# Snowflake Sudoku, paper recipe (Table 2): the varied-topology dataset
-# (experiments/snowflake/gen_data.py, orders 4-10), trained and evaluated on
-# orders 4-8. These are also the SnowflakeExperiment defaults. The model's
-# grid shape and the operator's vocab/augmentation settings are fixed by the
-# covering-grid encoding and set by the config class.
+# Snowflake Sudoku on the varied-topology dataset (gen_data.py, orders 4-10),
+# trained and evaluated on orders 4-8; the SnowflakeExperiment defaults.
+# Grid shape and operator vocab / augmentation are fixed by the config class.
 name: paper
 
 model:

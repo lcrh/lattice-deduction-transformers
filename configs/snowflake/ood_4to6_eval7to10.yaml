@@ -1,9 +1,6 @@
-# Snowflake order transfer (appendix): train on orders 4-6, evaluate on the
-# never-seen orders 7-10. Also the 0-puzzle row of the mix-in sweep
-# (ood_4to6_mixin*.yaml).
-# Varied-topology dataset, 500 training puzzles, 4K steps (the budget the
-# archived order-transfer runs used; Table 2 uses 1K). Everything not set
-# here is the paper recipe (paper.yaml).
+# Snowflake order transfer: train on orders 4-6, evaluate on unseen orders
+# 7-10 (also the 0-puzzle point of the ood_4to6_mixin* sweep).
+# 4K steps; everything else as paper.yaml.
 name: ood_4to6_eval7to10
 
 data:
