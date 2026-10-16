@@ -96,8 +96,7 @@ def binomial_upper(k: int, n: int, alpha: float = 0.05) -> float:
 
 
 def inverse_binomial_rate(failures: int, n: int) -> float:
-    """Unbiased failure-rate estimate (K - 1) / (n - 1) for sampling stopped at
-    the K-th failure. Falls back to failures / n when that does not apply."""
+    """(K - 1) / (n - 1), unbiased when sampling stopped at the K-th failure; else failures / n."""
     if failures >= 2 and n >= 2:
         return (failures - 1) / (n - 1)
     return failures / n if n else 0.0
@@ -117,11 +116,10 @@ class PairedDifference:
 
 def paired_difference(correct_a: list[bool], correct_b: list[bool],
                       alpha: float = 0.05) -> PairedDifference:
-    """Compare two runs on the same puzzles, given per-position correctness of
-    each run's evaluated prefix. Uses the common prefix only.
+    """Paired accuracy difference of two runs over their common prefix of puzzles.
 
-    The interval is the usual paired (McNemar-style) normal approximation; it
-    is not anytime-valid and is meant for describing ablation tables.
+    The interval is a paired (McNemar-style) normal approximation; it is not
+    anytime-valid and is meant for ablation tables.
     """
     n = min(len(correct_a), len(correct_b))
     a, b = correct_a[:n], correct_b[:n]

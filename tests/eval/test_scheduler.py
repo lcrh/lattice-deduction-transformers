@@ -51,8 +51,7 @@ def test_result_independent_of_completion_order(reference, seed):
 
 @pytest.mark.parametrize("seed", range(5))
 def test_resume_from_any_completed_subset(reference, seed):
-    """A killed run leaves an arbitrary set of finished blocks on disk;
-    resuming must give the same result and never redo those blocks."""
+    """Resuming from any set of finished blocks gives the same result and never redoes them."""
     spec, ref = reference
     solve = block_solver(spec)
     rng = random.Random(seed)
@@ -66,8 +65,7 @@ def test_resume_from_any_completed_subset(reference, seed):
 
 @pytest.mark.parametrize("window", [1, 3, 8])
 def test_slow_block_bounds_overshoot(window):
-    """A straggler holds the window: nothing is dispatched beyond
-    prefix + window, so work past the stopping point is at most `window` blocks."""
+    """A straggler holds the window, so work past the stopping point is at most `window` blocks."""
     spec = make_spec()
     executor = ReorderExecutor(block_solver(spec), seed=0, slow=frozenset({2, 5}))
     prefix = [0]
@@ -93,8 +91,7 @@ def test_no_stop_evaluates_everything():
 
 @pytest.mark.parametrize("workers,window", [(1, 1), (4, 1), (4, 4), (16, 16), (16, 64)])
 def test_fixed_n_reports_exactly_n(workers, window):
-    """n is not a multiple of the block size; dispatch stops at the block
-    holding item n, whatever the parallelism."""
+    """Dispatch stops at the block holding item n, whatever the parallelism."""
     spec = make_spec(stop=FixedN(1000))
     executor = ThreadExecutor(block_solver(spec, jitter_s=0.002), n_workers=workers)
     try:

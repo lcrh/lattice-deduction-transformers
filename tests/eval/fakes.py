@@ -57,8 +57,7 @@ def index_list():
 
 
 def block_solver(spec: EvalSpec, jitter_s: float = 0.0):
-    """block id -> rows, serialized on the global torch RNG like one process
-    per worker would be, with optional random delay to shuffle completion."""
+    """block id -> rows on the global torch RNG, with optional delay to shuffle completion."""
     task, lst = FakeTask(), index_list()
 
     def solve(block: int):
