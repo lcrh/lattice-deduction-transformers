@@ -1,5 +1,5 @@
-# Maze-Hard 30x30, paper recipe (Table 3, K=1). These are also the
-# MazeExperiment defaults. The model's grid shape comes from the dataset.
+# Maze-Hard 30x30 with one supervised path per puzzle; the MazeExperiment
+# defaults. The model's grid shape comes from the dataset.
 name: paper
 
 model:
@@ -13,7 +13,7 @@ model:
 data:
   dataset: maze_hard
   seed: 42
-  k_solutions: 1           # reference paths supervised per puzzle (Table 3: 1 and 512)
+  k_solutions: 1           # reference paths supervised per puzzle
 
 train:
   steps: 20000

@@ -19,7 +19,7 @@ from lattice_diffusion.modal.image import (
     checkpoint_volume, data_volume, hf_secret, image,
 )
 
-from experiments.common import launch, run_experiment
+from experiments.common import GPU, launch, run_experiment
 from experiments.sudoku.config import SudokuExperiment
 from experiments.sudoku.train import train
 
@@ -30,7 +30,7 @@ app.include(eval_app)
 
 @app.function(
     image=image,
-    gpu="B200",
+    gpu=GPU,
     timeout=3600 * 4,
     secrets=[hf_secret],
     volumes={DATA_MOUNT: data_volume, CHECKPOINT_MOUNT: checkpoint_volume},

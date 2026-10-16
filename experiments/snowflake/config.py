@@ -1,7 +1,8 @@
-"""Snowflake Sudoku experiment config. Defaults are the paper recipe
-(configs/snowflake/paper.yaml spells them out): the varied-topology dataset,
-trained and evaluated on orders 4-8. Order-transfer (OOD) configs are in
-configs/snowflake/ood_*.yaml."""
+"""Snowflake Sudoku experiment config.
+
+Defaults (configs/snowflake/paper.yaml): the varied-topology dataset, trained
+and evaluated on orders 4-8. Order-transfer configs are configs/snowflake/ood_*.yaml.
+"""
 
 from __future__ import annotations
 
@@ -11,10 +12,9 @@ from dataclasses import dataclass, field
 from lattice_diffusion.eval.config import EvalConfig
 from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig
 
-from experiments.common import Experiment
+from experiments.common import Experiment, check_options, with_step
 from experiments.snowflake.data import GRID_COLS, GRID_ROWS, SEQ_LEN, VOCAB, SnowflakeConfig
 from experiments.snowflake.train import TrainConfig, n_channels, snowflake_step
-from experiments.sudoku.config import check_options
 from experiments.sudoku.solve import SolveConfig
 
 
@@ -45,11 +45,6 @@ class SnowflakeExperiment(Experiment):
                                          n_channels=n_channels(self.data.constraint_group_embed),
                                          seq_len=SEQ_LEN,
                                          grid_rows=GRID_ROWS, grid_cols=GRID_COLS)
-        self.train = dataclasses.replace(self.train, step=dataclasses.replace(
-            self.train.step, vocab_dim=VOCAB, augment_dihedral=False))
-        self.solve = dataclasses.replace(self.solve, step=dataclasses.replace(
-            self.solve.step, vocab_dim=VOCAB, augment_dihedral=False))
+        self.train = with_step(self.train, vocab_dim=VOCAB, augment_dihedral=False)
+        self.solve = with_step(self.solve, vocab_dim=VOCAB, augment_dihedral=False)
         check_options(self.model, self.train, self.solve, carry_supported=False)
-
-    def localized(self, data_dir: str) -> "SnowflakeExperiment":
-        return dataclasses.replace(self, data=dataclasses.replace(self.data, data_dir=data_dir))

@@ -1,5 +1,5 @@
-# Sudoku-Extreme, paper recipe (Table 1, 4K-step row). These are also the
-# SudokuExperiment defaults; tests/test_configs.py checks that they agree.
+# Sudoku-Extreme at 4K steps; the SudokuExperiment defaults
+# (tests/test_configs.py checks that they agree).
 name: paper
 
 model:

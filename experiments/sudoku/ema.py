@@ -1,9 +1,6 @@
-"""Exponential moving average of model parameters.
+"""Exponential moving average of the trainable parameters.
 
-TRM paper recommends decay=0.999. The shadow tracks the live model's
-`requires_grad` parameters; at eval time the caller `swap_in` the shadow
-weights into the live model, runs eval, then `swap_out` to restore.
-State serializes as a flat dict for checkpointing.
+`swap_in` puts the shadow weights into the live model and `swap_out` restores them.
 """
 
 from __future__ import annotations

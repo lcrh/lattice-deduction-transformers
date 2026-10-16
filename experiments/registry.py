@@ -2,6 +2,8 @@
 
 import importlib
 
+from experiments.common import Experiment
+
 EXPERIMENTS = {
     "sudoku": "experiments.sudoku.config:SudokuExperiment",
     "snowflake": "experiments.snowflake.config:SnowflakeExperiment",
@@ -9,6 +11,6 @@ EXPERIMENTS = {
 }
 
 
-def experiment_class(benchmark: str):
+def experiment_class(benchmark: str) -> type[Experiment]:
     module, _, attr = EXPERIMENTS[benchmark].partition(":")
     return getattr(importlib.import_module(module), attr)
