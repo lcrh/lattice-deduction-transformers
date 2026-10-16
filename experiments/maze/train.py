@@ -39,8 +39,8 @@ class TrainConfig(PoolTrainConfig):
     step: StepConfig = field(default_factory=lambda: maze_step(threshold=0.5, augment=True))
     # Pool size over batch_size; a larger pool keeps older, harder entries around longer.
     pool_size_mult: float = 2.0
-    # Steps between resume snapshots (`<ckpt>.resume.pt` plus a `.step<N>.pt` copy); 0 = none.
-    checkpoint_every: int = 1000
+    checkpoint_every: int = 1000        # steps between `<ckpt>.resume.pt` snapshots; 0 = none
+    keep_step_snapshots: bool = False   # also keep a `.step<N>.pt` copy of each snapshot
 
 
 def train(exp: MazeExperiment, ckpt_path: str | Path,
@@ -227,11 +227,10 @@ def train(exp: MazeExperiment, ckpt_path: str | Path,
                               if torch.cuda.is_available() else None),
             }
             torch.save(ckpt_payload, resume_path)
-            unique_path = ckpt_path.with_suffix(f".step{step:07d}.pt")
-            torch.save(ckpt_payload, unique_path)
+            if cfg.keep_step_snapshots:
+                torch.save(ckpt_payload, ckpt_path.with_suffix(f".step{step:07d}.pt"))
             commit()
-            print(f"  [resume ckpt] saved at step {step} → {resume_path}  "
-                  f"(also: {unique_path})", flush=True)
+            print(f"  [resume ckpt] saved at step {step} -> {resume_path}", flush=True)
 
         if cfg.monitor_every > 0 and step % cfg.monitor_every == 0:
             with clock.monitoring():

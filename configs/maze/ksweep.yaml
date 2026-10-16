@@ -12,6 +12,7 @@ data:
   n_puzzles: 10000
   hard: true
   k_solutions: 1
+  prefetch_batches: 8      # the K-path sampler is slow for K > 1
 
 train:
   steps: 4000
@@ -35,3 +36,4 @@ eval:
   dropout_p: 0.05
   block_size: 50
   workers: 20
+  compile: true
