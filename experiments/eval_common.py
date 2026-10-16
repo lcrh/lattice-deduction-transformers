@@ -1,25 +1,31 @@
-"""Helpers shared by the benchmark adapters for lattice_diffusion.eval
-(experiments/<b>/eval_task.py)."""
+"""Helpers shared by the benchmark adapters (experiments/<benchmark>/eval_task.py)."""
 
 from __future__ import annotations
 
+import numpy as np
 import torch
 from torch import nn
 
+from lattice_diffusion import config as cfglib
 from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig, PowersetModel
 from lattice_diffusion.training.utils.checkpoint import load_checkpoint
 
-from experiments.sudoku.dpll import StepConfig
 from experiments.sudoku.ema import swap_in_ema_if_present
-from experiments.sudoku.solve import SolveConfig
+from experiments.sudoku.solve import SolveConfig, SolveResult
+
+
+def eval_device() -> torch.device:
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def unwrap(model: nn.Module) -> nn.Module:
+    """The module inside a torch.compile wrapper."""
+    return getattr(model, "_orig_mod", model)
 
 
 def build_solve_config(solve_dict: dict) -> SolveConfig:
-    """SolveConfig from an EvalSpec's solve dict (task-specific keys removed
-    by the caller; `dropout_p` belongs to model loading)."""
-    d = dict(solve_dict)
-    d.pop("dropout_p", None)
-    return SolveConfig(step=StepConfig(**d.pop("step")), **d)
+    """SolveConfig from an EvalSpec's solve dict; `dropout_p` belongs to model loading."""
+    return cfglib.from_dict(SolveConfig, {k: v for k, v in solve_dict.items() if k != "dropout_p"})
 
 
 def load_eval_model(checkpoint: str, dropout_p: float, device: torch.device,
@@ -47,9 +53,9 @@ def load_eval_model(checkpoint: str, dropout_p: float, device: torch.device,
     return model
 
 
-def result_rows(res, indices, cfg: SolveConfig, solutions: list[str],
-                verified: list[bool | None], extra: list[dict] | None = None) -> list[dict]:
-    """One eval row per puzzle (schema in lattice_diffusion/eval/records.py)."""
+def result_rows(res: SolveResult, indices: np.ndarray, cfg: SolveConfig, solutions: list[str],
+                verified: list[bool], extra: list[dict] | None = None) -> list[dict]:
+    """One eval row per puzzle (see lattice_diffusion.eval.scheduler.Row)."""
     correct, wrong = res.correct.tolist(), res.wrong.tolist()
     rounds, calls = res.round_solved.tolist(), res.puzzle_calls.tolist()
     resets = res.n_resets.tolist()
@@ -69,9 +75,6 @@ def result_rows(res, indices, cfg: SolveConfig, solutions: list[str],
             **({"forwards_seq": forwards_seq[j]} if forwards_seq is not None else {}),
             "solution": solutions[j] if status != "timeout" else "",
             "verified": verified[j] if status != "timeout" else False,
-            # Soundness diagnostics over the puzzle's chain-rounds: candidates
-            # eliminated, of those the solution's own (unsound), and the
-            # conflict head's [tp, fp, fn, tn] against true conflicts.
             "deduced": diag[j][0],
             "unsound": diag[j][1],
             "cls": diag[j][2:],

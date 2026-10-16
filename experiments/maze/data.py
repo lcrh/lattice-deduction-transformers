@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from queue import Queue
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import torch
 
@@ -797,55 +797,23 @@ def maze_classify(
     return valid_t, minimal_t, gt_exact_t
 
 
-def rescore(
-    res,                       # SolveResult from experiments.sudoku.solve.solve
-    targets: torch.Tensor,     # [P, S, C] GT one-hot
-    H: int,
-    W: int,
-):
-    """Relax `res.correct` / `res.wrong` to maze-aware semantics in-place
-    on the provided SolveResult. Returns
-    `(n_correct, n_correct_gt, n_correct_alt, n_wrong, n_wrong_valid, n_wrong_invalid, n_timeout)`:
-      - `n_correct = n_correct_gt + n_correct_alt` — umbrella "any correct"
-      - `n_correct_gt`     = solved & valid & minimal & gt_exact_match
-      - `n_correct_alt`    = solved & valid & minimal & ~gt_exact_match
-        (alternate optimal-length path with different cells than GT)
-      - `n_wrong = n_wrong_valid + n_wrong_invalid` — umbrella "solved but not correct"
-      - `n_wrong_valid`    = solved & valid & ~minimal (legal route but longer than
-        optimal — not counted as correct)
-      - `n_wrong_invalid`  = solved & ~valid (broken / disconnected / multi-S/G)
-      - `n_timeout`        = ~solved (model never self-accepted)
+class MazeOutcome(NamedTuple):
+    """Per-puzzle path checks of a maze solve, each [P] bool."""
 
-    The 5-way partition CORRECT_GT / CORRECT_ALT / WRONG_VALID / WRONG_INVALID /
-    TIMEOUT covers every puzzle exactly once.
+    valid: torch.Tensor         # a connected start-to-goal path
+    minimal: torch.Tensor       # ... of shortest length
+    gt_exact: torch.Tensor      # ... equal to the reference path
 
-    On the SolveResult: `res.correct` is set to umbrella correctness
-    (`solved & valid & minimal`), `res.wrong` is set to umbrella wrong
-    (`solved & ~correct`).
+
+def rescore(res, targets: torch.Tensor, H: int, W: int) -> MazeOutcome:
+    """Re-score a maze SolveResult in place: any shortest path counts as correct.
+
+    Sets `res.correct = solved & valid & minimal` and `res.wrong = solved & ~correct`.
     """
-    valid, minimal, gt_exact = maze_classify(res.solution, targets, H, W)
-    solved = res.solved
-    correct = solved & valid & minimal
-    correct_gt = correct & gt_exact
-    correct_alt = correct & ~gt_exact
-    wrong_valid = solved & valid & ~minimal
-    wrong_invalid = solved & ~valid
-    new_wrong = solved & ~correct  # = wrong_valid | wrong_invalid
-    res.correct = correct
-    res.wrong = new_wrong
-    n_correct = int(correct.sum().item())
-    n_correct_gt = int(correct_gt.sum().item())
-    n_correct_alt = int(correct_alt.sum().item())
-    n_wrong_valid = int(wrong_valid.sum().item())
-    n_wrong_invalid = int(wrong_invalid.sum().item())
-    n_wrong = int(new_wrong.sum().item())
-    n_timeout = int(res.timeouts.sum().item())
-    # Stash classify results so callers can format per-puzzle labels.
-    res._maze_valid = valid
-    res._maze_minimal = minimal
-    res._maze_gt_exact = gt_exact
-    return (n_correct, n_correct_gt, n_correct_alt,
-            n_wrong, n_wrong_valid, n_wrong_invalid, n_timeout)
+    outcome = MazeOutcome(*maze_classify(res.solution, targets, H, W))
+    res.correct = res.solved & outcome.valid & outcome.minimal
+    res.wrong = res.solved & ~res.correct
+    return outcome
 
 
 # -----------------------------------------------------------------------------

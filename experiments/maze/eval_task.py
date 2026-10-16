@@ -1,15 +1,12 @@
-"""Maze adapter for the shared evaluator (lattice_diffusion.eval).
+"""Maze adapter for the shared evaluator.
 
-Split "test" is the Maze-Hard test split (index = row in the HF cache).
-Split "synthetic" is a seed-200 pool of generated mazes described by the
-solve dict's `maze_data` (grid size, wall density, hardness, pool size);
-index = position in that pool.
+Split "test" is the Maze-Hard test split; split "synthetic" is a seed-200
+pool of generated mazes described by the solve dict's `maze_data`.
 
-A puzzle counts as correct when the predicted path is a valid optimal
-S-to-G path (any of the shortest paths, not only the reference one). Each
-row's `label` records the finer outcome (CORRECT_GT / CORRECT_ALT /
-WRONG_VALID / WRONG_INVALID / TIMEOUT), so exact-match accuracy against the
-reference path can be recovered from the rows.
+A puzzle is correct when the predicted path is any shortest start-to-goal
+path. Each row's `label` (CORRECT_GT / CORRECT_ALT / WRONG_VALID /
+WRONG_INVALID / TIMEOUT) also allows exact-match scoring against the
+reference path.
 """
 
 from __future__ import annotations
@@ -22,7 +19,7 @@ import torch
 from lattice_diffusion.data.maze_hard import _download_and_cache
 from lattice_diffusion.eval.tasks import EvalTask
 
-from experiments.eval_common import build_solve_config, load_eval_model, result_rows
+from experiments.eval_common import build_solve_config, eval_device, load_eval_model, result_rows
 from experiments.maze.data import MazeConfig, _build_or_load_pregen, grid_dims, rescore
 from experiments.sudoku.solve import solve
 
@@ -33,7 +30,7 @@ class MazeTask(EvalTask):
     def __init__(self, data_dir: str) -> None:
         super().__init__(data_dir)
         self._pools: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = eval_device()
 
     def _data_cfg(self, split: str, maze_data: dict | None) -> MazeConfig:
         if split == "test":
@@ -66,9 +63,12 @@ class MazeTask(EvalTask):
     def load_model(self, checkpoint: str, dropout_p: float, compile: bool):
         return load_eval_model(checkpoint, dropout_p, self.device, compile)
 
-    def warmup(self, model) -> None:
+    def default_solve(self) -> dict:
         from experiments.maze.config import MazeExperiment
-        self.solve_block(model, "test", np.arange(4), MazeExperiment().solve_dict())
+        return MazeExperiment().solve_dict()
+
+    def warmup(self, model) -> None:
+        self.solve_block(model, "test", np.arange(4), self.default_solve())
 
     def solve_block(self, model, split: str, indices: np.ndarray, solve_dict: dict) -> list[dict]:
         solve_dict = dict(solve_dict)
@@ -81,10 +81,10 @@ class MazeTask(EvalTask):
         cfg = build_solve_config(solve_dict)
         with torch.no_grad():
             res = solve(model, x, y, x.sum(dim=-1) == 1, cfg)
-        rescore(res, y, h, w)
+        outcome = rescore(res, y, h, w)
 
-        valid, minimal, exact = (res._maze_valid.tolist(), res._maze_minimal.tolist(),
-                                 res._maze_gt_exact.tolist())
+        valid, minimal, exact = (outcome.valid.tolist(), outcome.minimal.tolist(),
+                                 outcome.gt_exact.tolist())
         cells = res.solution.argmax(dim=-1).cpu()
         solutions = ["".join(str(c) for c in cells[j].tolist()) for j in range(len(indices))]
         labels = []
