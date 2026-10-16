@@ -1,5 +1,4 @@
-"""Compute accounting (appendix J): analytic FLOPs per forward pass, and
-measured B200 hours from the collected results.
+"""Compute accounting: analytic FLOPs per forward pass and measured B200 hours from results.
 
 FLOPs count multiply-adds as 2 FLOPs and include the attention projections,
 attention scores/values and the feed-forward block of every layer
@@ -16,11 +15,15 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
 
-from paper.tables.common import OUT, RESULTS, by_entry, mean_std, read_results, write_output
+from paper.tables.common import OUT, RESULTS, by_entry, mean, read_results, write_output
+
+Mixer = Literal["attention", "mlp"]
 
 
-def layer_flops(tokens: int, dim: int, ffn_hidden: float, mixer: str = "attention") -> float:
+def layer_flops(tokens: int, dim: int, ffn_hidden: float, mixer: Mixer = "attention") -> float:
     """FLOPs of one transformer layer over `tokens` positions."""
     proj = 4 * dim * dim * tokens                           # Q, K, V, O
     scores = 2 * tokens * tokens * dim                      # QK^T and AV
@@ -40,13 +43,14 @@ def ldt_forward_flops(dim: int, layers: int, loops: int, seq_len: int, ffn_mult:
 @dataclass(frozen=True)
 class RecursiveArch:
     """HRM/TRM-style model: per ACT step, `applications` layer applications."""
+
     name: str
     dim: int
     tokens: int
     expansion: float            # SwiGLU: 3 matrices of dim x (2/3 * expansion * dim)
     applications: int
     act_steps: int              # maximum ACT steps (halting can stop earlier)
-    mixer: str = "attention"
+    mixer: Mixer = "attention"
 
     def forward_flops(self) -> float:
         ffn_hidden = 1.5 * (2 / 3) * self.expansion * self.dim     # SwiGLU's 3 matrices
@@ -61,12 +65,24 @@ class RecursiveArch:
 # 16 ACT steps, one puzzle-embedding token in front of the 81 cells.
 # HRM: per ACT step, H_cycles x (L_cycles x L_layers + H_layers) = 2 x (2x4 + 4).
 # TRM: per ACT step, H_cycles x (L_cycles + 1) x L_layers.
+_HRM_APPLICATIONS = 2 * (2 * 4 + 4)
+
+
+def _trm_applications(l_cycles: int) -> int:
+    return 3 * (l_cycles + 1) * 2
+
+
 BASELINES = {
-    "hrm_sudoku": RecursiveArch("HRM", 512, 82, 4, 2 * (2 * 4 + 4), 16),
-    "trm_mlp_sudoku": RecursiveArch("TRM-MLP", 512, 82, 4, 3 * (6 + 1) * 2, 16, mixer="mlp"),
-    "trm_att_sudoku": RecursiveArch("TRM-attention", 512, 82, 4, 3 * (6 + 1) * 2, 16),
-    "trm_maze": RecursiveArch("TRM (maze)", 512, 901, 4, 3 * (4 + 1) * 2, 16),
-    "hrm_maze": RecursiveArch("HRM (maze)", 512, 901, 4, 2 * (2 * 4 + 4), 16),
+    "hrm_sudoku": RecursiveArch("HRM", dim=512, tokens=82, expansion=4,
+                                applications=_HRM_APPLICATIONS, act_steps=16),
+    "trm_mlp_sudoku": RecursiveArch("TRM-MLP", dim=512, tokens=82, expansion=4,
+                                    applications=_trm_applications(6), act_steps=16, mixer="mlp"),
+    "trm_att_sudoku": RecursiveArch("TRM-attention", dim=512, tokens=82, expansion=4,
+                                    applications=_trm_applications(6), act_steps=16),
+    "trm_maze": RecursiveArch("TRM (maze)", dim=512, tokens=901, expansion=4,
+                              applications=_trm_applications(4), act_steps=16),
+    "hrm_maze": RecursiveArch("HRM (maze)", dim=512, tokens=901, expansion=4,
+                              applications=_HRM_APPLICATIONS, act_steps=16),
 }
 
 
@@ -87,16 +103,17 @@ def run_compute(rec: dict) -> dict:
     return out
 
 
-def table(manifests: list[str]) -> str:
+def compute_table(manifests: list[str], results_dir: Path = RESULTS) -> str:
+    """Markdown table of per-entry LDT compute plus the baseline architectures."""
     lines = ["| Manifest | Entry | Fwd GFLOPs | Train PFLOPs | Train B200 h | Eval B200 h | "
              "Inference GFLOPs / puzzle |", "|---|---|---:|---:|---:|---:|---:|"]
     for manifest in manifests:
-        for entry, recs in by_entry(read_results(manifest, RESULTS)).items():
+        for entry, recs in by_entry(read_results(manifest, results_dir)).items():
             recs = [r for r in recs if r.get("model_dim") is not None]
             if not recs:
                 continue
             per = [run_compute(r) for r in recs]
-            avg = {k: mean_std([p.get(k) for p in per])[0] for k in per[0]}
+            avg = {k: mean([p.get(k) for p in per]) for k in per[0]}
             lines.append(
                 f"| {manifest} | {entry} | {avg['forward_gflops']:.3f} | "
                 f"{avg['train_pflops']:.2f} | {avg['train_b200_h']:.2f} | "
@@ -112,12 +129,14 @@ def table(manifests: list[str]) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(prog="paper.compute")
     ap.add_argument("manifests", nargs="+")
+    ap.add_argument("--results", type=Path, default=RESULTS)
+    ap.add_argument("--out", type=Path, default=OUT)
     args = ap.parse_args()
-    text = table(args.manifests)
+    text = compute_table(args.manifests, args.results)
     print(text)
-    write_output("compute.md", text, OUT)
-    write_output("compute.json", json.dumps({k: vars(v) for k, v in BASELINES.items()}, indent=2),
-                 OUT)
+    write_output("compute.md", text, args.out)
+    write_output("baseline_archs.json",
+                 json.dumps({k: vars(v) for k, v in BASELINES.items()}, indent=2), args.out)
 
 
 if __name__ == "__main__":

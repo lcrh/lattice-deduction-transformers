@@ -1,4 +1,4 @@
-# Eval presets (plan §3.0). A manifest entry names one with `eval:`; its keys
+# Eval presets. A manifest entry names one with `eval:`; its keys
 # are config overrides applied after the entry's own `set`. Workers and the
 # in-flight window only change cost and wall-clock time, never results.
 presets:

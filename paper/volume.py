@@ -1,50 +1,34 @@
 """Read-only views of the checkpoint volume for the launcher.
 
-`ModalVolumeView` lists and reads files with the Modal SDK. Every directory
-listing it fetches is also written to a local snapshot, which
-`SnapshotVolumeView` replays for `status --offline` and `launch --dry-run`
-without network access. `FakeVolumeView` backs the tests.
+`ModalVolumeView` lists and reads files with the Modal SDK and saves every
+listing to a local snapshot, which `SnapshotVolumeView` replays offline
+(`status --offline`, `launch --dry-run`).
 """
 
 from __future__ import annotations
 
 import json
 import posixpath
+from abc import ABC, abstractmethod
 from pathlib import Path
 
 VOLUME_NAME = "lattice-diffusion-checkpoints"   # lattice_diffusion.modal.image
 SNAPSHOT = Path(__file__).resolve().parent / ".cache" / "volume_listing.json"
 
 
-class VolumeView:
-    """Base: `listdir` returns entry names under a volume-relative directory
-    ([] if missing); `read` returns a file's bytes."""
+class VolumeView(ABC):
+    """Read-only access to volume-relative paths."""
 
+    @abstractmethod
     def listdir(self, path: str) -> list[str]:
-        raise NotImplementedError
+        """Entry names under a directory ([] if it is missing)."""
 
-    def read(self, path: str) -> bytes:
-        raise NotImplementedError
+    @abstractmethod
+    def read(self, path: str) -> bytes: ...
 
     def exists(self, path: str) -> bool:
         parent, name = posixpath.split(path.rstrip("/"))
         return name in self.listdir(parent)
-
-
-class FakeVolumeView(VolumeView):
-    def __init__(self, files: dict[str, bytes | str] | None = None):
-        self.files = {k: v.encode() if isinstance(v, str) else v for k, v in (files or {}).items()}
-
-    def listdir(self, path: str) -> list[str]:
-        prefix = path.rstrip("/") + "/" if path else ""
-        names = set()
-        for f in self.files:
-            if f.startswith(prefix):
-                names.add(f[len(prefix):].split("/", 1)[0])
-        return sorted(names)
-
-    def read(self, path: str) -> bytes:
-        return self.files[path]
 
 
 class ModalVolumeView(VolumeView):
@@ -56,12 +40,12 @@ class ModalVolumeView(VolumeView):
         self._snapshot = snapshot
 
     def listdir(self, path: str) -> list[str]:
+        import modal
+
         if path not in self._cache:
             try:
                 entries = self._volume.listdir(path or "/")
-            except Exception as exc:     # missing directories raise NotFoundError
-                if "not found" not in str(exc).lower() and "NotFound" not in type(exc).__name__:
-                    raise
+            except modal.exception.NotFoundError:
                 entries = []
             self._cache[path] = sorted(posixpath.basename(e.path.rstrip("/")) for e in entries)
         return self._cache[path]
@@ -78,8 +62,7 @@ class ModalVolumeView(VolumeView):
 
 
 class SnapshotVolumeView(VolumeView):
-    """The last listings `ModalVolumeView` saw; unknown directories read as
-    empty. File contents are not available offline."""
+    """The last listings `ModalVolumeView` saw; file contents are not available offline."""
 
     def __init__(self, snapshot: Path = SNAPSHOT):
         self._listing = json.loads(snapshot.read_text()) if snapshot.exists() else {}

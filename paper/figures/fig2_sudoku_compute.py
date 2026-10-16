@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import io
 from pathlib import Path
 
 import matplotlib
@@ -19,9 +18,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt     # noqa: E402
 import numpy as np                  # noqa: E402
 
-from paper.manifest import REPO, load_manifest  # noqa: E402
+from paper.manifest import REPO, table_hints  # noqa: E402
 from paper.tables.common import (  # noqa: E402
-    by_entry, cli, done, load_rows, read_results, write_output,
+    by_entry, cli, done, load_rows, pdf_bytes, read_results, write_output,
 )
 
 PERCENTILES = (50, 75, 90, 95)
@@ -36,7 +35,7 @@ def solved_forwards(record: dict, root: Path = REPO) -> np.ndarray:
 def percentile_curves(records: list[dict], root: Path = REPO) -> dict:
     """{steps: {p: (mean, lo, hi)}} over seeds."""
     out = {}
-    for _, recs in by_entry(done(records)).items():
+    for recs in by_entry(done(records)).values():
         steps = recs[0]["x"] if recs[0].get("x") is not None else recs[0]["train_steps"]
         per_seed = [np.percentile(solved_forwards(r, root), PERCENTILES) for r in recs]
         arr = np.array(per_seed)
@@ -69,18 +68,14 @@ def plot(curves: dict, hist_forwards: np.ndarray) -> bytes:
     ax_b.set_ylabel("Puzzles")
     ax_b.set_title("(b)", loc="left", fontsize=9)
     fig.tight_layout()
-    buf = io.BytesIO()
-    fig.savefig(buf, format="pdf")
-    plt.close(fig)
-    return buf.getvalue()
+    return pdf_bytes(fig)
 
 
 def main() -> None:
     args = cli("Figure 2 (Sudoku compute).", default_manifest="fig2_sudoku_compute")
-    m, _ = load_manifest(args.manifest)
     records = read_results(args.manifest, args.results)
     curves = percentile_curves(records)
-    hist_x = (m.get("table") or {}).get("histogram_x", max(curves))
+    hist_x = table_hints(args.manifest).get("histogram_x", max(curves))
     hist = [r for r in done(records) if r.get("x") == hist_x]
     forwards = np.concatenate([solved_forwards(r) for r in hist]) if hist else np.array([])
     path = write_output("sudoku_train_test_compute.pdf", plot(curves, forwards), args.out,

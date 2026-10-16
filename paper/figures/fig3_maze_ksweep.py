@@ -6,7 +6,6 @@ paths (15x15 synthetic mazes), mean over seeds with the seed range.
 
 from __future__ import annotations
 
-import io
 
 import matplotlib
 
@@ -14,13 +13,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt     # noqa: E402
 import numpy as np                  # noqa: E402
 
-from paper.tables.common import by_entry, cli, done, read_results, write_output  # noqa: E402
+from paper.tables.common import by_entry, cli, done, pdf_bytes, read_results, write_output  # noqa: E402
 
 
 def k_curve(records: list[dict]) -> dict:
     """{K: (mean, min, max)} of accuracy over seeds."""
     out = {}
-    for _, recs in by_entry(done(records)).items():
+    for recs in by_entry(done(records)).values():
         acc = np.array([r["accuracy"] for r in recs])
         out[int(recs[0]["x"])] = (acc.mean(), acc.min(), acc.max())
     return dict(sorted(out.items()))
@@ -37,10 +36,7 @@ def plot(curve: dict) -> bytes:
     ax.set_xlabel("Supervised shortest paths K")
     ax.set_ylabel("Test accuracy (%)")
     fig.tight_layout()
-    buf = io.BytesIO()
-    fig.savefig(buf, format="pdf")
-    plt.close(fig)
-    return buf.getvalue()
+    return pdf_bytes(fig)
 
 
 def main() -> None:

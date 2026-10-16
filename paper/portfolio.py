@@ -1,5 +1,4 @@
-"""Portfolio analysis: how many independently trained models it takes to
-solve every Sudoku-Extreme test puzzle (plan §4, R = 1000 rounds).
+"""Portfolio analysis: how many independently trained models it takes to solve every test puzzle.
 
 Inputs (paper/results/portfolio.csv with --rows, from `paper.launch collect`):
 anchor models evaluated on the whole test split, and reruns of every model
@@ -11,27 +10,29 @@ its members' failure sets, all of which lie inside the first anchor's
 failure set (a subset of H). Everything below is exact under that rule.
 
     uv run python -m paper.portfolio extract-failures   # writes H for the rerun entries
-    uv run python -m paper.portfolio analyze            # paper/out/portfolio.{json,pdf}
+    uv run python -m paper.portfolio analyze   # paper/out/portfolio.json, portfolio_residue.pdf
 """
 
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import random
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
-from paper.manifest import REPO, load_manifest
-from paper.tables.common import OUT, RESULTS, done, load_rows, read_results, write_output
+from paper.manifest import REPO, table_hints
+from paper.tables.common import OUT, RESULTS, done, load_rows, pdf_bytes, read_results, write_output
 
 FAILURES_FILE = RESULTS / "portfolio_failures.txt"
 
 
 @dataclass
 class Attempt:
+    """One eval of one model: its rows by dataset index."""
+
     model: int                  # training seed
     eval_seed: int
     full: bool                  # covers the whole split (anchor eval)
@@ -52,10 +53,15 @@ def failure_set(anchors: list[Attempt]) -> list[int]:
     return sorted(set().union(*(a.failures() for a in anchors)))
 
 
+def _attempt_order(a: Attempt) -> tuple[bool, int]:
+    """Full (anchor) evals first, then by eval seed."""
+    return not a.full, a.eval_seed
+
+
 def first_attempts(attempts: list[Attempt]) -> dict[int, Attempt]:
     """Each model's first attempt: the full eval for anchors, else eval seed 0."""
     out: dict[int, Attempt] = {}
-    for a in sorted(attempts, key=lambda a: (not a.full, a.eval_seed)):
+    for a in sorted(attempts, key=_attempt_order):
         out.setdefault(a.model, a)
     return out
 
@@ -115,20 +121,19 @@ def attempts_curve(attempts: list[Attempt]) -> list[float]:
     anchor model, averaged over anchors (compute-matched to k models x 1)."""
     curves = []
     for model in sorted({a.model for a in attempts if a.full}):
-        own = sorted((a for a in attempts if a.model == model),
-                     key=lambda a: (not a.full, a.eval_seed))
+        own = sorted((a for a in attempts if a.model == model), key=_attempt_order)
         curves.append(residue_curve(own))
     k = min(len(c) for c in curves)
     return mean_curve([c[:k] for c in curves])
 
 
-def select(order: list[Attempt], h: list[int], rule: str) -> Counter:
-    """Outcome of a deployable selection rule (no ground truth) over H:
+def select(order: list[Attempt], h: list[int], rule: Literal["first", "majority"]) -> Counter:
+    """Outcomes over H of a selection rule that needs no ground truth.
+
     `first` takes the first non-timeout answer in portfolio order; `majority`
-    the most frequent non-timeout answer, abstaining on ties. Puzzles outside
-    H were solved by the first (anchor) member; under `first` that answer is
-    taken, and under `majority` we count them as correct, since the other
-    members were not run there."""
+    the most frequent one, abstaining on ties. Puzzles outside H count as
+    correct (the anchor solved them; other members were not run there).
+    """
     counts: Counter = Counter()
     for i in h:
         answers = [(a.rows[i]["solution"], a.rows[i]["status"]) for a in order
@@ -191,7 +196,7 @@ def plot(result: dict) -> bytes:
     import matplotlib
 
     matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    import matplotlib.pyplot as plt     # noqa: E402
 
     k = list(range(1, len(result["residue_mean"]) + 1))
     fig, ax = plt.subplots(figsize=(4.2, 3))
@@ -204,10 +209,7 @@ def plot(result: dict) -> bytes:
     ax.set_ylabel("Unsolved test puzzles")
     ax.legend(frameon=False, fontsize=8)
     fig.tight_layout()
-    buf = io.BytesIO()
-    fig.savefig(buf, format="pdf")
-    plt.close(fig)
-    return buf.getvalue()
+    return pdf_bytes(fig)
 
 
 def load_attempts(records: list[dict], anchors_entry: str, rerun_entries: list[str],
@@ -231,8 +233,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--copy-to", type=Path, default=None)
     args = ap.parse_args(argv)
 
-    m, _ = load_manifest(args.manifest)
-    hints = m.get("table") or {}
+    hints = table_hints(args.manifest)
     records = read_results(args.manifest, args.results)
     attempts = load_attempts(records, hints["anchors"], hints["reruns"])
     anchors = [a for a in attempts if a.full]

@@ -1,6 +1,7 @@
 """Manifest resolution, status, launch planning, collect, naming and ledger."""
 
 import csv
+import dataclasses
 import json
 import subprocess
 import textwrap
@@ -12,14 +13,15 @@ from lattice_diffusion.provenance import (
     LedgerRecord, app_run_name, entry_key, read_ledger, require_clean_sha,
 )
 from paper import launch as L
+import paper.manifest as manifest
 from paper.manifest import eval_overrides, load_manifest, volume_path
-from paper.volume import FakeVolumeView
+from tests.paper.fakes import FakeVolumeView
 
 from experiments.registry import experiment_class
 
 
 def _runs(name):
-    return load_manifest(name)[1]
+    return load_manifest(name)
 
 
 def _by_key(runs):
@@ -132,8 +134,7 @@ def test_every_run_name_is_unique_within_a_manifest():
     for name in ("appendix_g_search", "portfolio", "fig3_maze_ksweep"):
         runs = _runs(name)
         assert len({r.key for r in runs}) == len(runs)
-        named = [L.eval_command(r)[6] if r.kind == "eval" else r.app_name
-                 for r in runs if r.kind != "eval" or r.spec is not None]
+        named = [r.app_name() for r in runs if r.kind != "eval" or r.spec is not None]
         assert len(set(named)) == len(named)
 
 
@@ -145,7 +146,7 @@ def _record(entry, ts, call="fc-1", kind="train+eval"):
 
 def test_ledger_reads_back_in_time_order():
     recs = [_record("A1/a/seed0", 3.0), _record("A1/a/seed0", 1.0, call="fc-0")]
-    view = FakeVolumeView({f"ledger/{i}.json": json.dumps(r.__dict__)
+    view = FakeVolumeView({f"ledger/{i}.json": json.dumps(dataclasses.asdict(r))
                            for i, r in enumerate(recs)})
     got = L.load_ledger(view)
     assert [r.ts for r in got] == [1.0, 3.0]
@@ -213,7 +214,7 @@ def test_status_states():
 def test_plan_launches():
     runs = _runs("portfolio")
     states = {r.key: "not started" for r in runs}
-    plan = {r.key: (cmd, why) for r, cmd, why in L.plan_launches(runs, states)}
+    plan = {p.run.key: (p.cmd, p.reason) for p in L.plan_launches(runs, states)}
     cmd, _ = plan["X1/anchor/seed0"]
     assert cmd[:6] == ["uv", "run", "modal", "run", "--detach", "-n"]
     assert "experiments/sudoku/run.py" in cmd and "--no-wait" in cmd
@@ -223,14 +224,13 @@ def test_plan_launches():
     # A checkpoint that exists is only evaluated.
     t1 = _runs("table1_sudoku")
     states = {r.key: "trained" for r in t1}
-    cmd, why = {r.key: (c, w) for r, c, w in L.plan_launches(t1, states)}["M1/steps4k/seed0"]
+    launch = {p.run.key: p for p in L.plan_launches(t1, states)}["M1/steps4k/seed0"]
+    cmd, why = launch.cmd, launch.reason
     assert "experiments/evaluate.py" in cmd and why == "evaluate existing checkpoint"
     assert cmd[cmd.index("--checkpoint") + 1].startswith("/checkpoints/sudoku/paper-")
 
 
 def test_rerun_entries_resolve_once_the_failure_set_exists(monkeypatch):
-    import paper.manifest as manifest
-
     monkeypatch.setattr(manifest, "_read_indices", lambda path: [5, 17])
     runs = _by_key(_runs("portfolio"))
     rerun = runs["X1/rerun_models/seed5/eval2"]

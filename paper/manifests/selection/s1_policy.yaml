@@ -1,4 +1,4 @@
-# Phase 1 (plan §1.1), search: cell x digit policy at evaluation, on a 2K-
+# Phase 1, search: cell x digit policy at evaluation, on a 2K-
 # and a 1K-step model. Scored on sudoku_val (held-out train puzzles), never
 # on test. Selection rule: zero wrong answers, then accuracy, then fewest
 # calls/solve, then the simpler option.

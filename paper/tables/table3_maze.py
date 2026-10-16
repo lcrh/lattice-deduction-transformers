@@ -11,25 +11,28 @@ explicit step).
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
-from paper.manifest import REPO, load_manifest
+from paper.manifest import REPO, table_hints
 from paper.tables.common import (
-    Table, by_entry, cli, done, escape, load_rows, mean_std, num, pct, pm, read_results,
-    write_output,
+    Table, baseline_rows, by_entry, cli, done, escape, load_rows, mean_std, num, pct, pm,
+    read_results, write_output,
 )
-from paper.tables.table1_sudoku import baseline_rows
 
 
-def _sweep_point(sweep: list[dict], step) -> dict:
+MazeStep = int | Literal["best", "last"]
+
+
+def _sweep_point(sweep: list[dict], step: MazeStep) -> dict:
     points = sorted(sweep, key=lambda p: p["step"])
     if step == "last":
         return points[-1]
-    if step == "best":     # selected on the test set, by the lenient criterion
+    if step == "best":
         return max(points, key=lambda p: p["lenient"])
     return next(p for p in points if p["step"] == int(step))
 
 
-def build(records: list[dict], baselines: list[dict], maze_step="last",
+def build(records: list[dict], baselines: list[dict], maze_step: MazeStep = "last",
           root: Path = REPO) -> Table:
     columns = ["Method", "Seeds", "Lenient acc. (\\%)", "Exact acc. (\\%)", "Wrong"]
     body = []
@@ -56,13 +59,8 @@ def build(records: list[dict], baselines: list[dict], maze_step="last",
 
 def main() -> None:
     args = cli("Table 3 (Maze-Hard).", default_manifest="table3_maze")
-    bm, _ = load_manifest("baselines")
-    try:
-        baselines = baseline_rows(read_results("baselines", args.results), "maze")
-    except FileNotFoundError:
-        baselines = []
-    table = build(read_results(args.manifest, args.results), baselines,
-                  (bm.get("table") or {}).get("maze_step", "last"))
+    table = build(read_results(args.manifest, args.results), baseline_rows("maze", args.results),
+                  table_hints("baselines").get("maze_step", "last"))
     print(f"wrote {write_output('table3_maze.tex', table.to_latex(), args.out, args.copy_to)}")
 
 

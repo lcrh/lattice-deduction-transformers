@@ -3,9 +3,6 @@ exp_id: M4
 benchmark: maze
 eval: whole
 seeds: [0, 1, 2]
-table:
-  caption: "Maze-Hard (30x30) test accuracy."
-  baselines: baselines
 entries:
   - name: k1
     label: "LDT, K=1"
