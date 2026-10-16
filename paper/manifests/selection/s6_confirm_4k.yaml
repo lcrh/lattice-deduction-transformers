@@ -7,4 +7,10 @@ eval: select
 seeds: [0, 1, 2]
 entries:
   - name: current
-  # TODO: add the candidates from P1-P5 as entries with a `set:` block.
+  - name: argmax
+    eval_of: current
+    set: {solve.step.digit_policy: argmax}
+  - name: ce05_argmax
+    set: {train.softmax_loss_weight: 0.5, solve.step.digit_policy: argmax}
+  - name: ce10_argmax
+    set: {train.softmax_loss_weight: 1.0, solve.step.digit_policy: argmax}
