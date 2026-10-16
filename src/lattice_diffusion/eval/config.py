@@ -23,7 +23,7 @@ class EvalConfig:
     dropout_p: float = 0.05             # eval-time dropout, used as search noise
     eval_seed: int = 0
     block_size: int = 512
-    compile: bool = False
+    compile: bool = True                # torch.compile; GPU results then match only statistically
     tag: str = ""
     # Cost and wall-clock only; not part of the eval's identity.
     workers: int = 32
