@@ -80,9 +80,11 @@ def small_sudoku_val(n_train: int = 300, length: int = 30):
 _DIRS = ("NW", "NE", "W", "E", "SW", "SE")
 
 
-def write_snowflake_parquet(path: Path, n_rows: int, seed: int, n_cells: int = 12) -> None:
-    """Fake snowflake rows with the generator's schema (constraints omitted;
-    training never reads them)."""
+def write_snowflake_parquet(path: Path, n_rows: int, seed: int, n_cells: int = 12,
+                            orders: tuple[int, ...] = (4,)) -> None:
+    """Fake snowflake rows with the generator's schema. Constraint groups are
+    consecutive runs of 6 cells (not a real topology); `n` cycles through
+    `orders`. Row content does not depend on `orders`."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -95,10 +97,13 @@ def write_snowflake_parquet(path: Path, n_rows: int, seed: int, n_cells: int = 1
                      for c, s in enumerate(chosen)}
         solution = rng.integers(1, 7, size=n_cells).tolist()
         puzzle = [7 if rng.random() < 0.6 else v for v in solution]
+        constraints = [{"cells": list(range(k, min(k + 6, n_cells)))}
+                       for k in range(0, n_cells, 6)]
         rows.append({
-            "id": i, "n": 4, "code": f"f{i}", "puzzle": puzzle, "solution": solution,
-            "givens": sum(v != 7 for v in puzzle),
-            "topology": json.dumps({"n_cells": n_cells, "cell_positions": positions}),
+            "id": i, "n": orders[i % len(orders)], "code": f"f{i}", "puzzle": puzzle,
+            "solution": solution, "givens": sum(v != 7 for v in puzzle),
+            "topology": json.dumps({"n_cells": n_cells, "cell_positions": positions,
+                                    "constraints": constraints}),
         })
     table = pa.table({
         "id": pa.array([r["id"] for r in rows], type=pa.int64()),

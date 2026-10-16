@@ -137,22 +137,36 @@ Eval-only ablations of an existing checkpoint go through
 > [this thread](https://x.com/biosemiote/status/2061848053741687016) for
 > context.
 
-### Snowflake Sudoku (Table 2)
+### Snowflake Sudoku (Table 2, order-transfer appendix)
 
-The Snowflake puzzles are generated with CVC5 via the
-[snowflakesudoku](https://github.com/santolucito/snowflakesudoku) helper
-package (MIT-licensed, cloned at Modal-image build time).
+The Snowflake puzzles are generated with CVC5 via
+[snowflakesudoku](https://github.com/lcrh/snowflakesudoku) (an MIT-licensed
+fork of [santolucito/snowflakesudoku](https://github.com/santolucito/snowflakesudoku)
+that adds varied layouts; pinned commit, cloned at Modal-image build time).
+The paper uses the varied-topology dataset: every base puzzle gets its own
+randomly grown connected layout, orders 4–10. Table 2 trains and evaluates on
+orders 4–8; the order-transfer configs hold out larger orders.
 
 ```bash
-# One-time: generate the ~30K-puzzle dataset (CVC5, ~100 CPU workers, parallel)
+# One-time: generate the dataset (CVC5, ~100 CPU workers, parallel). Writes
+# snowflake_varied_{train,val,test}.parquet and prints index-list values to pin.
 uv run modal run --detach experiments/snowflake/gen_data.py
 
-# Train + evaluate on the whole test split
+# Table 2: train on orders 4-8, evaluate on the order 4-8 test puzzles
 uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/paper.yaml
+
+# Order transfer: train on 4-6, evaluate on 7-10 (and 6-8 -> 9-10, and 4-6
+# with 12/25/50 of the 500 training puzzles drawn from orders 7-10)
+uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/ood_4to6_eval7to10.yaml
+uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/ood_6to8_eval9to10.yaml
+uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/ood_4to6_mixin25.yaml
 ```
 
-`gen_data.py` writes `/data/snowflake_train.parquet` and
-`/data/snowflake_test.parquet` to the `lattice-diffusion-data` volume.
+Eval rows record each puzzle's order, so per-order accuracy comes from the
+rows. The submitted paper's canonical-topology dataset (one concentric layout
+per order, orders 4–8) is still available with
+`gen_data.py --topology canonical --n-max 8` and `--set "data.dataset=canonical
+data.translate_aug=false eval.index_list=snowflake_test"`.
 
 ### Maze-Hard (Table 3, K=1 and K=512)
 

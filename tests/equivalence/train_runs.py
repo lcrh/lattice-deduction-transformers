@@ -41,6 +41,7 @@ def snowflake(tmp: Path, **train_kw) -> dict:
 
     fakes.write_snowflake_parquet(tmp / "snowflake_train.parquet", 60, seed=31)
     fakes.write_snowflake_parquet(tmp / "snowflake_test.parquet", 10, seed=32)
+    fakes.write_snowflake_parquet(tmp / "snowflake_val.parquet", 10, seed=33)
     exp = SnowflakeExperiment(
         model=fakes.tiny_model_cfg(),
         data=SnowflakeConfig(data_dir=str(tmp), seed=42, n_puzzles=40),

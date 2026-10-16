@@ -92,12 +92,14 @@ def coordinate(spec_json: str) -> dict:
 
         return ThreadExecutor(solve, n_workers=spec.window)
 
+    task = get_task(spec.task, DATA_MOUNT)
     summary = run_eval(
         spec, EVAL_ROOT, make_executor,
         persist=checkpoint_volume.commit,
         block_seconds=lambda: seconds["blocks"],
         startup_seconds=lambda: seconds["startup"],
-        split_size=lambda split: get_task(spec.task, DATA_MOUNT).split_size(split),
+        split_size=task.split_size,
+        filter_indices=task.filter_indices if spec.index_filter is not None else None,
     )
     print(format_summary(summary), flush=True)
     return {"run_dir": summary.run_dir, "summary": format_summary(summary)}

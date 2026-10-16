@@ -66,6 +66,9 @@ class EvalSpec:
     tag: str = "test"
     explicit_indices: list[int] | None = None
     explicit_split: str | None = None
+    # Task-specific restriction of the index list, applied in list order,
+    # e.g. {"orders": [7, 8, 9, 10]} for Snowflake (EvalTask.filter_indices).
+    index_filter: dict | None = None
     n_workers: int = 32
     max_in_flight: int | None = None    # None = n_workers
     keep_warm_s: int = 300              # idle seconds before a worker scales down
