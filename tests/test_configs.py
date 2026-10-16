@@ -1,5 +1,4 @@
 import importlib
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -88,15 +87,14 @@ def test_maze_synthetic_eval_spec():
 
 
 @pytest.mark.parametrize("benchmark", BENCHMARKS)
-def test_monitoring_does_not_change_trained_weights(benchmark, monkeypatch):
+def test_monitoring_does_not_change_trained_weights(benchmark, monkeypatch, tmp_path):
     """Monitoring runs under a forked RNG, so it never changes the trained weights."""
     module = importlib.import_module(f"experiments.{benchmark}.train")
     calls = []
     real = module.monitor_solve
     monkeypatch.setattr(module, "monitor_solve", lambda *a, **k: calls.append(1) or real(*a, **k))
-    with tempfile.TemporaryDirectory() as tmp:
-        state = train_runs.RUNS[benchmark](Path(tmp), monitor_every=1, monitor_n_puzzles=4,
-                                           monitor_max_rounds=2, monitor_n_chains=4)
+    state = train_runs.RUNS[benchmark](tmp_path, monitor_every=1, monitor_n_puzzles=4,
+                                       monitor_max_rounds=2, monitor_n_chains=4)
     assert len(calls) == 3
     ref = torch.load(fakes.FIXTURES / "train.pt", weights_only=False)[benchmark]
     assert fakes.state_dict_equal(state, ref)

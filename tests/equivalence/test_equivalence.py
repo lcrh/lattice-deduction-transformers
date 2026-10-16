@@ -5,8 +5,6 @@ config refactor) with seeded tiny models and synthetic data; see
 tests/equivalence/README.md.
 """
 
-import tempfile
-from pathlib import Path
 
 import pytest
 import torch
@@ -66,8 +64,7 @@ def test_solve_matches_reference(case):
 
 
 @pytest.mark.parametrize("benchmark", ["sudoku", "snowflake", "maze"])
-def test_training_matches_reference(benchmark):
+def test_training_matches_reference(benchmark, tmp_path):
     ref = _load("train")[benchmark]
-    with tempfile.TemporaryDirectory() as tmp:
-        state = train_runs.RUNS[benchmark](Path(tmp))
+    state = train_runs.RUNS[benchmark](tmp_path)
     assert fakes.state_dict_equal(state, ref)
