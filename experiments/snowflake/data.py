@@ -141,11 +141,11 @@ def constraint_group_features(puzzle_rec: dict, rng: np.random.Generator) -> np.
 
 def random_translate(arrays: list[np.ndarray], mask: np.ndarray,
                      rng: np.random.Generator) -> tuple[list[np.ndarray], np.ndarray]:
-    """Shift a puzzle by a random whole number of hexes within the covering
-    grid. A hex occupies a 3-row x 2-col block of slots, so shifting rows by
-    3*dr and columns by 2*dq relabels positions without changing which cells
-    share constraints. `arrays` are per-slot arrays ([SEQ_LEN, ...]) moved
-    together with `mask`."""
+    """Shift a puzzle by a random whole number of hexes within the covering grid.
+
+    A hex is a 3 x 2 block of slots, so the shift keeps which cells share
+    constraints. `arrays` ([SEQ_LEN, ...]) move together with `mask`.
+    """
     occupied = np.where(mask)[0]
     if occupied.size == 0:
         return arrays, mask

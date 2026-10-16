@@ -294,7 +294,7 @@ def gen_shard(
 
 
 def assign_split(fingerprint: bytes, test_frac: float, val_frac: float, seed: int) -> str:
-    """Deterministic split from a row fingerprint: test = buckets [0, test_frac), val the next val_frac."""
+    """Split of a row from its fingerprint: test is buckets [0, test_frac), val the next val_frac."""
     salt = f"snowflake-split-seed{seed}".encode()
     bucket = int.from_bytes(hashlib.sha256(salt + fingerprint).digest()[:4], "big") % 1000
     test_hi = int(round(test_frac * 1000))
@@ -318,8 +318,7 @@ def content_sha256(rows: list[dict]) -> str:
 
 def split_rows(rows: list[dict], test_frac: float, val_frac: float,
                seed: int) -> tuple[dict[str, list[dict]], int]:
-    """Dedup, order by (n, code), assign ids, and split. Returns the splits
-    and the number of duplicates dropped."""
+    """Dedup, order by (n, code), assign ids and split; returns (splits, duplicates dropped)."""
     rows = sorted(rows, key=lambda r: (r["n"], r["code"]))
     seen: set[bytes] = set()
     deduped = []
@@ -339,9 +338,10 @@ def split_rows(rows: list[dict], test_frac: float, val_frac: float,
               volumes={DATA_MOUNT: data_volume})
 def consolidate(topology: str, generator: dict, test_frac: float = 0.1,
                 val_frac: float = 0.05, seed: int = 0) -> dict:
-    """Read all shards for `topology`, dedup, split (see split_rows), and
-    write one parquet file per split with the generator settings and a
-    content hash in its metadata."""
+    """Merge the shards of `topology` into one parquet file per split (see split_rows).
+
+    Each file's metadata records the generator settings and a content hash.
+    """
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -426,8 +426,7 @@ def main(
 
 
 def print_index_pins(topology: str, sizes: dict[str, int]) -> None:
-    """Print the split sizes and list checksums to record in
-    src/lattice_diffusion/eval/indices.py for this dataset's eval lists."""
+    """Print the split sizes and checksums to pin in src/lattice_diffusion/eval/indices.py."""
     from lattice_diffusion.eval import indices as index_lists
 
     prefix = f"snowflake_{topology}"

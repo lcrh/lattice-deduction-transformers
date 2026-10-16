@@ -1,5 +1,4 @@
-"""Snowflake order-transfer support: training-pool selection, translation and
-constraint-group inputs, generator splitting, and order-filtered evaluation."""
+"""Snowflake order transfer: pool selection, translation, group inputs, splits, order filters."""
 
 import dataclasses
 import json
