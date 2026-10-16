@@ -1,5 +1,4 @@
-"""Each benchmark's eval task runs end to end on CPU through the runner:
-tiny trained checkpoint, synthetic data, rows in the shared schema."""
+"""Each benchmark's eval task runs end to end on CPU (tiny checkpoint, synthetic data)."""
 
 import tempfile
 from pathlib import Path

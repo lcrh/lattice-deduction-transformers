@@ -86,8 +86,7 @@ def generate_maze(
     min_path_len: int | None = None,
     max_attempts: int = 200,
 ) -> tuple[np.ndarray, np.ndarray] | None:
-    """Generate one valid maze. Returns (x, y) of shape [h*w, 5] each, or
-    None if max_attempts retries all failed.
+    """One valid maze as (x, y), each [h*w, 5], or None if every attempt failed.
 
     `min_path_len` is the minimum number of edges in the optimal S→G plan.
     Defaults to `max(h, w)` (Searchformer / Lehnert et al. 2024). HRM
@@ -148,8 +147,7 @@ def generate_maze(
 
 
 def hard_min_path_len(h: int, w: int) -> int:
-    """HRM-Maze-Hard difficulty scaling: 12.2% of total cells (matches the
-    110/900 cutoff at 30×30), with a max(h, w) floor for small grids."""
+    """Maze-Hard's minimum path length: 12.2% of the cells (110 at 30x30), at least max(h, w)."""
     return max(max(h, w), round(0.122 * h * w))
 
 

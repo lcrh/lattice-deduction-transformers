@@ -82,9 +82,11 @@ _DIRS = ("NW", "NE", "W", "E", "SW", "SE")
 
 def write_snowflake_parquet(path: Path, n_rows: int, seed: int, n_cells: int = 12,
                             orders: tuple[int, ...] = (4,)) -> None:
-    """Fake snowflake rows with the generator's schema. Constraint groups are
-    consecutive runs of 6 cells (not a real topology); `n` cycles through
-    `orders`. Row content does not depend on `orders`."""
+    """Fake Snowflake rows with the generator's schema.
+
+    Constraint groups are runs of 6 cells (not a real topology); `n` cycles
+    through `orders`, and nothing else depends on it.
+    """
     import pyarrow as pa
     import pyarrow.parquet as pq
 

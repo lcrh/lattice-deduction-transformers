@@ -143,10 +143,7 @@ def grid_dims(cfg: MazeConfig) -> tuple[int, int]:
 # fresh per-sample augmentation.
 
 def _pregen_cache_spec(cfg: MazeConfig) -> dict:
-    """Canonical config snapshot used for cache-key hashing. Only fields that
-    change the underlying canonical pool/solutions are included; augmentation
-    knobs (which are applied per-sample post-cache) are excluded.
-    """
+    """Config fields that determine the cached pool and solutions (not per-sample augmentation)."""
     spec: dict = {
         "version": PREGEN_VERSION,
         "dataset": cfg.dataset,
@@ -180,9 +177,7 @@ def _pregen_cache_key(cfg: MazeConfig) -> str:
 def _build_synthetic_canonical_pool(
     cfg: MazeConfig, H: int, W: int
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Generate `cfg.n_puzzles` canonical synthetic mazes (no augmentation).
-    Returns (x_np, y_np) of shapes [N, H*W, C]. Logs mazes/sec progress.
-    """
+    """`cfg.n_puzzles` synthetic mazes without augmentation, as (x, y) of shape [N, H*W, C]."""
     n = cfg.n_puzzles
     if n is None:
         raise ValueError("synthetic pregen requires n_puzzles to be set")
@@ -227,9 +222,7 @@ def _build_synthetic_canonical_pool(
 def _load_maze_hard_canonical_pool(
     cfg: MazeConfig,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Load canonical maze_hard puzzles from the HF cache. Applies
-    `n_puzzles` subset selection (seed-driven) to match `MazeHardDataset`.
-    """
+    """Maze-Hard puzzles from the HF cache, with the same seeded subset as MazeHardDataset."""
     cache_path = _maze_hard_download_and_cache(cfg.cache_dir, cfg.split)
     data = torch.load(cache_path, map_location="cpu", weights_only=True)
     x_full = data["x"].numpy().astype(np.float32)  # [N_total, 900, 5]
@@ -250,9 +243,7 @@ def _build_k_solutions_with_metrics(
     pool_x: np.ndarray, pool_y: np.ndarray,
     K: int, H: int, W: int, sampler_seed: int,
 ) -> np.ndarray:
-    """Sample K solutions per puzzle. Returns [N, K, H*W, C] float32.
-    Logs progress (puzzles/sec) every 5% of the pool.
-    """
+    """[N, K, H*W, C] float32: K sampled shortest paths per puzzle."""
     n = pool_x.shape[0]
     rng = random.Random(sampler_seed)
     out = np.zeros((n, K, H * W, N_CHANNELS), dtype=np.float32)
@@ -276,9 +267,7 @@ def _build_k_solutions_with_metrics(
 
 
 def _load_pregen_manifest(cfg: MazeConfig) -> dict | None:
-    """If a parquet-shard manifest exists for this cache key, return its
-    parsed dict. Otherwise return None.
-    """
+    """The parquet-shard manifest for this cache key, or None."""
     cache_key = _pregen_cache_key(cfg)
     manifest_path = (Path(cfg.cache_dir) / PREGEN_CACHE_DIR
                      / f"{cache_key}.manifest.json")
@@ -292,14 +281,9 @@ def _load_pregen_manifest(cfg: MazeConfig) -> dict | None:
 def _build_or_load_pregen(
     cfg: MazeConfig, H: int, W: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Returns canonical (pool_x, pool_y, pool_solutions) — `pool_solutions`
-    has shape [N, K, H*W, C]. Loads from `{cache_dir}/maze_pregen/{key}.pt`
-    if present and valid; otherwise generates and saves.
+    """(pool_x, pool_y, pool_solutions [N, K, H*W, C]) from the single-file cache, built if missing.
 
-    Used for the single-file pregen format. For parquet-shard pregen
-    output, callers detect via `_load_pregen_manifest` first and use the
-    sharded streaming path in `MazeDataset._init_sharded_pool` instead,
-    which never loads the full pool into RAM.
+    Sharded pregen output is streamed by `MazeDataset._init_sharded_pool` instead.
     """
     K = max(1, int(cfg.k_solutions))
     cache_key = _pregen_cache_key(cfg)
@@ -371,9 +355,7 @@ def _build_or_load_pregen(
 
 
 class MazeDataset:
-    """Dispatching wrapper. Yields `(x, solutions, is_sat)` per
-    `next_batch()` call where `solutions: [B, K, S, 5]` carries K candidate
-    ground-truth paths per puzzle.
+    """Maze batches `(x, solutions [B, K, S, 5], is_sat)` with K target paths per puzzle.
 
     Two modes:
       - Finite-pool (n_puzzles is set, OR dataset='maze_hard'): builds or
@@ -415,9 +397,7 @@ class MazeDataset:
 
     # ---- sharded-pool path (parquet streaming) -----------------------------
     def _init_sharded_pool(self):
-        """Stream from parquet shards: one shard at a time on a background
-        thread, shuffled within shard, no full-pool RAM hit.
-        """
+        """Stream parquet shards one at a time on a background thread, shuffled within a shard."""
         import pyarrow.parquet as pq  # local import: pyarrow only loaded on the sharded path
         self._pq = pq
 
@@ -465,9 +445,7 @@ class MazeDataset:
         return x_np, y_np, sols_np
 
     def _sharded_pool_loop(self):
-        """Background loop: load shards into a multi-shard buffer (so batch_size
-        > shard_size still works), shuffle, emit batches with augmentation.
-        """
+        """Fill a multi-shard buffer, shuffle, and emit augmented batches."""
         cfg = self.cfg
         H, W, K = self._H, self._W, self.K
         bs = cfg.batch_size
@@ -709,8 +687,7 @@ class MazeDataset:
 
 
 def _bfs_connected_with_g(grid: np.ndarray, sr: int, sc: int, gr: int, gc: int) -> tuple[bool, int]:
-    """Return (g_reachable, n_cells_visited). Traverses cells where grid is True
-    (i.e. the path/S/G mask). 4-connected."""
+    """(goal reachable, cells visited) of a 4-connected walk over the True cells of `grid`."""
     H, W = grid.shape
     visited = np.zeros_like(grid, dtype=bool)
     visited[sr, sc] = True
@@ -830,8 +807,7 @@ def rescore(res, targets: torch.Tensor, H: int, W: int) -> MazeOutcome:
 
 
 def _bfs_distances(walls: np.ndarray, start: tuple[int, int]) -> np.ndarray:
-    """4-connected BFS. Returns int distance from `start` to each non-wall
-    cell; np.iinfo(np.int32).max for unreachable / wall cells."""
+    """4-connected BFS distance from `start` to every cell (int32 max where unreachable)."""
     H, W = walls.shape
     INF = np.iinfo(np.int32).max
     dist = np.full((H, W), INF, dtype=np.int32)
@@ -880,12 +856,7 @@ def _count_paths_to_g(d_g: np.ndarray, on_dag: np.ndarray, g_pos: tuple[int, int
 
 
 def _bigint_uniform(rng: random.Random, total: int) -> int:
-    """Return a uniform random Python int in [0, total). Wraps
-    `random.Random.randrange`, which internally does getrandbits + rejection
-    over arbitrary-precision Python ints (unlike `np.random.Generator.integers`,
-    capped at int64). Faster than a hand-rolled rejection loop because the
-    inner getrandbits + comparison runs in C.
-    """
+    """Uniform random int in [0, total) for arbitrarily large Python ints (numpy caps at int64)."""
     return rng.randrange(total)
 
 
@@ -897,12 +868,10 @@ def _sample_one_path(
     g_pos: tuple[int, int],
     rng: random.Random,
 ) -> set[tuple[int, int]]:
-    """Walk from S to G; at each step pick next cell weighted by
-    `paths_to_g[n] / sum`. Yields a uniform random shortest path.
-    Returns the set of intermediate `path` cells (excluding S and G).
+    """Intermediate cells of a uniformly random shortest S-to-G path.
 
-    Uses arbitrary-precision Python ints throughout so dense DAGs (where
-    shortest-path counts can exceed int64) sample correctly.
+    Each step picks the next cell weighted by its count of shortest paths to G,
+    in Python ints, since the counts can exceed int64.
     """
     H, W = d_g.shape
     cur = s_pos

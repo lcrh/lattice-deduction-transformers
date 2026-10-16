@@ -203,7 +203,7 @@ def conflict_log(out: dict, gt_conflict: torch.Tensor, state: torch.Tensor | Non
 
 def cell_accuracy(bce_logits: torch.Tensor, state: torch.Tensor, orig_y: torch.Tensor,
                   mask: torch.Tensor | None = None) -> float:
-    """At multi-candidate cells, how often the top BCE logit among alive candidates is the target."""
+    """At multi-candidate cells, how often the top BCE logit among alive candidates is right."""
     multi_alive = state.sum(dim=-1) > 1.5
     if mask is not None:
         multi_alive = multi_alive & mask

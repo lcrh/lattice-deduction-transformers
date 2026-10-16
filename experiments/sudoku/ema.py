@@ -57,18 +57,10 @@ class ModelEMA:
 
 @torch.no_grad()
 def swap_in_ema_if_present(model: torch.nn.Module, ckpt: dict) -> None:
-    """At eval time, copy EMA weights from the loaded checkpoint into the
-    live model in-place. No-op if the checkpoint has no EMA state. The
-    caller doesn't need to swap back; the model is being used for eval only.
+    """Copy a checkpoint's EMA weights into `model` in place (no-op without EMA state).
 
-    Two name-mangling cases handled here:
-    1. `save_checkpoint` does `data.update(extra)` so `ema_state_dict` is
-       at the top level of the loaded dict — pass the whole `ckpt`, not
-       `ckpt["extra"]`.
-    2. EMA was constructed against a `torch.compile`-wrapped model whose
-       `named_parameters()` uses `_orig_mod.<name>` keys. The live model
-       at eval time has unprefixed names. Strip `_orig_mod.` from EMA
-       keys before matching.
+    `ckpt` is the whole loaded checkpoint (EMA state sits at its top level);
+    torch.compile's `_orig_mod.` prefix is stripped from the EMA keys.
     """
     ema_state = ckpt.get("ema_state_dict") if isinstance(ckpt, dict) else None
     if not ema_state:

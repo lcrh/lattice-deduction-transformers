@@ -89,8 +89,7 @@ def test_maze_synthetic_eval_spec():
 
 @pytest.mark.parametrize("benchmark", BENCHMARKS)
 def test_monitoring_does_not_change_trained_weights(benchmark, monkeypatch):
-    """Monitoring solves run under a forked RNG, so a run with monitoring
-    every step trains the same weights as the reference run without it."""
+    """Monitoring runs under a forked RNG, so it never changes the trained weights."""
     module = importlib.import_module(f"experiments.{benchmark}.train")
     calls = []
     real = module.monitor_solve
