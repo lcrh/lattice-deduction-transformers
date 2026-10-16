@@ -40,13 +40,21 @@ train:
     cls_threshold: 0.5
     temp_decide: 1.5
     augment: true
+    cell_policy: uniform
+    digit_policy: sample
 
-solve:                     # operator and search budget at evaluation
+solve:                     # operator and search at evaluation
   step:
     threshold: 0.10
     cls_threshold: 0.6
     temp_decide: 1.5
     augment: true
+    deduce_passes: 1       # forward+eliminate passes per round (or "fixpoint")
+    n_loops: null          # model loops at inference (null = as trained)
+    cell_policy: uniform   # uniform | mrv | min_entropy | max_entropy
+    digit_policy: sample   # sample | argmax | rank_k
+  backtrack: root          # root | last | geometric | uniform_depth
+  backtrack_negate: false
   max_rounds: 1000
   n_chains: 64
   batch_size: 512

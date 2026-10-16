@@ -98,12 +98,16 @@ class PowersetModel(nn.Module):
         x: torch.Tensor,
         return_all: bool = False,
         use_final: bool = False,
+        n_loops: int | None = None,
     ) -> dict[str, torch.Tensor | list[torch.Tensor]]:
         """Forward pass.
 
         Default (return_all=False, use_final=False): returns mean-across-iterations.
         use_final=True: returns only the last iteration's predictions.
         return_all=True: returns list of per-iteration predictions (for training).
+        n_loops overrides the configured loop count (the weights are shared
+        across iterations, so a model can be run deeper or shallower than
+        it was trained).
 
         Returns dict with keys:
         - "bce": [B, S, C] mean logits, or list of per-loop [B, S, C]
@@ -118,7 +122,7 @@ class PowersetModel(nn.Module):
         all_cls = []
         all_conflict = []
 
-        for _ in range(self.cfg.n_loops):
+        for _ in range(self.cfg.n_loops if n_loops is None else n_loops):
             h = h + h0  # re-inject input
 
             out = self.backbone(h)

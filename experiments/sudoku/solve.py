@@ -34,11 +34,96 @@ The toggle lives at `cfg.step.augment` (StepConfig.augment).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
 from experiments.sudoku.dpll import StepConfig, dpll_step
+
+
+BACKTRACK_POLICIES = ("root", "last", "geometric", "uniform_depth")
+
+
+class DecisionStack:
+    """Per-chain stack of the decisions taken since the chain's last restart:
+    the post-deduction state each decision was made from, and the decided
+    (cell, candidate). Lets a conflicting chain backtrack to an earlier
+    decision instead of the root."""
+
+    def __init__(self, B: int, S: int, C: int, max_depth: int, device):
+        self.states = torch.zeros(B, max_depth, S, C, dtype=torch.uint8, device=device)
+        self.cells = torch.zeros(B, max_depth, dtype=torch.long, device=device)
+        self.digits = torch.zeros(B, max_depth, dtype=torch.long, device=device)
+        self.depth = torch.zeros(B, dtype=torch.long, device=device)
+        self.max_depth = max_depth
+        # Diagnostics over all backtracks.
+        self.n_backtracks = 0
+        self.sum_conflict_depth = 0
+        self.sum_target_depth = 0
+        self.n_negations = 0
+        self.n_unsound_negations = 0
+
+    def clear(self, rows) -> None:
+        self.depth[rows] = 0
+
+    def push(self, state, deduce_mask, new_state, decided_rows, vd: int) -> None:
+        """Record the decision each of `decided_rows` just made. Decisions
+        past `max_depth` are counted but not stored."""
+        post_deduce = state.masked_fill(deduce_mask, 0.0)
+        pre_alive = (post_deduce[..., :vd] > 0.5).sum(dim=-1)
+        post_alive = (new_state[..., :vd] > 0.5).sum(dim=-1)
+        decided_cell = (pre_alive > 1) & (post_alive == 1)
+        made = decided_rows & decided_cell.any(dim=-1)
+        room = self.depth < self.max_depth
+        rows = (made & room).nonzero(as_tuple=True)[0]
+        if rows.numel():
+            cell = decided_cell[rows].float().argmax(dim=-1)
+            d = self.depth[rows]
+            self.states[rows, d] = (post_deduce[rows] > 0.5).to(torch.uint8)
+            self.cells[rows, d] = cell
+            self.digits[rows, d] = new_state[rows, cell, :vd].argmax(dim=-1)
+        self.depth[made] += 1
+
+    def backtrack(self, rows: torch.Tensor, cfg: "SolveConfig", new_state, original,
+                  gt_idx, vd: int) -> torch.Tensor:
+        """Move each conflicting chain in `rows` back per `cfg.backtrack`,
+        writing its restored state into `new_state`. `gt_idx` ([S], the
+        puzzle's solution) is only used to count unsound negations. Returns
+        a bool per row: True where the chain restarted from the root."""
+        depth = self.depth[rows]
+        n = rows.numel()
+        if cfg.backtrack == "last":
+            target = depth - 1
+        elif cfg.backtrack == "geometric":
+            j = torch.empty(n, device=rows.device).geometric_(cfg.geometric_p).long()
+            target = depth - j.clamp(min=1)
+        else:  # uniform_depth
+            target = (torch.rand(n, device=rows.device) * depth.float()).floor().long()
+        target = target.clamp(min=0)
+        at_root = (depth > self.max_depth) | (depth <= 0)
+        for i in range(n):
+            b, d = int(rows[i]), int(depth[i])
+            self.n_backtracks += 1
+            self.sum_conflict_depth += d
+            if bool(at_root[i]):
+                new_state[b] = original[b]
+                self.depth[b] = 0
+                continue
+            k = int(target[i])
+            new_state[b] = self.states[b, k].float()
+            at_root[i] = k == 0 and not cfg.backtrack_negate
+            if cfg.backtrack_negate:
+                cell, digit = int(self.cells[b, k]), int(self.digits[b, k])
+                self.n_negations += 1
+                self.n_unsound_negations += int(digit == int(gt_idx[cell]))
+                new_state[b, cell, digit] = 0.0
+                if float(new_state[b, cell, :vd].sum()) < 0.5:
+                    new_state[b] = original[b]
+                    k = 0
+                    at_root[i] = True
+            self.depth[b] = k
+            self.sum_target_depth += k
+        return at_root
 
 
 @dataclass
@@ -84,9 +169,30 @@ class SolveConfig:
     # so existing eval pipelines are unchanged.
     log_per_round_fill: bool = False
 
+    # ----- Backtracking on conflict -----
+    # Where a chain in conflict restarts:
+    #   root          — the original puzzle
+    #   last          — the state just before its most recent decision
+    #   geometric     — j decisions back, j ~ Geometric(geometric_p) >= 1
+    #   uniform_depth — a uniformly random earlier decision
+    # With `backtrack_negate`, the candidate chosen at the decision returned
+    # to is also eliminated (if that empties the cell, the chain restarts
+    # from the root). Non-root policies keep a stack of the last
+    # `max_decision_depth` decisions per chain; deeper conflicts restart
+    # from the root.
+    backtrack: str = "root"
+    geometric_p: float = 0.5
+    backtrack_negate: bool = False
+    max_decision_depth: int = 64
+
     def __post_init__(self):
         if self.step is None:
             self.step = StepConfig()
+        if self.backtrack not in BACKTRACK_POLICIES:
+            raise ValueError(f"backtrack must be one of {BACKTRACK_POLICIES}, "
+                             f"got {self.backtrack!r}")
+        if self.backtrack == "root" and self.backtrack_negate:
+            raise ValueError("backtrack_negate needs a non-root backtrack policy")
 
 
 @dataclass
@@ -128,6 +234,16 @@ class SolveResult:
                                  # the streaming-queue solver. -1 if puzzle
                                  # was never filled (only possible if P > Q
                                  # and we exit before all queued).
+    # ----- Per-puzzle diagnostics (always populated) -----
+    # [P, 6] long: bits deduced, of those unsound (killed the solution's
+    # candidate), and conflict-head tp / fp / fn / tn, over the puzzle's
+    # active chain-rounds.
+    puzzle_diag: torch.Tensor = None
+    # [P, n_passes_max, 2] long: deduced / unsound per deduction pass index;
+    # None for single-pass deduction.
+    puzzle_pass_diag: torch.Tensor | None = None
+    # Backtracking diagnostics (non-root policies): totals over all backtracks.
+    search: dict = field(default_factory=dict)
 
 
 def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
@@ -224,6 +340,26 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         slot_attempt_dur_sum = torch.zeros(M, dtype=torch.long, device=device)
         slot_attempt_dur_count = torch.zeros(M, dtype=torch.long, device=device)
 
+    # Per-puzzle diagnostics, accumulated per slot while the puzzle is in it.
+    max_passes = cfg.step.max_passes
+    slot_diag = torch.zeros(M, 6, dtype=torch.long, device=device)
+    puzzle_diag_out = torch.zeros(P, 6, dtype=torch.long, device=device)
+    if max_passes > 1:
+        slot_pass_diag = torch.zeros(M, max_passes, 2, dtype=torch.long, device=device)
+        puzzle_pass_diag_out = torch.zeros(P, max_passes, 2, dtype=torch.long, device=device)
+    else:
+        puzzle_pass_diag_out = None
+
+    def _per_slot(row_counts: torch.Tensor) -> torch.Tensor:
+        """[B] per-chain counts -> [M] per-slot sums."""
+        return row_counts.long().view(M, K).sum(dim=1)
+
+    stack = (DecisionStack(B, S, C, cfg.max_decision_depth, device)
+             if cfg.backtrack != "root" else None)
+    # rank_k: chain k of each puzzle takes the k-th best candidate.
+    decide_rank = (torch.arange(B, device=device) % K
+                   if cfg.step.digit_policy == "rank_k" else None)
+
     next_puzzle = 0
     total_calls = 0
     n_correct_running = 0
@@ -283,6 +419,11 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         if in_puzzle_mask_b is not None:
             in_puzzle_mask_b[rows] = in_puzzle_mask[p].unsqueeze(0).expand(K, -1)
         chain_done[rows] = False
+        slot_diag[slot] = 0
+        if max_passes > 1:
+            slot_pass_diag[slot] = 0
+        if stack is not None:
+            stack.clear(rows)
         if log_fill:
             # Reset this slot's per-round buffers — we re-use buffers across
             # puzzle generations and indexing is by slot_round which restarts.
@@ -306,6 +447,9 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
 
     def evict(slot: int, p: int) -> None:
         n_resets_out[p] = slot_resets[slot]
+        puzzle_diag_out[p] = slot_diag[slot]
+        if max_passes > 1:
+            puzzle_pass_diag_out[p] = slot_pass_diag[slot]
         puzzle_calls_out[p] = total_calls - slot_calls_start[slot]
         slot_puzzle[slot] = -1
         chain_done[slot * K:(slot + 1) * K] = True  # freeze rows so forward is benign
@@ -320,9 +464,9 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         # `new_state` and `info["deduce_mask"]` come back in canonical frame.
         new_state, conflict, just_solved_chain, _, info = dpll_step(
             model, state, given_mask_b, cfg.step,
-            in_puzzle_mask=in_puzzle_mask_b, want_stats=False,
+            in_puzzle_mask=in_puzzle_mask_b, want_stats=False, decide_rank=decide_rank,
         )
-        total_calls += 1
+        total_calls += info["n_passes"]
 
         # ----- Diagnostics on this round (active rows only) -----
         active_rows = ~chain_done                                              # [B]
@@ -367,6 +511,19 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
             diag_conflict_fn += int(fn); diag_conflict_tn += int(tn)
             diag_active_chain_rounds += int(active_rows.sum().item())
 
+            slot_diag += torch.stack([
+                _per_slot(row_deduced * active_rows),
+                _per_slot(row_unsound * active_rows),
+                _per_slot(conflict & row_gt_conflict & active_rows),
+                _per_slot(conflict & ~row_gt_conflict & active_rows),
+                _per_slot(~conflict & row_gt_conflict & active_rows),
+                _per_slot(~conflict & ~row_gt_conflict & active_rows),
+            ], dim=1)
+            for i, pass_mask in enumerate(info["pass_deduce_masks"]):
+                slot_pass_diag[:, i, 0] += _per_slot(pass_mask.sum(dim=(1, 2)) * active_rows)
+                slot_pass_diag[:, i, 1] += _per_slot(
+                    (pass_mask & bit_was_gt_alive).sum(dim=(1, 2)) * active_rows)
+
         # ----- Per-round trajectory measurements (active rows only) -----
         # Computed pre-freeze so `new_state` here is post-decide for all
         # rows (chain_done rows aren't frozen yet but their fills/bitflips
@@ -407,6 +564,10 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                 decision_fills_buf[idx_b, idx_r] = row_decision_fills[active]
                 deduce_bits_buf[idx_b, idx_r] = row_deduce_bits[active]
                 decision_bits_buf[idx_b, idx_r] = row_decision_bits[active]
+
+        if stack is not None:
+            stack.push(state, info["deduce_mask"], new_state,
+                       ~conflict & ~just_solved_chain & ~chain_done, vd)
 
         # Freeze wrong-singleton-frozen and empty-slot rows: don't let their
         # state mutate.
@@ -485,14 +646,23 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                     _record_attempts(slot_solved.nonzero(as_tuple=True)[0])
                     chain_done[lo:hi] = chain_done[lo:hi] | slot_solved
 
-            # Reset conflict chains in this slot to its puzzle's original.
+            # Conflict chains restart from the original puzzle, or backtrack
+            # to an earlier decision (cfg.backtrack).
             still_conflict = slot_conflict & ~chain_done[lo:hi]
             if still_conflict.any():
                 local_reset = still_conflict.nonzero(as_tuple=True)[0]
                 idx = local_reset + lo
-                new_state[idx] = original[idx]
+                if stack is None:
+                    new_state[idx] = original[idx]
+                else:
+                    at_root = stack.backtrack(idx, cfg, new_state, original,
+                                              slot_gt_idx[slot], vd)
+                    local_reset = local_reset[at_root]
+                    idx = local_reset + lo
                 slot_resets[slot] += int(still_conflict.sum().item())
-                if seq:
+                if seq and local_reset.numel():
+                    # A sequential "attempt" ends only when its chain restarts
+                    # from the root.
                     _record_attempts(local_reset)
                     n_new = int(local_reset.numel())
                     chain_attempt_idx[idx] = (
@@ -596,4 +766,13 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         decision_bitflips_per_round=decision_bitflips_out,
         n_givens=n_givens_out,
         puzzle_calls=puzzle_calls_out,
+        puzzle_diag=puzzle_diag_out,
+        puzzle_pass_diag=puzzle_pass_diag_out,
+        search={} if stack is None else {
+            "backtracks": stack.n_backtracks,
+            "sum_conflict_depth": stack.sum_conflict_depth,
+            "sum_target_depth": stack.sum_target_depth,
+            "negations": stack.n_negations,
+            "unsound_negations": stack.n_unsound_negations,
+        },
     )
