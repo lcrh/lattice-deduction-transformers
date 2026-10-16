@@ -16,6 +16,18 @@ entries:
   - name: steps4k
     label: "LDT, 4K steps"
     eval: full
+  # The same rows without per-step augmentation in training (kept at
+  # evaluation): reported alongside, as phase 1 left it undecided for Sudoku.
+  - name: steps1k_train_noaug
+    label: "LDT, 1K steps, no per-step aug. in training"
+    set: {train.steps: 1000, train.step.augment: false}
+  - name: steps2k_train_noaug
+    label: "LDT, 2K steps, no per-step aug. in training"
+    set: {train.steps: 2000, train.step.augment: false}
+  - name: steps4k_train_noaug
+    label: "LDT, 4K steps, no per-step aug. in training"
+    eval: full
+    set: {train.step.augment: false}
   - name: noaug4k
     label: "LDT, 4K steps, no augmentation"
     eval: full
