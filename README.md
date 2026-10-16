@@ -169,32 +169,26 @@ Eval-only ablations of an existing checkpoint go through
 
 The Snowflake puzzles are generated with CVC5 via
 [snowflakesudoku](https://github.com/lcrh/snowflakesudoku) (an MIT-licensed
-fork of [santolucito/snowflakesudoku](https://github.com/santolucito/snowflakesudoku)
-that adds varied layouts; pinned commit, cloned at Modal-image build time).
-The paper uses the varied-topology dataset: every base puzzle gets its own
-randomly grown connected layout, orders 4–10. Table 2 trains and evaluates on
-orders 4–8; the order-transfer configs hold out larger orders.
+fork of [santolucito/snowflakesudoku](https://github.com/santolucito/snowflakesudoku);
+pinned commit, cloned at Modal-image build time). Every base puzzle gets its
+own randomly grown connected layout, orders 4–10. Table 2 trains and evaluates
+on orders 4–8; the order-transfer configs hold out larger orders.
 
 ```bash
 # One-time: generate the dataset (CVC5, ~100 CPU workers, parallel). Writes
-# snowflake_varied_{train,val,test}.parquet and prints index-list values to pin.
+# snowflake_{train,val,test}.parquet and prints index-list values to pin.
 uv run modal run --detach experiments/snowflake/gen_data.py
 
 # Table 2: train on orders 4-8, evaluate on the order 4-8 test puzzles
 uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/paper.yaml
 
-# Order transfer: train on 4-6, evaluate on 7-10 (and 6-8 -> 9-10, and 4-6
-# with 12/25/50 of the 500 training puzzles drawn from orders 7-10)
+# Order transfer: train on 4-6, evaluate on 7-10; train on 6-8, evaluate on 9-10
 uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/ood_4to6_eval7to10.yaml
 uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/ood_6to8_eval9to10.yaml
-uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/ood_4to6_mixin25.yaml
 ```
 
 Eval rows record each puzzle's order, so per-order accuracy comes from the
-rows. The canonical-topology dataset (one concentric layout per order) is
-generated with `gen_data.py --topology canonical --n-max 8` and used with
-`--set "data.dataset=canonical data.translate_aug=false
-eval.index_list=snowflake_canonical_test"`.
+rows.
 
 ### Maze-Hard (Table 3, K=1 and K=512)
 

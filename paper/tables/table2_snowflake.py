@@ -1,4 +1,4 @@
-"""Table 2: Snowflake Sudoku accuracy by order (varied-topology generator).
+"""Table 2: Snowflake Sudoku accuracy by order.
 
     uv run python -m paper.tables.table2_snowflake [--copy-to DIR]
 """

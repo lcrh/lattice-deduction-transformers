@@ -1,6 +1,7 @@
 """Snowflake Sudoku adapter for the shared evaluator.
 
-A split is a generated parquet file (data.split_file); indices are its rows.
+A split ("train", "val", "test") is a generated parquet file (data.split_file);
+indices are its rows.
 Evaluation is zero-hint. Rows carry the puzzle's order, and an `orders` index
 filter restricts a list to some orders.
 """
@@ -16,7 +17,7 @@ from experiments.eval_common import (
     build_solve_config, eval_device, load_eval_model, result_rows, unwrap,
 )
 from experiments.snowflake.data import (
-    BLANK, cell_index, load_puzzles, load_states, puzzle_orders, split_file, split_name,
+    BLANK, cell_index, load_puzzles, load_states, puzzle_orders, split_file,
 )
 from experiments.snowflake.train import N_CHANNELS, VOCAB, _build_state, _given_mask
 from experiments.sudoku.solve import solve
@@ -86,9 +87,7 @@ class SnowflakeTask(EvalTask):
         return SnowflakeExperiment().solve_dict()
 
     def warmup(self, model) -> None:
-        from experiments.snowflake.config import SnowflakeExperiment
-        self.solve_block(model, split_name(SnowflakeExperiment().data.dataset, "test"),
-                         np.arange(8), self.default_solve())
+        self.solve_block(model, "test", np.arange(8), self.default_solve())
 
     def solve_block(self, model, split: str, indices: np.ndarray, solve_dict: dict) -> TaskBlock:
         puzzles = self._puzzles(split)

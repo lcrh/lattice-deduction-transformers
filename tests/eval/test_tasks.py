@@ -24,7 +24,7 @@ def _small_solve(benchmark):
     return exp, solve
 
 
-@pytest.mark.parametrize("benchmark,split", [("sudoku", "test"), ("snowflake", "canonical_test"),
+@pytest.mark.parametrize("benchmark,split", [("sudoku", "test"), ("snowflake", "test"),
                                              ("maze", "synthetic")])
 def test_task_solves_a_block(benchmark, split, tmp_path):
     tmp = tmp_path

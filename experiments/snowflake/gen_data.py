@@ -2,22 +2,18 @@
 
 Uses the `snowflake` package from https://github.com/lcrh/snowflakesudoku
 (an MIT-licensed fork of santolucito/snowflakesudoku, pinned below) for
-hex-topology construction; CVC5 for SAT solving. The fork adds varied
-layouts and leaves the canonical topology unchanged.
-
-Two topologies:
-  - `canonical`: one concentric-ring layout per order.
-  - `varied` (default): a deterministic, randomly grown connected layout per
-    base puzzle, translated into the covering grid. Orders 4-10 by default,
-    so order-transfer experiments can hold out the larger orders.
+hex-topology construction; CVC5 for SAT solving. Every base puzzle gets its
+own deterministic, randomly grown connected layout, translated into the
+covering grid. Orders 4-10 by default, so order-transfer experiments can hold
+out the larger orders.
 
 100 CPU workers each generate a parquet shard (orders × count_per_shard base
 puzzles × up to `variants` given-count variants) on the
 `lattice-diffusion-data` volume. A consolidation function reads all shards,
 deterministically reorders by (n, code), assigns final ids, and hash-splits
 rows into test / val / train (10% / 5% / rest). Files are
-`/data/snowflake_<topology>_<split>.parquet`. Each file's parquet metadata records the generator settings and a content
-hash.
+`/data/snowflake_<split>.parquet`; each file's parquet metadata records the
+generator settings and a content hash.
 
 Schema (per row):
   - id        : int64
@@ -29,8 +25,7 @@ Schema (per row):
   - topology  : string  (JSON-encoded {n_cells, hex_coords, cell_positions, constraints})
 
 Usage:
-    uv run modal run --detach experiments/snowflake/gen_data.py      # varied, orders 4-10
-    uv run modal run --detach experiments/snowflake/gen_data.py --topology canonical --n-max 8
+    uv run modal run --detach experiments/snowflake/gen_data.py      # orders 4-10
 
 After generation, the entrypoint prints the index-list entries to pin in
 src/lattice_diffusion/eval/indices.py.
@@ -65,20 +60,17 @@ gen_image = (
 # Covering-grid bounds; must match experiments/snowflake/data.py.
 COVER_Q_MIN, COVER_Q_MAX = -2, 2
 COVER_R_MIN, COVER_R_MAX = -2, 2
-TOPOLOGIES = ("canonical", "varied")
+SHARDS_DIR = "snowflake_shards"
 
 data_volume = modal.Volume.from_name("lattice-diffusion-data", create_if_missing=True)
 DATA_MOUNT = "/data"
 
 app = modal.App("snowflake-data-gen")
 
-def shards_dir(topology: str) -> str:
-    return f"snowflake_shards_{topology}"
 
-
-def split_file(topology: str, split: str) -> str:
-    """Mirrors experiments/snowflake/data.py:split_path (this image has no torch)."""
-    return f"snowflake_{topology}_{split}.parquet"
+def split_file(split: str) -> str:
+    """Mirrors experiments/snowflake/data.py:split_file (this image has no torch)."""
+    return f"snowflake_{split}.parquet"
 
 
 @app.function(image=gen_image, cpu=1.0, timeout=3600,
@@ -90,7 +82,6 @@ def gen_shard(
     count_per_shard: int = 10,
     variants: int = 6,
     seed_base: int = 42,
-    topology: str = "canonical",
 ) -> dict:
     """Generate one parquet shard. Returns a small status dict for logging."""
     import cvc5
@@ -200,16 +191,7 @@ def gen_shard(
         chars = string.ascii_uppercase + string.digits
         return "".join(rng.choice(chars) for _ in range(3))
 
-    def canonical_topology(n: int) -> dict:
-        constraints, n_cells = build_snowflake(n)
-        return {
-            "n_cells": n_cells,
-            "constraints": constraints,
-            "hex_coords": HEX_COORDS_BY_N[n],
-            "cell_positions": get_cell_positions(n),
-        }
-
-    def varied_topology(n: int, seed: int) -> dict:
+    def grown_topology(n: int, seed: int) -> dict:
         # A grown layout can be too long for the covering grid; resample with
         # derived seeds until one fits. The topology seed is namespaced away
         # from the puzzle RNG seed so geometry and digits are not coupled.
@@ -230,13 +212,9 @@ def gen_shard(
             }
         raise RuntimeError(f"no varied layout of order {n} fits the covering grid")
 
-    if topology not in TOPOLOGIES:
-        raise ValueError(f"topology must be one of {TOPOLOGIES}, got {topology!r}")
     if n_max > max(HEX_COORDS_BY_N):
         raise ValueError(f"n_max={n_max} exceeds the largest supported order "
                          f"{max(HEX_COORDS_BY_N)}")
-    canonical = ({n: canonical_topology(n) for n in range(n_min, n_max + 1)}
-                 if topology == "canonical" else {})
 
     # Per-shard seed: distinct across shards so puzzles don't duplicate.
     base_seed = seed_base + shard_id * 100_000
@@ -246,7 +224,7 @@ def gen_shard(
         for base_idx in range(count_per_shard):
             task_seed = base_seed + n * 1000 + base_idx * 100
             rng = random.Random(task_seed)
-            t = canonical[n] if topology == "canonical" else varied_topology(n, task_seed)
+            t = grown_topology(n, task_seed)
             solution = _random_distinct_solution(t["n_cells"], t["constraints"], rng)
             if solution is None:
                 continue
@@ -275,7 +253,7 @@ def gen_shard(
           flush=True)
 
     # Write parquet shard.
-    out_dir = Path(DATA_MOUNT) / shards_dir(topology)
+    out_dir = Path(DATA_MOUNT) / SHARDS_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     table = pa.table({
         "id":       pa.array([r["id"] for r in records], type=pa.int64()),
@@ -336,16 +314,16 @@ def split_rows(rows: list[dict], test_frac: float, val_frac: float,
 
 @app.function(image=gen_image, cpu=2.0, timeout=600,
               volumes={DATA_MOUNT: data_volume})
-def consolidate(topology: str, generator: dict, test_frac: float = 0.1,
-                val_frac: float = 0.05, seed: int = 0) -> dict:
-    """Merge the shards of `topology` into one parquet file per split (see split_rows).
+def consolidate(generator: dict, test_frac: float = 0.1, val_frac: float = 0.05,
+                seed: int = 0) -> dict:
+    """Merge the shards into one parquet file per split (see split_rows).
 
     Each file's metadata records the generator settings and a content hash.
     """
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    in_dir = Path(DATA_MOUNT) / shards_dir(topology)
+    in_dir = Path(DATA_MOUNT) / SHARDS_DIR
     shard_files = sorted(in_dir.glob("shard_*.parquet"))
     print(f"reading {len(shard_files)} shards from {in_dir}", flush=True)
     if not shard_files:
@@ -369,11 +347,11 @@ def consolidate(topology: str, generator: dict, test_frac: float = 0.1,
 
     out = {"n_rows": len(rows), "n_dropped_dups": n_dropped, "splits": {}}
     for split, split_rows_ in splits.items():
-        meta = {**generator, "topology": topology, "split": split,
+        meta = {**generator, "split": split,
                 "split_rule": {"test_frac": test_frac, "val_frac": val_frac, "seed": seed},
                 "generator_repo": SNOWFLAKE_REPO_URL, "generator_commit": SNOWFLAKE_REPO_COMMIT,
                 "n_rows": len(split_rows_), "content_sha256": content_sha256(split_rows_)}
-        path = Path(DATA_MOUNT) / split_file(topology, split)
+        path = Path(DATA_MOUNT) / split_file(split)
         pq.write_table(_to_table(split_rows_, meta), str(path), compression="zstd")
         out["splits"][split] = {"path": str(path), "n_rows": len(split_rows_),
                                 "content_sha256": meta["content_sha256"]}
@@ -383,7 +361,6 @@ def consolidate(topology: str, generator: dict, test_frac: float = 0.1,
 
 @app.local_entrypoint()
 def main(
-    topology: str = "varied",
     n_shards: int = 100,
     n_min: int = 4,
     n_max: int = 10,
@@ -394,13 +371,13 @@ def main(
     val_frac: float = 0.05,
     split_seed: int = 0,
 ):
-    print(f"Spawning {n_shards} shard workers ({topology} topology, "
+    print(f"Spawning {n_shards} shard workers ("
           f"n in [{n_min}, {n_max}], count_per_shard={count_per_shard}, "
           f"variants={variants}). Each shard targets ~"
           f"{(n_max - n_min + 1) * count_per_shard * variants} puzzles.",
           flush=True)
     args = [
-        (i, n_min, n_max, count_per_shard, variants, seed_base, topology)
+        (i, n_min, n_max, count_per_shard, variants, seed_base)
         for i in range(n_shards)
     ]
     total = 0
@@ -415,24 +392,23 @@ def main(
     generator = {"n_shards": n_shards, "n_min": n_min, "n_max": n_max,
                  "count_per_shard": count_per_shard, "variants": variants,
                  "seed_base": seed_base}
-    summary = consolidate.remote(topology, generator, test_frac=test_frac,
-                                 val_frac=val_frac, seed=split_seed)
+    summary = consolidate.remote(generator, test_frac=test_frac, val_frac=val_frac,
+                                 seed=split_seed)
     print(f"\nConsolidation: {summary['n_rows']} rows, "
           f"{summary['n_dropped_dups']} duplicates dropped", flush=True)
     for split, info in summary["splits"].items():
         print(f"  {split}: {info['n_rows']} rows → {info['path']}  "
               f"(content sha256 {info['content_sha256'][:16]}…)", flush=True)
-    print_index_pins(topology, {k: v["n_rows"] for k, v in summary["splits"].items()})
+    print_index_pins({k: v["n_rows"] for k, v in summary["splits"].items()})
 
 
-def print_index_pins(topology: str, sizes: dict[str, int]) -> None:
+def print_index_pins(sizes: dict[str, int]) -> None:
     """Print the split sizes and checksums to pin in src/lattice_diffusion/eval/indices.py."""
     from lattice_diffusion.eval import indices as index_lists
 
-    prefix = f"snowflake_{topology}"
     print("\nPin these in src/lattice_diffusion/eval/indices.py:", flush=True)
     for split in ("test", "val"):
-        name = f"{prefix}_{split}"
+        name = f"snowflake_{split}"
         spec = index_lists.SPECS.get(name)
         if spec is None:
             print(f"  (no index list named {name})", flush=True)

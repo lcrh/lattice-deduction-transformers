@@ -16,7 +16,7 @@ from experiments.registry import experiment_class
 from experiments.snowflake import gen_data
 from experiments.snowflake.data import (
     MAX_CONSTRAINT_GROUPS, SEQ_LEN, SnowflakeConfig, load_puzzles, constraint_group_features,
-    puzzle_to_state, random_translate, select_pool, split_name,
+    puzzle_to_state, random_translate, select_pool, split_file,
 )
 from tests.equivalence import fakes
 
@@ -37,19 +37,13 @@ def test_default_pool_is_a_seeded_subset(tmp_path):
     assert np.array_equal(select_pool(puzzles, SnowflakeConfig(seed=42)), np.arange(len(puzzles)))
 
 
-def test_order_filter_and_exact_mixin(tmp_path):
+def test_order_filter(tmp_path):
     puzzles = _puzzles(tmp_path)
     orders = np.array([p["n"] for p in puzzles])
     pool = select_pool(puzzles, SnowflakeConfig(train_orders=[4, 5, 6], n_puzzles=30))
     assert len(pool) == 30 and set(orders[pool]) <= {4, 5, 6}
-    counts = {4: 10, 5: 10, 6: 8, 9: 1, 10: 1}
-    pool = select_pool(puzzles, SnowflakeConfig(train_order_counts=counts, n_puzzles=30))
-    got = {o: int((orders[pool] == o).sum()) for o in set(orders[pool])}
-    assert got == counts and len(set(pool.tolist())) == 30
     with pytest.raises(ValueError):
-        select_pool(puzzles, SnowflakeConfig(train_order_counts=counts, n_puzzles=31))
-    with pytest.raises(ValueError):
-        select_pool(puzzles, SnowflakeConfig(train_order_counts={4: 1000}))
+        select_pool(puzzles, SnowflakeConfig(train_orders=[19]))
 
 
 def test_translation_moves_whole_hexes_and_keeps_groups(tmp_path):
@@ -106,11 +100,9 @@ def test_ood_configs_load_with_their_order_settings():
     leq6 = cfglib.load(cls, CONFIGS / "ood_4to6_eval7to10.yaml")
     assert leq6.data.train_orders == [4, 5, 6]
     assert leq6.eval.index_filter == {"orders": [7, 8, 9, 10]}
-    for k in (12, 25, 50):
-        exp = cfglib.load(cls, CONFIGS / f"ood_4to6_mixin{k}.yaml")
-        counts = exp.data.train_order_counts
-        assert sum(counts.values()) == exp.data.n_puzzles == 500
-        assert sum(v for o, v in counts.items() if o >= 7) == k
+    leq8 = cfglib.load(cls, CONFIGS / "ood_6to8_eval9to10.yaml")
+    assert leq8.data.train_orders == [6, 7, 8]
+    assert leq8.eval.index_filter == {"orders": [9, 10]}
     spec = leq6.eval_spec("/ckpt/x.pt")
     assert spec.index_filter == {"orders": [7, 8, 9, 10]} and "orders=7,8,9,10" in spec.tag
 
@@ -127,11 +119,11 @@ def test_order_filtered_eval_end_to_end(group_embed, tmp_path):
     from experiments.snowflake.train import TrainConfig, snowflake_step, train
 
     for split, n, seed in (("train", 60, 31), ("val", 10, 33), ("test", 21, 32)):
-        fakes.write_snowflake_parquet(tmp / f"snowflake_varied_{split}.parquet", n,
+        fakes.write_snowflake_parquet(split_file(str(tmp), split), n,
                                       seed=seed, orders=ORDERS)
     exp = SnowflakeExperiment(
         model=fakes.tiny_model_cfg(),
-        data=SnowflakeConfig(data_dir=str(tmp), dataset="varied", n_puzzles=30,
+        data=SnowflakeConfig(data_dir=str(tmp), n_puzzles=30,
                              train_orders=[4, 5, 6], translate_aug=True,
                              constraint_group_embed=group_embed),
         train=TrainConfig(steps=2, batch_size=16, step=snowflake_step(augment=True),
@@ -148,7 +140,7 @@ def test_order_filtered_eval_end_to_end(group_embed, tmp_path):
     spec = dataclasses.replace(exp.eval_spec(str(ckpt)), solve={**solve, "dropout_p": 0.05},
                                block_size=4)
     lst = resolve_index_list(spec, task.split_size, task.filter_indices)
-    assert lst.name == "snowflake_varied_test[orders=7,8]"
+    assert lst.name == "snowflake_test[orders=7,8]"
     assert len(lst) == 6       # 21 test rows cycle through 7 orders: 3 each of 7 and 8
     model = task.load_model(str(ckpt), 0.05, False)
     rows = solve_block(task, model, block_args(spec, lst, 0)).rows
@@ -162,9 +154,7 @@ def test_filter_needs_task_support():
         resolve_index_list(spec, split_size=lambda split: 10)
 
 
-def test_split_names():
-    assert split_name("canonical", "test") == "canonical_test"
-    assert split_name("varied", "val") == "varied_val"
-    assert gen_data.split_file("varied", "val") == "snowflake_varied_val.parquet"
-    assert gen_data.split_file("canonical", "train") == "snowflake_canonical_train.parquet"
-    assert "snowflake_varied_test" in index_lists.SPECS
+def test_split_file_names_match_the_generator(tmp_path):
+    for split in ("train", "val", "test"):
+        assert split_file(str(tmp_path), split).name == gen_data.split_file(split)
+    assert {"snowflake_test", "snowflake_val"} <= index_lists.SPECS.keys()

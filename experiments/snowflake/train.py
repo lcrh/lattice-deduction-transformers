@@ -31,8 +31,7 @@ from experiments.sudoku.train import (
 )
 
 from experiments.snowflake.data import (
-    MAX_CONSTRAINT_GROUPS, VOCAB, SnowflakeDataset, load_puzzles, load_states, split_name,
-    split_path,
+    MAX_CONSTRAINT_GROUPS, VOCAB, SnowflakeDataset, load_puzzles, load_states, split_file,
 )
 
 if TYPE_CHECKING:
@@ -144,11 +143,10 @@ def train(exp: SnowflakeExperiment, ckpt_path: str | Path,
     dataset = SnowflakeDataset(dataclasses.replace(exp.data, batch_size=cfg.batch_size))
 
     if cfg.monitor_every > 0:
-        monitor_split = split_name(exp.data.dataset, "val")
         eval_state, eval_y, eval_given, eval_in_puzzle = _monitor_set(
-            str(split_path(exp.data.data_dir, exp.data.dataset, "val")), cfg.monitor_n_puzzles,
+            str(split_file(exp.data.data_dir, "val")), cfg.monitor_n_puzzles,
             device, exp.data.constraint_group_embed)
-        print(f"Monitoring set: {eval_state.shape[0]} puzzles from {monitor_split} "
+        print(f"Monitoring set: {eval_state.shape[0]} puzzles from the val split "
               f"(every {cfg.monitor_every} steps, "
               f"K={cfg.monitor_n_chains}, max_rounds={cfg.monitor_max_rounds})", flush=True)
 

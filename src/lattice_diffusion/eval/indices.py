@@ -49,22 +49,13 @@ SPECS: dict[str, IndexListSpec] = {
         length=None,
         sha256="31a7a6ad8ad29ea1c818d39ab870a4b562dc0d70ec8f9c9c963383d4272b0250",
     ),
-    # Canonical-topology Snowflake splits.  TODO: pin once generated.
-    "snowflake_canonical_test": IndexListSpec(
-        task="snowflake", split="canonical_test", split_size=None, seed=20261018,
+    # Snowflake splits.  TODO: pin once generated (gen_data.py prints the values).
+    "snowflake_test": IndexListSpec(
+        task="snowflake", split="test", split_size=None, seed=20261020,
         length=None, sha256=None,
     ),
-    "snowflake_canonical_val": IndexListSpec(
-        task="snowflake", split="canonical_val", split_size=None, seed=20261019,
-        length=None, sha256=None,
-    ),
-    # Varied-topology Snowflake splits.  TODO: pin once generated.
-    "snowflake_varied_test": IndexListSpec(
-        task="snowflake", split="varied_test", split_size=None, seed=20261020,
-        length=None, sha256=None,
-    ),
-    "snowflake_varied_val": IndexListSpec(
-        task="snowflake", split="varied_val", split_size=None, seed=20261021,
+    "snowflake_val": IndexListSpec(
+        task="snowflake", split="val", split_size=None, seed=20261021,
         length=None, sha256=None,
     ),
 }

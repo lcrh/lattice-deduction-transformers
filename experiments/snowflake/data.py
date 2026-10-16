@@ -8,8 +8,8 @@ The covering grid is derived from the union of all hex positions that
 appear in the snowflake-sudoku topology module for n=1..19. Each
 hexagonal cell's `(q, r, direction)` maps to a fixed `(row, col)` in
 the covering grid. This is enough slots to embed every puzzle up to
-n=19; varied-topology layouts are translated into the same box by the
-generator. The representation is shared across orders, which is what makes
+n=19; the generator translates its grown layouts into the same box. The
+representation is shared across orders, which is what makes
 order-transfer experiments possible.
 
 A `SnowflakeDataset` generates samples with the same three sample types
@@ -19,8 +19,8 @@ Optional data-side augmentation: random whole-hex translation within the
 covering grid (`translate_aug`). Optional inputs: randomized multi-hot
 constraint-group channels (`constraint_group_embed`).
 
-Datasets are parquet files `snowflake_<dataset>_<split>.parquet` in the
-data directory (see `split_file`).
+Splits are parquet files `snowflake_<split>.parquet` in the data directory
+(see `split_file`).
 """
 
 from __future__ import annotations
@@ -30,7 +30,6 @@ import queue
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 import torch
@@ -51,23 +50,14 @@ GRID_COLS = 2 * (Q_MAX - Q_MIN + 1)   # 10
 SEQ_LEN = GRID_ROWS * GRID_COLS       # 150
 VOCAB = 6
 BLANK = 7       # puzzle value of an empty cell
-# Canonical order 19 has 19 hex groups + 24 meeting-point groups. Group IDs
-# are sampled from this whole range for every order, so every channel is used.
+# Order 19 has at most 19 hex groups + 24 meeting-point groups. Group IDs are
+# sampled from this whole range for every order, so every channel is used.
 MAX_CONSTRAINT_GROUPS = 43
 
 
-def split_name(dataset: str, split: str) -> str:
-    """Evaluator split name of `split` of `dataset`, e.g. "varied_test"."""
-    return f"{dataset}_{split}"
-
-
-def split_file(data_dir: str, name: str) -> Path:
-    """Parquet file of split `name` (see split_name)."""
-    return Path(data_dir) / f"snowflake_{name}.parquet"
-
-
-def split_path(data_dir: str, dataset: str, split: str) -> Path:
-    return split_file(data_dir, split_name(dataset, split))
+def split_file(data_dir: str, split: str) -> Path:
+    """Parquet file of `split` ("train", "val" or "test")."""
+    return Path(data_dir) / f"snowflake_{split}.parquet"
 
 
 def cell_index(cp: dict) -> int:
@@ -170,28 +160,9 @@ def puzzle_orders(puzzles: list[dict]) -> np.ndarray:
 
 
 def select_pool(puzzles: list[dict], cfg: "SnowflakeConfig") -> np.ndarray:
-    """Row indices a dataset with `cfg` trains on, in sampling-pool order.
-
-    `train_order_counts` draws an exact number of puzzles per order (order
-    mix-in); otherwise `train_orders` filters by order and `n_puzzles` takes
-    a seeded subset.
-    """
+    """Row indices a dataset with `cfg` trains on: `train_orders`, then a seeded `n_puzzles` subset."""
     orders = puzzle_orders(puzzles)
     rng = np.random.default_rng(cfg.seed)
-    if cfg.train_order_counts is not None:
-        counts = {int(k): int(v) for k, v in cfg.train_order_counts.items()}
-        if cfg.n_puzzles is not None and sum(counts.values()) != cfg.n_puzzles:
-            raise ValueError(f"train_order_counts sum to {sum(counts.values())}, "
-                             f"but n_puzzles={cfg.n_puzzles}")
-        chosen = []
-        for order, count in sorted(counts.items()):
-            available = np.where(orders == order)[0]
-            if count > len(available):
-                raise ValueError(f"{count} puzzles of order {order} requested, "
-                                 f"{len(available)} available")
-            chosen.append(available[rng.choice(len(available), count, replace=False)])
-        pool = np.concatenate(chosen)
-        return pool[rng.permutation(len(pool))]
     pool = np.arange(len(puzzles))
     if cfg.train_orders is not None:
         pool = pool[np.isin(orders, cfg.train_orders)]
@@ -209,12 +180,8 @@ def select_pool(puzzles: list[dict], cfg: "SnowflakeConfig") -> np.ndarray:
 @dataclass
 class SnowflakeConfig:
     data_dir: str = "data"
-    dataset: Literal["canonical", "varied"] = "canonical"   # generator topology
     n_puzzles: int | None = None        # subset size, None = all
     train_orders: list[int] | None = None   # keep only these orders (None = all)
-    # Exact per-order composition {order: count}, e.g. a few higher-order
-    # puzzles mixed into a small-order pool. Overrides train_orders.
-    train_order_counts: dict[int, int] | None = None
     translate_aug: bool = False         # random whole-hex translation per sample
     constraint_group_embed: bool = False    # append constraint-group channels
     seed: int = 42
@@ -295,7 +262,7 @@ def load_states(puzzles: list[dict], indices, rng: np.random.Generator | None = 
 class SnowflakeDataset:
     def __init__(self, cfg: SnowflakeConfig):
         self.cfg = cfg
-        puzzles = load_puzzles(split_path(cfg.data_dir, cfg.dataset, "train"))
+        puzzles = load_puzzles(split_file(cfg.data_dir, "train"))
         self.pool_indices = select_pool(puzzles, cfg)
         self.puzzles = [puzzles[i] for i in self.pool_indices]
         self.n_puzzles = len(self.puzzles)

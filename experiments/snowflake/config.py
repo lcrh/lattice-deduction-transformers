@@ -1,7 +1,7 @@
 """Snowflake Sudoku experiment config.
 
-Defaults (configs/snowflake/paper.yaml): the varied-topology dataset, trained
-and evaluated on orders 4-8. Order-transfer configs are configs/snowflake/ood_*.yaml.
+Defaults (configs/snowflake/paper.yaml): trained and evaluated on orders 4-8.
+Order-transfer configs are configs/snowflake/ood_*.yaml.
 """
 
 from __future__ import annotations
@@ -31,13 +31,13 @@ class SnowflakeExperiment(Experiment):
     model: LoopedTransformerConfig = field(
         default_factory=lambda: LoopedTransformerConfig(cls_token=True))
     data: SnowflakeConfig = field(default_factory=lambda: SnowflakeConfig(
-        dataset="varied", n_puzzles=500, train_orders=[4, 5, 6, 7, 8], translate_aug=True))
+        n_puzzles=500, train_orders=[4, 5, 6, 7, 8], translate_aug=True))
     train: TrainConfig = field(default_factory=TrainConfig)
     solve: SolveConfig = field(default_factory=lambda: SolveConfig(
         step=snowflake_step(cls_threshold=0.6, augment=True),
         max_rounds=1000, n_chains=64, batch_size=512))
     eval: EvalConfig = field(default_factory=lambda: EvalConfig(
-        index_list="snowflake_varied_test", index_filter={"orders": [4, 5, 6, 7, 8]},
+        index_list="snowflake_test", index_filter={"orders": [4, 5, 6, 7, 8]},
         stop="full", workers=8))
 
     def __post_init__(self):
