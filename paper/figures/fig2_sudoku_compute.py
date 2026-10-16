@@ -20,7 +20,7 @@ import numpy as np                  # noqa: E402
 
 from paper.manifest import REPO, table_hints  # noqa: E402
 from paper.tables.common import (  # noqa: E402
-    by_entry, cli, done, load_rows, pdf_bytes, read_results, write_output,
+    by_entry, cli, done, load_rows, pdf_bytes, read_results, seeds_cell, write_output,
 )
 
 PERCENTILES = (50, 75, 90, 95)
@@ -35,7 +35,11 @@ def solved_forwards(record: dict, root: Path = REPO) -> np.ndarray:
 def percentile_curves(records: list[dict], root: Path = REPO) -> dict:
     """{steps: {p: (mean, lo, hi)}} over seeds."""
     out = {}
-    for recs in by_entry(done(records)).values():
+    for all_recs in by_entry(records).values():
+        recs = done(all_recs)
+        print(f"{all_recs[0]['entry']}: seeds {seeds_cell(all_recs)}")
+        if not recs:
+            continue
         steps = recs[0]["x"] if recs[0].get("x") is not None else recs[0]["train_steps"]
         per_seed = [np.percentile(solved_forwards(r, root), PERCENTILES) for r in recs]
         arr = np.array(per_seed)

@@ -233,6 +233,12 @@ def main(argv: list[str] | None = None) -> None:
 
     hints = table_hints(args.manifest)
     records = read_results(args.manifest, args.results)
+    if args.cmd == "extract-failures":
+        # H must cover every anchor: reruns are only evaluated on it.
+        unfinished = [r["key"] for r in records
+                      if r["entry"] == hints["anchors"] and r not in done(records)]
+        if unfinished:
+            raise SystemExit(f"anchor evals not finished: {', '.join(unfinished)}")
     attempts = load_attempts(records, hints["anchors"], hints["reruns"])
     anchors = [a for a in attempts if a.full]
     if not anchors:

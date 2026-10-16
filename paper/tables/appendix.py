@@ -16,7 +16,7 @@ from pathlib import Path
 from paper.manifest import REPO, TableHints, table_hints
 from paper.tables.common import (
     Table, by_entry, cli, delta_text, done, escape, eval_rule, load_rows, mean, mean_std, num,
-    paired_vs, pct, pm, read_results, write_output,
+    paired_vs, pct, pm, read_results, seeds_cell, write_output,
 )
 
 
@@ -36,6 +36,7 @@ def build(manifest: str, records: list[dict], hints: TableHints, root: Path = RE
           label: str | None = None) -> Table:
     finished = done(records)
     entries = by_entry(finished)
+    seeds = {name: seeds_cell(recs) for name, recs in by_entry(records).items()}
     reference = hints.get("reference")
     orders = hints.get("per_order")
     ref_records = entries.get(reference, [])
@@ -49,7 +50,7 @@ def build(manifest: str, records: list[dict], hints: TableHints, root: Path = RE
     columns += ["Calls/solve", "Wrong", "Timeouts", "Unsound (\\%)"]
 
     def row(name: str, recs: list[dict]) -> list[str]:
-        cells = [escape(recs[0]["label"]), str(len(recs)),
+        cells = [escape(recs[0]["label"]), seeds[name],
                  pm(*mean_std([r["accuracy"] for r in recs]))]
         if reference:
             cells.append("(ref.)" if name == reference or not ref_records

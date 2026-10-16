@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -101,17 +102,25 @@ def run_compute(rec: dict) -> dict:
     fwd = ldt_forward_flops(rec["model_dim"], rec["model_layers"], rec["model_loops"],
                             rec["model_seq_len"], rec.get("model_ffn_mult") or 4.0,
                             bool(rec.get("model_cls")))
+    train_s = rec.get("train_post_compile_seconds")
+    eval_s = rec.get("gpu_seconds")
     out = {
         "forward_gflops": fwd / 1e9,
         "train_pflops": 3 * fwd * rec["train_batch"] * rec["train_steps"] / 1e15,
-        # Training loop after the compile step, excluding monitoring solves.
-        "train_b200_h": (rec.get("train_post_compile_seconds") or 0) / 3600,
-        "eval_b200_h": ((rec.get("gpu_seconds") or 0) + (rec.get("startup_seconds") or 0)) / 3600,
+        # Training loop after the compile step, excluding monitoring solves; None
+        # until the run has trained (or been evaluated), so means skip it.
+        "train_b200_h": train_s / 3600 if train_s is not None else None,
+        "eval_b200_h": ((eval_s + (rec.get("startup_seconds") or 0)) / 3600
+                        if eval_s is not None else None),
     }
     if rec.get("calls_mean") is not None:
         # Each model call runs every chain of the puzzle once.
         out["inference_gflops_per_puzzle"] = (rec["calls_mean"] * rec["solve_chains"] * fwd / 1e9)
     return out
+
+
+def _cell(x: float | None, digits: int = 2) -> str:
+    return "--" if x is None or math.isnan(x) else f"{x:.{digits}f}"
 
 
 def compute_table(manifests: list[str], results_dir: Path = RESULTS) -> str:
@@ -127,8 +136,9 @@ def compute_table(manifests: list[str], results_dir: Path = RESULTS) -> str:
             avg = {k: mean([p.get(k) for p in per]) for k in per[0]}
             lines.append(
                 f"| {manifest} | {entry} | {avg['forward_gflops']:.3f} | "
-                f"{avg['train_pflops']:.2f} | {avg['train_b200_h']:.2f} | "
-                f"{avg['eval_b200_h']:.2f} | {avg.get('inference_gflops_per_puzzle', 0):.1f} |")
+                f"{avg['train_pflops']:.2f} | {_cell(avg['train_b200_h'])} | "
+                f"{_cell(avg['eval_b200_h'])} | "
+                f"{_cell(avg.get('inference_gflops_per_puzzle'), 1)} |")
     lines += ["", "| Baseline | Fwd GFLOPs (one ACT step) | Max inference GFLOPs / puzzle |",
               "|---|---:|---:|"]
     for arch in BASELINES.values():

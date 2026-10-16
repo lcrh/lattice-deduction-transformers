@@ -149,12 +149,20 @@ def test_figures_and_main_tables_render(tmp_path):
     baseline = {"label": "TRM", "result": {"n": 10000, "exact_accuracy": 0.79, "wrong": 2100,
                                            "exact_accuracy_ci": [0.78, 0.80],
                                            "gpu_seconds": 50.0}}
-    tex = table1_sudoku.build(records, [baseline], {"smallest_k": 7, "n_total": 422786})
-    assert "TRM & 10,000 & 79.0 [78.0, 80.0]" in tex.to_latex()
-    assert "LDT portfolio, 7 models" in tex.to_latex()
+    portfolio_json = {"smallest_k": 2, "n_models": 3, "n_total": 1000,
+                      "residue_natural_order": [5, 0, 0],
+                      "selection": {"first": [{}, {"correct": 4, "wrong": 1}, {}],
+                                    "majority": [{}, {"correct": 3, "unsolved": 2}, {}]}}
+    missing = dict(records[0], key="A1/steps_500/seed2", seed=2, status="not started", n=None)
+    tex = table1_sudoku.build(records + [missing], [baseline], portfolio_json).to_latex()
+    assert "TRM & -- & 10,000 & 79.0 [78.0, 80.0] & 2,100/10,000" in tex
+    assert "steps\\_500 & 2/3 &" in tex                        # a seed is missing
+    assert "LDT portfolio, 2 models, oracle & -- & 1,000 & 100.000 & -- & 0" in tex
+    assert "first answer & -- & 1,000 & 99.900 & 1/1,000" in tex
+    assert "majority vote & -- & 1,000 & 99.800 & 0/1,000" in tex
 
     maze = [dict(r, label="LDT, K=1") for r in records if r["entry"] == "steps_500"]
     sweep = [{"step": 10, "n": 1000, "exact": 700, "lenient": 800},
              {"step": 20, "n": 1000, "exact": 720, "lenient": 810}]
     tex = table3_maze.build(maze, [{"label": "HRM", "result": sweep}], "last", root=tmp_path)
-    assert "HRM (step 20) & 1 & 81.0 & 72.0 & 190" in tex.to_latex()
+    assert "HRM (step 20) & 1 & 81.0 & 72.0 & 190 & 0" in tex.to_latex()

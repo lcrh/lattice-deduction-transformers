@@ -43,6 +43,20 @@ def done(records: list[dict]) -> list[dict]:
     return [r for r in records if r.get("status") == "done" and r.get("n") is not None]
 
 
+def seeds_cell(recs: list[dict]) -> str:
+    """Finished runs of one entry: "3", or "2/3" with a printed warning when some are missing."""
+    n_done = len(done(recs))
+    if n_done < len(recs):
+        print(f"warning: {recs[0]['entry']}: {n_done} of {len(recs)} runs finished")
+        return f"{n_done}/{len(recs)}"
+    return str(n_done)
+
+
+def seeds_text(records: list[dict]) -> str:
+    """Caption text for the number of finished seeds per entry, e.g. "3" or "2--3"."""
+    return n_range([len(v) for v in by_entry(done(records)).values()])
+
+
 def mean(values: list[float]) -> float:
     return mean_std(values)[0]
 

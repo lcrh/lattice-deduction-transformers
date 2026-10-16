@@ -115,6 +115,25 @@ def statuses(runs: list[Run], view: VolumeView, ledger: list[LedgerRecord],
     return {r.key: run_state(r, view, latest, call_state) for r in runs}
 
 
+def in_flight(runs: list[Run], ledger: list[LedgerRecord],
+              call_state: Callable[[str], CallState] | None) -> set[str]:
+    """Checkpoints and eval run dirs of `runs` that a launch under any key is still writing.
+
+    Manifests share checkpoints and eval blocks across keys, so a run's own
+    ledger entry is not enough. Offline (`call_state=None`), every launched
+    target counts as in flight.
+    """
+    wanted = {r.checkpoint for r in runs if r.checkpoint} | {r.run_dir for r in runs if r.run_dir}
+    busy: set[str] = set()
+    for record in latest_ledger(ledger).values():
+        targets = {record.checkpoint, record.eval_run_dir} & wanted
+        if not targets or record.kind == "command":
+            continue
+        if call_state is None or record.call_id is None or call_state(record.call_id) == "running":
+            busy |= targets
+    return busy
+
+
 def load_ledger(view: VolumeView) -> list[LedgerRecord]:
     try:
         return read_ledger(view.listdir, view.read)
@@ -167,11 +186,16 @@ def baseline_command(run: Run) -> list[str]:
     return ["uv", "run", "modal", "run", "-n", baseline_name(run), *run.command]
 
 
-def plan_launches(runs: list[Run], states: dict[str, State],
-                  retry_failed: bool = False) -> list[Launch]:
-    """One Launch per run, in manifest order; runs that share a checkpoint train once."""
+def plan_launches(runs: list[Run], states: dict[str, State], retry_failed: bool = False,
+                  busy: set[str] | frozenset[str] = frozenset()) -> list[Launch]:
+    """One Launch per run, in manifest order.
+
+    Runs that share a checkpoint train once and runs that share eval blocks
+    evaluate once; `busy` (see `in_flight`) holds targets already being written.
+    """
     out = []
-    training: set[str] = set()
+    training: set[str] = set(busy)
+    evaluating: set[str] = set(busy)
     for run in runs:
         state = states[run.key]
         if state in ("done", "running", "launched", "blocked"):
@@ -181,14 +205,22 @@ def plan_launches(runs: list[Run], states: dict[str, State],
         elif run.kind == "command":
             out.append(Launch(run, baseline_command(run), "baseline eval", baseline_name(run)))
         elif state in ("trained", "partial") and run.kind != "train":
+            if run.run_dir in evaluating:
+                out.append(Launch(run, None, "waits for a run evaluating the same blocks"))
+                continue
+            evaluating.add(run.run_dir)
             out.append(Launch(run, eval_command(run), "evaluate existing checkpoint",
                               run.app_name(with_eval=True)))
         elif run.kind == "eval":
             out.append(Launch(run, None, "blocked: training not finished"))
         elif run.checkpoint in training:
             out.append(Launch(run, None, "waits for a run training the same checkpoint"))
+        elif run.kind != "train" and run.run_dir in evaluating:
+            out.append(Launch(run, None, "waits for a run evaluating the same blocks"))
         else:
             training.add(run.checkpoint)
+            if run.kind != "train":
+                evaluating.add(run.run_dir)
             out.append(Launch(run, train_command(run),
                               "train" if run.kind == "train" else "train + evaluate",
                               run.app_name()))
@@ -379,7 +411,8 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "collect":
         print(f"wrote {collect(args.manifest, runs, view, states, with_rows=args.rows)}")
     elif args.cmd == "launch":
-        plan = plan_launches(runs, states, args.retry_failed)
+        busy = in_flight(runs, ledger, None if offline else modal_call_state)
+        plan = plan_launches(runs, states, args.retry_failed, busy)
         todo = [launch for launch in plan if launch.cmd is not None][:args.limit]
         for launch in plan:
             print(f"  {launch.run.key:<40} {launch.reason}")

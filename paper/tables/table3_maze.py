@@ -15,7 +15,7 @@ from typing import Literal
 from paper.manifest import REPO, table_hints
 from paper.tables.common import (
     Table, baseline_rows, by_entry, cli, done, escape, load_rows, mean_std, num, pct, pm,
-    read_results, write_output,
+    read_results, seeds_cell, seeds_text, write_output,
 )
 
 
@@ -33,26 +33,33 @@ def _sweep_point(sweep: list[dict], step: MazeStep) -> dict:
 
 def build(records: list[dict], baselines: list[dict], maze_step: MazeStep = "last",
           root: Path = REPO) -> Table:
-    columns = ["Method", "Seeds", "Lenient acc. (\\%)", "Exact acc. (\\%)", "Wrong"]
+    columns = ["Method", "Seeds", "Lenient acc. (\\%)", "Exact acc. (\\%)", "Wrong", "Timeouts"]
     body = []
     for b in baselines:
         p = _sweep_point(b["result"], maze_step)
+        # The baselines always answer: every miss is a wrong answer.
         body.append([escape(b["label"]) + f" (step {p['step']:,})", "1",
                      pct(p["lenient"] / p["n"]), pct(p["exact"] / p["n"]),
-                     num(p["n"] - p["lenient"])])
-    for name, recs in by_entry(done(records)).items():
+                     num(p["n"] - p["lenient"]), "0"])
+    for all_recs in by_entry(records).values():
+        seeds = seeds_cell(all_recs)
+        recs = done(all_recs)
+        if not recs:
+            continue
         exact = []
         for rec in recs:
             rows = load_rows(rec, root)
             exact.append(sum(r.get("label") == "CORRECT_GT" for r in rows) / len(rows))
-        body.append([escape(recs[0]["label"]), str(len(recs)),
+        body.append([escape(recs[0]["label"]), seeds,
                      pm(*mean_std([r["accuracy"] for r in recs])), pm(*mean_std(exact)),
-                     num(sum(r["wrong"] for r in recs))])
+                     num(sum(r["wrong"] for r in recs)), num(sum(r["timeout"] for r in recs))])
     selection = {"best": "best checkpoint by lenient test accuracy",
                  "last": "final checkpoint"}.get(str(maze_step), f"step {maze_step}")
     caption = ("Maze-Hard (30$\\times$30) test accuracy on all 1,000 test mazes. Lenient: any "
-               "shortest path; exact: the dataset's reference path. LDT: mean $\\pm$ std over "
-               f"seeds. Baselines: {selection}.")
+               "shortest path; exact: the dataset's reference path. Wrong: an answer that is "
+               "not a shortest path; timeouts: no answer within the round budget, summed over "
+               f"seeds. LDT: mean $\\pm$ std over {seeds_text(records)} seeds. "
+               f"Baselines: {selection}.")
     return Table(columns=columns, rows=body, caption=caption, label="tab:maze")
 
 

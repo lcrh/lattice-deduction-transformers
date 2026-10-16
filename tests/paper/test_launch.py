@@ -268,3 +268,24 @@ def test_collect_writes_csv_and_reported_rows(tmp_path, monkeypatch):
     got = [json.loads(line)
            for line in (tmp_path / rec["rows_path"]).read_text().splitlines()]
     assert [r["pos"] for r in got] == [0, 1, 2, 3]
+
+
+def test_plan_waits_for_shared_targets_in_flight_under_another_key():
+    t1 = _by_key(_runs("table1_sudoku"))
+    a0 = _by_key(_runs("appendix_d_soundness"))
+    m1, default = t1["M1/steps2k/seed0"], a0["A0/default/seed0"]
+    assert m1.checkpoint == default.checkpoint          # same training settings, one checkpoint
+    record = dataclasses.replace(_ledger_record(m1.key, 1.0, call="fc-m1"),
+                                 checkpoint=m1.checkpoint)
+    runs = list(a0.values())
+    busy = launch.in_flight(runs, [record], {"fc-m1": "running"}.get)
+    assert busy == {default.checkpoint}
+    states = {r.key: "not started" for r in runs}
+    plan = {p.run.key: p for p in launch.plan_launches(runs, states, busy=busy)}
+    assert plan[default.key].cmd is None and "same checkpoint" in plan[default.key].reason
+    assert not launch.in_flight(runs, [record], {"fc-m1": "finished"}.get)
+    # Two runs of one plan that share eval blocks evaluate them once.
+    trained = {r.key: "trained" for r in runs}
+    twice = [default, dataclasses.replace(default, key="A0/default_copy/seed0")]
+    plan = launch.plan_launches(twice, {**trained, "A0/default_copy/seed0": "trained"})
+    assert plan[0].cmd is not None and plan[1].cmd is None

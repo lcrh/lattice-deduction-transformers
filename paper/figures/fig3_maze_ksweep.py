@@ -14,13 +14,19 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt     # noqa: E402
 import numpy as np                  # noqa: E402
 
-from paper.tables.common import by_entry, cli, done, pdf_bytes, read_results, write_output  # noqa: E402
+from paper.tables.common import (  # noqa: E402
+    by_entry, cli, done, pdf_bytes, read_results, seeds_cell, write_output,
+)
 
 
 def k_curve(records: list[dict]) -> dict:
     """{K: (mean, min, max)} of accuracy over seeds."""
     out = {}
-    for recs in by_entry(done(records)).values():
+    for all_recs in by_entry(records).values():
+        recs = done(all_recs)
+        print(f"{all_recs[0]['entry']}: seeds {seeds_cell(all_recs)}")
+        if not recs:
+            continue
         acc = np.array([r["accuracy"] for r in recs])
         out[int(recs[0]["x"])] = (acc.mean(), acc.min(), acc.max())
     return dict(sorted(out.items()))
