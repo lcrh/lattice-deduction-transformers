@@ -19,20 +19,18 @@ Optional data-side augmentation: random whole-hex translation within the
 covering grid (`translate_aug`). Optional inputs: randomized multi-hot
 constraint-group channels (`constraint_group_embed`).
 
-Datasets are parquet files `snowflake_<split>.parquet` in the data
-directory, where the split name carries the dataset: the canonical-topology
-dataset uses plain `train`/`val`/`test`, other datasets prefix it
-(`varied_train`, ...). See `split_name`.
+Datasets are parquet files `snowflake_<dataset>_<split>.parquet` in the
+data directory (see `split_file`).
 """
 
 from __future__ import annotations
 
 import json
-import random
+import queue
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from queue import Queue
+from typing import Literal
 
 import numpy as np
 import torch
@@ -52,18 +50,29 @@ GRID_ROWS = 3 * (R_MAX - R_MIN + 1)   # 15
 GRID_COLS = 2 * (Q_MAX - Q_MIN + 1)   # 10
 SEQ_LEN = GRID_ROWS * GRID_COLS       # 150
 VOCAB = 6
+BLANK = 7       # puzzle value of an empty cell
 # Canonical order 19 has 19 hex groups + 24 meeting-point groups. Group IDs
 # are sampled from this whole range for every order, so every channel is used.
 MAX_CONSTRAINT_GROUPS = 43
 
 
 def split_name(dataset: str, split: str) -> str:
-    """Split name for `dataset` ("canonical" keeps the legacy file names)."""
-    return split if dataset == "canonical" else f"{dataset}_{split}"
+    """Evaluator split name of `split` of `dataset`, e.g. "varied_test"."""
+    return f"{dataset}_{split}"
+
+
+def split_file(data_dir: str, name: str) -> Path:
+    """Parquet file of split `name` (see split_name)."""
+    return Path(data_dir) / f"snowflake_{name}.parquet"
 
 
 def split_path(data_dir: str, dataset: str, split: str) -> Path:
-    return Path(data_dir) / f"snowflake_{split_name(dataset, split)}.parquet"
+    return split_file(data_dir, split_name(dataset, split))
+
+
+def cell_index(cp: dict) -> int:
+    """Covering-grid index of a topology `cell_positions` entry."""
+    return cell_to_grid_idx(cp["q"], cp["r"], cp["direction"])
 
 
 def cell_to_grid_idx(q: int, r: int, direction: str) -> int:
@@ -96,13 +105,13 @@ def puzzle_to_state(puzzle_rec: dict) -> tuple[np.ndarray, np.ndarray, np.ndarra
 
     for cell_id_str, cp in cell_positions.items():
         cell_id = int(cell_id_str)
-        idx = cell_to_grid_idx(cp["q"], cp["r"], cp["direction"])
+        idx = cell_index(cp)
         mask[idx] = True
         # Ground-truth one-hot (digits 1..6 → indices 0..5).
         y[idx, solution[cell_id] - 1] = 1.0
         # Input powerset: given → one-hot; blank (value=7) → all-ones.
         val = puzzle[cell_id]
-        if val == 7:
+        if val == BLANK:
             x[idx, :] = 1.0
         else:
             x[idx, val - 1] = 1.0
@@ -125,10 +134,8 @@ def constraint_group_features(puzzle_rec: dict, rng: np.random.Generator) -> np.
     features = np.zeros((SEQ_LEN, MAX_CONSTRAINT_GROUPS), dtype=np.float32)
     positions = topology["cell_positions"]
     for group, group_id in zip(constraints, ids):
-        cells = group["cells"] if isinstance(group, dict) else group
-        for cell_id in cells:
-            cp = positions[str(cell_id)]
-            features[cell_to_grid_idx(cp["q"], cp["r"], cp["direction"]), group_id] = 1.0
+        for cell_id in group["cells"]:
+            features[cell_index(positions[str(cell_id)]), group_id] = 1.0
     return features
 
 
@@ -167,7 +174,7 @@ def select_pool(puzzles: list[dict], cfg: "SnowflakeConfig") -> np.ndarray:
 
     `train_order_counts` draws an exact number of puzzles per order (order
     mix-in); otherwise `train_orders` filters by order and `n_puzzles` takes
-    a seeded subset. With neither, this is the historical subset selection.
+    a seeded subset.
     """
     orders = puzzle_orders(puzzles)
     rng = np.random.default_rng(cfg.seed)
@@ -202,7 +209,7 @@ def select_pool(puzzles: list[dict], cfg: "SnowflakeConfig") -> np.ndarray:
 @dataclass
 class SnowflakeConfig:
     data_dir: str = "data"
-    dataset: str = "canonical"          # "canonical" or a generated variant, e.g. "varied"
+    dataset: Literal["canonical", "varied"] = "canonical"   # generator topology
     n_puzzles: int | None = None        # subset size, None = all
     train_orders: list[int] | None = None   # keep only these orders (None = all)
     # Exact per-order composition {order: count}, e.g. a few higher-order
@@ -223,11 +230,7 @@ class SnowflakeConfig:
 
 
 def _apply_sample_type(x, y, mask, sample_type, cfg, rng):
-    """Variant of the sudoku-extreme _make_sample adapted for snowflake.
-
-    Operates in-place on x, y. Returns is_sat (True/False) and the (possibly
-    modified) y target.
-    """
+    """Apply a sample type to x in place; returns (is_sat, target)."""
     if sample_type == "zero_hints":
         return True, y
 
@@ -260,47 +263,26 @@ def _apply_sample_type(x, y, mask, sample_type, cfg, rng):
             wrong_digit = rng.choice([d for d in range(VOCAB) if d != correct_digit])
             x[idx] = 0.0
             x[idx, wrong_digit] = 1.0
-        # Target becomes Bot (all zeros) for the IN-PUZZLE cells.
-        y_bot = np.zeros_like(y)
-        # Out-of-puzzle cells stay zero (as they are). No change needed.
-        return False, y_bot
+        return False, np.zeros_like(y)      # unsatisfiable: empty target
 
     raise ValueError(f"unknown sample_type {sample_type!r}")
 
 
-def _load_puzzles(data_path: str) -> list[dict]:
-    """Load puzzle records from a JSON file or a parquet file/dir.
-
-    Parquet rows must have columns (id, n, code, puzzle, solution, givens,
-    topology) where `topology` is a JSON-encoded string of the nested
-    topology dict. This matches `experiments/snowflake/gen_data.py`'s
-    output. Plain JSON lists with the same row schema are also supported.
-    """
-    p = Path(data_path)
-    if p.suffix == ".parquet" or p.is_dir():
-        import pyarrow.parquet as pq
-        # Single-file or directory-of-shards.
-        if p.is_dir():
-            files = sorted(p.glob("*.parquet"))
-            tables = [pq.read_table(str(f)) for f in files]
-            import pyarrow as pa
-            table = pa.concat_tables(tables)
-        else:
-            table = pq.read_table(str(p))
-        rows = table.to_pylist()
-        # Decode the JSON-string topology column.
-        for r in rows:
-            r["topology"] = json.loads(r["topology"])
-        return rows
-    with open(data_path) as f:
-        return json.load(f)
+def load_puzzles(path: str | Path) -> list[dict]:
+    """Rows of a generator parquet file, with the JSON topology decoded."""
+    import pyarrow.parquet as pq
+    rows = pq.read_table(str(path)).to_pylist()
+    for r in rows:
+        r["topology"] = json.loads(r["topology"])
+    return rows
 
 
 def load_states(puzzles: list[dict], indices, rng: np.random.Generator | None = None,
                 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
-    """(x, y, in_puzzle_mask, groups) for `puzzles[i]`, i in `indices`, as
-    zero-hint covering-grid tensors. `groups` (constraint-group channels) is
-    built only when `rng` is given."""
+    """Zero-hint (x, y, in_puzzle_mask, groups) tensors for `puzzles[i]`, i in `indices`.
+
+    `groups` (constraint-group channels) is built only when `rng` is given.
+    """
     xs, ys, ms = zip(*(puzzle_to_state(puzzles[int(i)]) for i in indices))
     groups = None
     if rng is not None:
@@ -313,7 +295,7 @@ def load_states(puzzles: list[dict], indices, rng: np.random.Generator | None = 
 class SnowflakeDataset:
     def __init__(self, cfg: SnowflakeConfig):
         self.cfg = cfg
-        puzzles = _load_puzzles(str(split_path(cfg.data_dir, cfg.dataset, "train")))
+        puzzles = load_puzzles(split_path(cfg.data_dir, cfg.dataset, "train"))
         self.pool_indices = select_pool(puzzles, cfg)
         self.puzzles = [puzzles[i] for i in self.pool_indices]
         self.n_puzzles = len(self.puzzles)
@@ -326,7 +308,7 @@ class SnowflakeDataset:
         self._order = self.rng.permutation(self.n_puzzles)
         self._pos = 0
 
-        self._queue: Queue = Queue(maxsize=cfg.prefetch_batches)
+        self._queue: queue.Queue = queue.Queue(maxsize=cfg.prefetch_batches)
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._prefetch_loop, daemon=True)
         self._thread.start()
@@ -355,7 +337,8 @@ class SnowflakeDataset:
             bx, by, bm, bs, bg = [], [], [], [], []
             for _ in range(self.cfg.batch_size):
                 x, y, mask, is_sat, groups = self._next_sample()
-                bx.append(x); by.append(y); bm.append(mask); bs.append(is_sat); bg.append(groups)
+                for buf, v in zip((bx, by, bm, bs, bg), (x, y, mask, is_sat, groups)):
+                    buf.append(v)
             tx = torch.from_numpy(np.stack(bx))
             ty = torch.from_numpy(np.stack(by))
             tm = torch.from_numpy(np.stack(bm))
@@ -363,13 +346,12 @@ class SnowflakeDataset:
             tg = torch.from_numpy(np.stack(bg)) if self.cfg.constraint_group_embed else None
             try:
                 self._queue.put((tx, ty, tm, ts, tg), timeout=1.0)
-            except Exception:
+            except queue.Full:
                 if self._stop.is_set():
                     break
 
     def next_batch(self):
-        """(x, y, in_puzzle_mask, is_sat, groups); groups is None unless
-        constraint_group_embed."""
+        """(x, y, in_puzzle_mask, is_sat, groups); groups is None unless constraint_group_embed."""
         return self._queue.get()
 
     def close(self):

@@ -33,7 +33,7 @@ class Row(TypedDict, total=False):
     forwards_seq: int       # drained-chain estimate; only with solve.estimate_sequential
     n_resets: int           # chain resets
     solution: str           # accepted prediction, benchmark-specific encoding
-    verified: bool | None   # rule check of `solution` (None: no rule check for the benchmark)
+    verified: bool          # rule check of `solution` (never used for acceptance)
     deduced: int            # candidates eliminated over the puzzle's chain-rounds
     unsound: int            # of those, the solution's own
     cls: list[int]          # conflict head [tp, fp, fn, tn] against true conflicts

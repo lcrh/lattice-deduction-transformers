@@ -6,8 +6,7 @@ hex-topology construction; CVC5 for SAT solving. The fork adds varied
 layouts and leaves the canonical topology unchanged.
 
 Two topologies:
-  - `canonical`: one concentric-ring layout per order (the submitted paper's
-    dataset; regenerate with `--topology canonical --n-max 8`).
+  - `canonical`: one concentric-ring layout per order.
   - `varied` (default): a deterministic, randomly grown connected layout per
     base puzzle, translated into the covering grid. Orders 4-10 by default,
     so order-transfer experiments can hold out the larger orders.
@@ -16,11 +15,8 @@ Two topologies:
 puzzles × up to `variants` given-count variants) on the
 `lattice-diffusion-data` volume. A consolidation function reads all shards,
 deterministically reorders by (n, code), assigns final ids, and hash-splits
-rows into test / val / train (10% / 5% / rest). The test split is the same
-rule as before the validation split existed; val is carved out of train.
-Files are `/data/snowflake_<split>.parquet` with split names from
-`experiments/snowflake/data.py:split_name` (`test`, or `varied_test`, ...).
-Each file's parquet metadata records the generator settings and a content
+rows into test / val / train (10% / 5% / rest). Files are
+`/data/snowflake_<topology>_<split>.parquet`. Each file's parquet metadata records the generator settings and a content
 hash.
 
 Schema (per row):
@@ -42,6 +38,7 @@ src/lattice_diffusion/eval/indices.py.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import string
@@ -76,13 +73,12 @@ DATA_MOUNT = "/data"
 app = modal.App("snowflake-data-gen")
 
 def shards_dir(topology: str) -> str:
-    """Shard subdirectory on the volume (canonical keeps the historical name)."""
-    return "snowflake_shards" if topology == "canonical" else f"snowflake_shards_{topology}"
+    return f"snowflake_shards_{topology}"
 
 
 def split_file(topology: str, split: str) -> str:
-    """Mirrors experiments/snowflake/data.py:split_name (this image has no torch)."""
-    return f"snowflake_{split if topology == 'canonical' else f'{topology}_{split}'}.parquet"
+    """Mirrors experiments/snowflake/data.py:split_path (this image has no torch)."""
+    return f"snowflake_{topology}_{split}.parquet"
 
 
 @app.function(image=gen_image, cpu=1.0, timeout=3600,
@@ -298,10 +294,7 @@ def gen_shard(
 
 
 def assign_split(fingerprint: bytes, test_frac: float, val_frac: float, seed: int) -> str:
-    """Deterministic split from a row fingerprint: the same puzzle always
-    lands on the same side. Test is buckets [0, test); val the next
-    `val_frac` of buckets, so adding val leaves test unchanged."""
-    import hashlib
+    """Deterministic split from a row fingerprint: test = buckets [0, test_frac), val the next val_frac."""
     salt = f"snowflake-split-seed{seed}".encode()
     bucket = int.from_bytes(hashlib.sha256(salt + fingerprint).digest()[:4], "big") % 1000
     test_hi = int(round(test_frac * 1000))
@@ -309,26 +302,21 @@ def assign_split(fingerprint: bytes, test_frac: float, val_frac: float, seed: in
     return "test" if bucket < test_hi else ("val" if bucket < val_hi else "train")
 
 
-def fingerprint(row: dict, topology: str) -> bytes:
-    """Dedup/split key. Canonical rows share one layout per order, so
-    (puzzle, solution) identifies them (and keeps the historical split);
-    varied rows also include their layout."""
-    fp = bytes(bytearray(row["puzzle"])) + b"|" + bytes(bytearray(row["solution"]))
-    if topology != "canonical":
-        fp += b"|" + row["topology"].encode()
-    return fp
+def fingerprint(row: dict) -> bytes:
+    """Dedup / split key: puzzle, solution and layout."""
+    return (bytes(bytearray(row["puzzle"])) + b"|" + bytes(bytearray(row["solution"]))
+            + b"|" + row["topology"].encode())
 
 
-def content_sha256(rows: list[dict], topology: str) -> str:
+def content_sha256(rows: list[dict]) -> str:
     """Hash of a split's rows (ids and fingerprints, in file order)."""
-    import hashlib
     h = hashlib.sha256()
     for r in rows:
-        h.update(str(r["id"]).encode() + b":" + fingerprint(r, topology) + b"\n")
+        h.update(str(r["id"]).encode() + b":" + fingerprint(r) + b"\n")
     return h.hexdigest()
 
 
-def split_rows(rows: list[dict], topology: str, test_frac: float, val_frac: float,
+def split_rows(rows: list[dict], test_frac: float, val_frac: float,
                seed: int) -> tuple[dict[str, list[dict]], int]:
     """Dedup, order by (n, code), assign ids, and split. Returns the splits
     and the number of duplicates dropped."""
@@ -336,14 +324,14 @@ def split_rows(rows: list[dict], topology: str, test_frac: float, val_frac: floa
     seen: set[bytes] = set()
     deduped = []
     for r in rows:
-        fp = fingerprint(r, topology)
+        fp = fingerprint(r)
         if fp not in seen:
             seen.add(fp)
             deduped.append(r)
     splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
     for i, r in enumerate(deduped):
         r["id"] = i
-        splits[assign_split(fingerprint(r, topology), test_frac, val_frac, seed)].append(r)
+        splits[assign_split(fingerprint(r), test_frac, val_frac, seed)].append(r)
     return splits, len(rows) - len(deduped)
 
 
@@ -363,7 +351,7 @@ def consolidate(topology: str, generator: dict, test_frac: float = 0.1,
     if not shard_files:
         raise RuntimeError(f"no shards found in {in_dir}")
     rows = pa.concat_tables([pq.read_table(str(p)) for p in shard_files]).to_pylist()
-    splits, n_dropped = split_rows(rows, topology, test_frac, val_frac, seed)
+    splits, n_dropped = split_rows(rows, test_frac, val_frac, seed)
     print(f"  {len(rows)} rows, {n_dropped} duplicates dropped; "
           + ", ".join(f"{k}={len(v)}" for k, v in splits.items()), flush=True)
 
@@ -384,7 +372,7 @@ def consolidate(topology: str, generator: dict, test_frac: float = 0.1,
         meta = {**generator, "topology": topology, "split": split,
                 "split_rule": {"test_frac": test_frac, "val_frac": val_frac, "seed": seed},
                 "generator_repo": SNOWFLAKE_REPO_URL, "generator_commit": SNOWFLAKE_REPO_COMMIT,
-                "n_rows": len(split_rows_), "content_sha256": content_sha256(split_rows_, topology)}
+                "n_rows": len(split_rows_), "content_sha256": content_sha256(split_rows_)}
         path = Path(DATA_MOUNT) / split_file(topology, split)
         pq.write_table(_to_table(split_rows_, meta), str(path), compression="zstd")
         out["splits"][split] = {"path": str(path), "n_rows": len(split_rows_),
@@ -442,7 +430,7 @@ def print_index_pins(topology: str, sizes: dict[str, int]) -> None:
     src/lattice_diffusion/eval/indices.py for this dataset's eval lists."""
     from lattice_diffusion.eval import indices as index_lists
 
-    prefix = "snowflake" if topology == "canonical" else f"snowflake_{topology}"
+    prefix = f"snowflake_{topology}"
     print("\nPin these in src/lattice_diffusion/eval/indices.py:", flush=True)
     for split in ("test", "val"):
         name = f"{prefix}_{split}"

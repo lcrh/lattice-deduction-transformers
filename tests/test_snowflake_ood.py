@@ -17,7 +17,7 @@ from lattice_diffusion.eval.tasks import get_task
 from experiments.registry import experiment_class
 from experiments.snowflake import gen_data
 from experiments.snowflake.data import (
-    MAX_CONSTRAINT_GROUPS, SEQ_LEN, SnowflakeConfig, _load_puzzles, constraint_group_features,
+    MAX_CONSTRAINT_GROUPS, SEQ_LEN, SnowflakeConfig, load_puzzles, constraint_group_features,
     puzzle_to_state, random_translate, select_pool, split_name,
 )
 from tests.equivalence import fakes
@@ -28,7 +28,7 @@ CONFIGS = Path(__file__).parent.parent / "configs" / "snowflake"
 
 def _puzzles(tmp: Path, n: int = 140) -> list[dict]:
     fakes.write_snowflake_parquet(tmp / "p.parquet", n, seed=5, orders=ORDERS)
-    return _load_puzzles(str(tmp / "p.parquet"))
+    return load_puzzles(tmp / "p.parquet")
 
 
 def test_default_pool_is_the_historical_subset(tmp_path):
@@ -89,20 +89,18 @@ def _row(i, n, puzzle):
 def test_validation_split_leaves_test_unchanged():
     rows = [_row(i, 4 + i % 3, [i % 7 + 1, i // 7 % 7 + 1, i // 49 % 7 + 1, 7, 7, 7])
             for i in range(300)]
-    without, _ = gen_data.split_rows([dict(r) for r in rows], "canonical", 0.1, 0.0, seed=0)
-    with_val, _ = gen_data.split_rows([dict(r) for r in rows], "canonical", 0.1, 0.05, seed=0)
+    without, _ = gen_data.split_rows([dict(r) for r in rows], 0.1, 0.0, seed=0)
+    with_val, _ = gen_data.split_rows([dict(r) for r in rows], 0.1, 0.05, seed=0)
     assert [r["code"] for r in without["test"]] == [r["code"] for r in with_val["test"]]
     assert sorted(r["code"] for r in with_val["train"] + with_val["val"]) == \
         sorted(r["code"] for r in without["train"])
     assert with_val["val"]
 
 
-def test_canonical_dedup_ignores_layout_varied_does_not():
-    rows = [_row(i, 4, [1, 2, 3, 7, 7, 7]) for i in range(3)]   # same digits, 3 layouts
-    canonical, dropped = gen_data.split_rows([dict(r) for r in rows], "canonical", 0.1, 0.05, 0)
-    assert dropped == 2
-    varied, dropped = gen_data.split_rows([dict(r) for r in rows], "varied", 0.1, 0.05, 0)
-    assert dropped == 0 and sum(len(v) for v in varied.values()) == 3
+def test_dedup_keeps_distinct_layouts():
+    rows = [_row(i, 4, [1, 2, 3, 7, 7, 7]) for i in range(6)]   # same digits, 3 layouts
+    splits, dropped = gen_data.split_rows([dict(r) for r in rows], 0.1, 0.05, 0)
+    assert dropped == 3 and sum(len(v) for v in splits.values()) == 3
 
 
 def test_ood_configs_load_with_their_order_settings():
@@ -168,8 +166,8 @@ def test_filter_needs_task_support():
 
 
 def test_split_names():
-    assert split_name("canonical", "test") == "test"
+    assert split_name("canonical", "test") == "canonical_test"
     assert split_name("varied", "val") == "varied_val"
     assert gen_data.split_file("varied", "val") == "snowflake_varied_val.parquet"
-    assert gen_data.split_file("canonical", "train") == "snowflake_train.parquet"
+    assert gen_data.split_file("canonical", "train") == "snowflake_canonical_train.parquet"
     assert "snowflake_varied_test" in index_lists.SPECS

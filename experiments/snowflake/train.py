@@ -30,7 +30,7 @@ from experiments.sudoku.train import (
 )
 
 from experiments.snowflake.data import (
-    MAX_CONSTRAINT_GROUPS, VOCAB, SnowflakeDataset, _load_puzzles, load_states, split_name,
+    MAX_CONSTRAINT_GROUPS, VOCAB, SnowflakeDataset, load_puzzles, load_states, split_name,
     split_path,
 )
 
@@ -111,7 +111,7 @@ def _losses(out, state, orig_y, given_mask, is_sat, gt_conflict_target, in_puzzl
 
 def _monitor_set(path: str, n: int, device, group_embed: bool):
     """A seeded sample of `n` validation puzzles as (state, y, given_mask, in_puzzle_mask)."""
-    puzzles = _load_puzzles(path)
+    puzzles = load_puzzles(path)
     rng = np.random.default_rng(200)
     idx = rng.permutation(len(puzzles))[:n]
     x, y, mask, groups = load_states(puzzles, idx, rng if group_embed else None)

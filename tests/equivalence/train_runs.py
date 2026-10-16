@@ -39,9 +39,9 @@ def snowflake(tmp: Path, **train_kw) -> dict:
     from experiments.snowflake.data import SnowflakeConfig
     from experiments.snowflake.train import TrainConfig, snowflake_step, train
 
-    fakes.write_snowflake_parquet(tmp / "snowflake_train.parquet", 60, seed=31)
-    fakes.write_snowflake_parquet(tmp / "snowflake_test.parquet", 10, seed=32)
-    fakes.write_snowflake_parquet(tmp / "snowflake_val.parquet", 10, seed=33)
+    fakes.write_snowflake_parquet(tmp / "snowflake_canonical_train.parquet", 60, seed=31)
+    fakes.write_snowflake_parquet(tmp / "snowflake_canonical_test.parquet", 10, seed=32)
+    fakes.write_snowflake_parquet(tmp / "snowflake_canonical_val.parquet", 10, seed=33)
     exp = SnowflakeExperiment(
         model=fakes.tiny_model_cfg(),
         data=SnowflakeConfig(data_dir=str(tmp), seed=42, n_puzzles=40),

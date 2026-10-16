@@ -191,10 +191,10 @@ uv run modal run --detach experiments/snowflake/run.py --config configs/snowflak
 ```
 
 Eval rows record each puzzle's order, so per-order accuracy comes from the
-rows. The submitted paper's canonical-topology dataset (one concentric layout
-per order, orders 4–8) is still available with
-`gen_data.py --topology canonical --n-max 8` and `--set "data.dataset=canonical
-data.translate_aug=false eval.index_list=snowflake_test"`.
+rows. The canonical-topology dataset (one concentric layout per order) is
+generated with `gen_data.py --topology canonical --n-max 8` and used with
+`--set "data.dataset=canonical data.translate_aug=false
+eval.index_list=snowflake_canonical_test"`.
 
 ### Maze-Hard (Table 3, K=1 and K=512)
 

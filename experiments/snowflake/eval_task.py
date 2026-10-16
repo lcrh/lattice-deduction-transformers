@@ -1,32 +1,29 @@
-"""Snowflake Sudoku adapter for the shared evaluator (lattice_diffusion.eval).
+"""Snowflake Sudoku adapter for the shared evaluator.
 
-Split `s` is the generated parquet `snowflake_<s>.parquet` in the data
-directory (e.g. `varied_test`, see data.split_name); indices are row
-positions in it. Evaluation is zero-hint. Rows carry the puzzle's order so
-per-order accuracy can be computed from them, and an index filter on
-`orders` restricts an index list to some orders (order-transfer evals).
+A split is a generated parquet file (data.split_file); indices are its rows.
+Evaluation is zero-hint. Rows carry the puzzle's order, and an `orders` index
+filter restricts a list to some orders.
 """
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import numpy as np
 import torch
 
 from lattice_diffusion.eval.tasks import EvalTask
 
-from experiments.eval_common import build_solve_config, load_eval_model, result_rows
+from experiments.eval_common import (
+    build_solve_config, eval_device, load_eval_model, result_rows, unwrap,
+)
 from experiments.snowflake.data import (
-    _load_puzzles, cell_to_grid_idx, load_states, puzzle_orders, split_name,
+    BLANK, cell_index, load_puzzles, load_states, puzzle_orders, split_file, split_name,
 )
 from experiments.snowflake.train import N_CHANNELS, VOCAB, _build_state, _given_mask
 from experiments.sudoku.solve import solve
 
 
 def solution_string(state: torch.Tensor, mask: torch.Tensor) -> str:
-    """Digits 1..6 of the in-puzzle cells in covering-grid order, '0' where
-    the cell is not a singleton."""
+    """Digits of the in-puzzle cells in covering-grid order, '0' where not a singleton."""
     vocab = state[..., :VOCAB]
     single = vocab.sum(dim=-1) == 1
     digits = ((vocab.argmax(dim=-1) + 1) * single.long())[mask]
@@ -34,29 +31,27 @@ def solution_string(state: torch.Tensor, mask: torch.Tensor) -> str:
 
 
 def is_valid_solution(state: torch.Tensor, puzzle_rec: dict) -> bool:
-    """Rule check of a solved lattice against the puzzle's own topology:
-    every cell a singleton, givens kept, every constraint group all-different."""
+    """Every cell a singleton, givens kept, every constraint group all-different."""
     vocab = state[..., :VOCAB]
     topology = puzzle_rec["topology"]
     digit = {}
     for cell_id, cp in topology["cell_positions"].items():
-        cell = vocab[cell_to_grid_idx(cp["q"], cp["r"], cp["direction"])]
+        cell = vocab[cell_index(cp)]
         if int(cell.sum()) != 1:
             return False
         digit[int(cell_id)] = int(cell.argmax()) + 1
     for cell_id, given in enumerate(puzzle_rec["puzzle"]):
-        if given != 7 and digit[cell_id] != given:
+        if given != BLANK and digit[cell_id] != given:
             return False
     for group in topology["constraints"]:
-        cells = group["cells"] if isinstance(group, dict) else group
-        values = [digit[int(c)] for c in cells]
+        values = [digit[int(c)] for c in group["cells"]]
         if len(set(values)) != len(values):
             return False
     return True
 
 
 def _uses_group_channels(model) -> bool:
-    return getattr(model, "_orig_mod", model).cfg.n_channels > N_CHANNELS
+    return unwrap(model).cfg.n_channels > N_CHANNELS
 
 
 class SnowflakeTask(EvalTask):
@@ -64,17 +59,17 @@ class SnowflakeTask(EvalTask):
 
     def __init__(self, data_dir: str) -> None:
         super().__init__(data_dir)
-        self._splits: dict[str, list[dict]] = {}
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._pools: dict[str, list[dict]] = {}
+        self.device = eval_device()
 
     def _puzzles(self, split: str) -> list[dict]:
-        if split not in self._splits:
-            self._splits[split] = _load_puzzles(str(Path(self.data_dir) / f"snowflake_{split}.parquet"))
-        return self._splits[split]
+        if split not in self._pools:
+            self._pools[split] = load_puzzles(split_file(self.data_dir, split))
+        return self._pools[split]
 
     def split_size(self, split: str) -> int:
         import pyarrow.parquet as pq
-        return pq.ParquetFile(Path(self.data_dir) / f"snowflake_{split}.parquet").metadata.num_rows
+        return pq.ParquetFile(split_file(self.data_dir, split)).metadata.num_rows
 
     def filter_indices(self, split: str, indices: np.ndarray, index_filter: dict) -> np.ndarray:
         unknown = set(index_filter) - {"orders"}
@@ -86,11 +81,14 @@ class SnowflakeTask(EvalTask):
     def load_model(self, checkpoint: str, dropout_p: float, compile: bool):
         return load_eval_model(checkpoint, dropout_p, self.device, compile)
 
+    def default_solve(self) -> dict:
+        from experiments.snowflake.config import SnowflakeExperiment
+        return SnowflakeExperiment().solve_dict()
+
     def warmup(self, model) -> None:
         from experiments.snowflake.config import SnowflakeExperiment
-        exp = SnowflakeExperiment()
-        self.solve_block(model, split_name(exp.data.dataset, "test"), np.arange(8),
-                         exp.solve_dict())
+        self.solve_block(model, split_name(SnowflakeExperiment().data.dataset, "test"),
+                         np.arange(8), self.default_solve())
 
     def solve_block(self, model, split: str, indices: np.ndarray, solve_dict: dict) -> list[dict]:
         puzzles = self._puzzles(split)
@@ -108,7 +106,6 @@ class SnowflakeTask(EvalTask):
         solution, mask = res.solution.cpu(), mask.cpu()
         recs = [puzzles[int(i)] for i in indices]
         solutions = [solution_string(solution[j], mask[j]) for j in range(len(indices))]
-        verified = [is_valid_solution(solution[j], recs[j]) if "constraints" in recs[j]["topology"]
-                    else None for j in range(len(indices))]
+        verified = [is_valid_solution(solution[j], recs[j]) for j in range(len(indices))]
         return result_rows(res, indices, cfg, solutions, verified,
                            extra=[{"order": int(r["n"])} for r in recs])
