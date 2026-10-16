@@ -20,7 +20,9 @@ from lattice_diffusion.data.maze_hard import _download_and_cache
 from lattice_diffusion.eval.tasks import EvalTask, TaskBlock
 
 from experiments.eval_common import build_solve_config, eval_device, load_eval_model, result_rows
-from experiments.maze.data import MazeConfig, _build_or_load_pregen, grid_dims, rescore
+from experiments.maze.data import (
+    MazeConfig, _build_or_load_pregen, grid_dims, rescore, shortest_path_check,
+)
 from experiments.sudoku.solve import solve
 
 
@@ -81,7 +83,7 @@ class MazeTask(EvalTask):
         cfg = build_solve_config(solve_dict)
         given_mask = x.sum(dim=-1) == 1
         with torch.no_grad():
-            res = solve(model, x, y, given_mask, cfg)
+            res = solve(model, x, y, given_mask, cfg, is_correct=shortest_path_check(h, w))
         outcome = rescore(res, y, h, w)
 
         valid, minimal, exact = (outcome.valid.tolist(), outcome.minimal.tolist(),

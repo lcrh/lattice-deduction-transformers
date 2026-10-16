@@ -60,6 +60,9 @@ def result_rows(res: SolveResult, indices: np.ndarray, cfg: SolveConfig, solutio
     """One eval row per puzzle (see lattice_diffusion.eval.scheduler.Row)."""
     correct, wrong = res.correct.tolist(), res.wrong.tolist()
     rounds, calls = res.round_solved.tolist(), res.puzzle_calls.tolist()
+    # Forwards count deduction passes: rounds times the puzzle's mean passes per round.
+    multi_pass = cfg.step.max_passes > 1
+    held = res.puzzle_rounds.tolist() if multi_pass else None
     resets = res.n_resets.tolist()
     n_givens = given_mask.sum(dim=-1).tolist()
     diag = res.puzzle_diag.tolist()
@@ -71,12 +74,14 @@ def result_rows(res: SolveResult, indices: np.ndarray, cfg: SolveConfig, solutio
     rows = []
     for j, dataset_idx in enumerate(indices.tolist()):
         status = "correct" if correct[j] else ("wrong" if wrong[j] else "timeout")
+        passes = calls[j] / held[j] if multi_pass and held[j] > 0 else 1
         row = {
             "idx": dataset_idx,
             "status": status,
             "rounds": rounds[j],
             "calls": calls[j],
-            "forwards": ((rounds[j] + 1) if correct[j] else cfg.max_rounds) * cfg.n_chains,
+            "forwards": round(((rounds[j] + 1) if correct[j] else cfg.max_rounds)
+                              * cfg.n_chains * passes),
             "n_resets": resets[j],
             "n_givens": int(n_givens[j]),
             "solution": solutions[j] if status != "timeout" else "",
@@ -87,6 +92,7 @@ def result_rows(res: SolveResult, indices: np.ndarray, cfg: SolveConfig, solutio
         }
         if seq is not None:
             fwd, win, done = seq[j]
+            fwd = round(fwd * passes)
             row.update(forwards_seq=fwd, seq_winning_idx=win, seq_attempts_done=done,
                        seq_avg_attempt_len=fwd / (win + 1) if win >= 0 else None)
         if pass_diag is not None:

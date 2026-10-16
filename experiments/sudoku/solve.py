@@ -17,7 +17,7 @@ Augmentation happens inside `dpll_step`; everything here is in the canonical fra
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, get_args
+from typing import Callable, Literal, get_args
 
 import torch
 
@@ -42,7 +42,7 @@ class DecisionStack:
     """Per-chain stack of decisions since the last restart, for backtracking.
 
     Stores the post-deduction state each decision was made from and the decided
-    (cell, candidate).
+    (cell, candidate), in a ring buffer that keeps the last `max_depth` decisions.
     """
 
     def __init__(self, B: int, S: int, C: int, max_depth: int, device):
@@ -57,17 +57,16 @@ class DecisionStack:
         self.depth[rows] = 0
 
     def push(self, state, deduce_mask, new_state, decided_rows, vd: int) -> None:
-        """Record the decision each of `decided_rows` just made (stored up to `max_depth`)."""
+        """Record the decision each of `decided_rows` just made, overwriting the oldest when full."""
         post_deduce = state.masked_fill(deduce_mask, 0.0)
         pre_alive = (post_deduce[..., :vd] > 0.5).sum(dim=-1)
         post_alive = (new_state[..., :vd] > 0.5).sum(dim=-1)
         decided_cell = (pre_alive > 1) & (post_alive == 1)
         made = decided_rows & decided_cell.any(dim=-1)
-        room = self.depth < self.max_depth
-        rows = (made & room).nonzero(as_tuple=True)[0]
+        rows = made.nonzero(as_tuple=True)[0]
         if rows.numel():
             cell = decided_cell[rows].float().argmax(dim=-1)
-            d = self.depth[rows]
+            d = self.depth[rows] % self.max_depth
             self.states[rows, d] = (post_deduce[rows] > 0.5).to(torch.uint8)
             self.cells[rows, d] = cell
             self.digits[rows, d] = new_state[rows, cell, :vd].argmax(dim=-1)
@@ -77,7 +76,8 @@ class DecisionStack:
                   gt_idx, vd: int) -> torch.Tensor:
         """Move each conflicting chain in `rows` back per `cfg.backtrack`, into `new_state`.
 
-        `gt_idx` ([S], the solution) only counts unsound negations. Returns True
+        `gt_idx` ([S], the solution) only counts unsound negations. A target
+        older than the kept decisions moves to the oldest one kept. Returns True
         per row where the chain restarted from the root.
         """
         depth = self.depth[rows]
@@ -89,8 +89,8 @@ class DecisionStack:
             target = depth - j.clamp(min=1)
         else:  # uniform_depth
             target = (torch.rand(n, device=rows.device) * depth.float()).floor().long()
-        target = target.clamp(min=0)
-        at_root = (depth > self.max_depth) | (depth <= 0)
+        target = torch.maximum(target, (depth - self.max_depth).clamp(min=0))
+        at_root = depth <= 0
         for i in range(n):
             b, d = int(rows[i]), int(depth[i])
             self.stats.backtracks += 1
@@ -100,10 +100,11 @@ class DecisionStack:
                 self.depth[b] = 0
                 continue
             k = int(target[i])
-            new_state[b] = self.states[b, k].float()
+            new_state[b] = self.states[b, k % self.max_depth].float()
             at_root[i] = k == 0 and not cfg.backtrack_negate
             if cfg.backtrack_negate:
-                cell, digit = int(self.cells[b, k]), int(self.digits[b, k])
+                cell = int(self.cells[b, k % self.max_depth])
+                digit = int(self.digits[b, k % self.max_depth])
                 self.stats.negations += 1
                 self.stats.unsound_negations += int(digit == int(gt_idx[cell]))
                 new_state[b, cell, digit] = 0.0
@@ -162,6 +163,7 @@ class SolveResult:
     solution: torch.Tensor      # [P, S, C]
     n_chains: int
     puzzle_calls: torch.Tensor  # [P] long, model calls while the puzzle held a slot
+    puzzle_rounds: torch.Tensor  # [P] long, solver rounds while the puzzle held a slot
     # [P, 6] long over the puzzle's active chain-rounds: candidates deduced, of
     # those the solution's own (unsound), conflict head tp / fp / fn / tn.
     puzzle_diag: torch.Tensor
@@ -203,13 +205,16 @@ class SolveResult:
 
 
 def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
-          in_puzzle_mask: torch.Tensor | None = None) -> SolveResult:
+          in_puzzle_mask: torch.Tensor | None = None,
+          is_correct: Callable[[torch.Tensor, torch.Tensor], bool] | None = None) -> SolveResult:
     """Solve every puzzle, streaming them through the batch.
 
     Args:
         puzzle, ground_truth: [P, S, C].
         given_mask: [P, S] cells fixed by the puzzle.
         in_puzzle_mask: [P, S]; cells outside it take no part (Snowflake's covering grid).
+        is_correct: (solution [S, C], ground truth [S, C]) -> bool for an accepted
+            chain; default is exact equality (Maze accepts any shortest path).
     """
     P, S, C = puzzle.shape
     K = cfg.n_chains
@@ -286,8 +291,11 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
 
     next_puzzle = 0
     total_calls = 0
+    total_rounds = 0
     slot_calls_start = torch.zeros(M, dtype=torch.long, device=device)
+    slot_rounds_start = torch.zeros(M, dtype=torch.long, device=device)
     puzzle_calls_out = torch.full((P,), -1, dtype=torch.long, device=device)
+    puzzle_rounds_out = torch.full((P,), -1, dtype=torch.long, device=device)
     diag_active_chain_rounds = 0
 
     def fill(slot: int, p: int) -> None:
@@ -296,6 +304,7 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         slot_resets[slot] = 0
         slot_gt_idx[slot] = ground_truth[p].argmax(dim=-1)
         slot_calls_start[slot] = total_calls
+        slot_rounds_start[slot] = total_rounds
         rows = slice(slot * K, (slot + 1) * K)
         puz = puzzle[p].unsqueeze(0).expand(K, -1, -1)
         state[rows] = puz
@@ -328,6 +337,7 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         if max_passes > 1:
             puzzle_pass_diag_out[p] = slot_pass_diag[slot]
         puzzle_calls_out[p] = total_calls - slot_calls_start[slot]
+        puzzle_rounds_out[p] = total_rounds - slot_rounds_start[slot]
         slot_puzzle[slot] = -1
         chain_done[slot * K:(slot + 1) * K] = True
 
@@ -344,6 +354,7 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                 "orig_x": original if model_cfg.needs_puzzle else None, "carry": carry},
         )
         total_calls += info["n_passes"]
+        total_rounds += 1
         new_carry = info["carry_out"] if carry is not None else None
 
         # Soundness diagnostics over active rows.
@@ -413,10 +424,13 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                     solved_out[p] = True
                     round_solved_out[p] = slot_round[slot]
                     solutions_out[p] = new_state[b]
-                    is_correct = bool((new_state[b].argmax(dim=-1)
-                                       == ground_truth[p].argmax(dim=-1)).all().item())
-                    correct_out[p] = is_correct
-                    wrong_out[p] = not is_correct
+                    if is_correct is not None:
+                        ok = is_correct(new_state[b], ground_truth[p])
+                    else:
+                        ok = bool((new_state[b].argmax(dim=-1)
+                                   == ground_truth[p].argmax(dim=-1)).all().item())
+                    correct_out[p] = ok
+                    wrong_out[p] = not ok
                     if not seq:
                         evictions.append(slot)
                         continue
@@ -508,6 +522,7 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         solution=solutions_out,
         n_chains=K,
         puzzle_calls=puzzle_calls_out,
+        puzzle_rounds=puzzle_rounds_out,
         puzzle_diag=puzzle_diag_out,
         diag_active_chain_rounds=diag_active_chain_rounds,
         forwards_seq=forwards_seq_out,

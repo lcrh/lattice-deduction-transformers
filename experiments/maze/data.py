@@ -782,6 +782,14 @@ class MazeOutcome(NamedTuple):
     gt_exact: torch.Tensor      # ... equal to the reference path
 
 
+def shortest_path_check(H: int, W: int):
+    """`solve(is_correct=...)` for mazes: any valid shortest path is correct."""
+    def is_correct(solution: torch.Tensor, target: torch.Tensor) -> bool:
+        valid, minimal, _ = maze_classify(solution.unsqueeze(0), target.unsqueeze(0), H, W)
+        return bool((valid & minimal)[0].item())
+    return is_correct
+
+
 def rescore(res, targets: torch.Tensor, H: int, W: int) -> MazeOutcome:
     """Re-score a maze SolveResult in place: any shortest path counts as correct.
 

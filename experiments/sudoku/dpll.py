@@ -163,6 +163,9 @@ def dpll_step(
     cur_state = state
     deduce_union = None
     pass_masks: list[torch.Tensor] = []
+    # Multi-pass: a row is frozen once a pass finds it solved or in conflict.
+    done = torch.zeros(B, dtype=torch.bool, device=device)
+    was_done = done
     for n_passes in range(1, max_passes + 1):
         frame = Frame.sample(cfg, B, S, C, device)
         state_aug = frame.state(cur_state)
@@ -195,13 +198,21 @@ def dpll_step(
 
         if max_passes == 1:
             break
+        was_done = done
+        if n_passes > 1:
+            conflict, solved, empty_cell, cls_fires = (
+                torch.where(was_done, old, new) for old, new in
+                zip(prev_status, (conflict, solved, empty_cell, cls_fires)))
+        prev_status = (conflict, solved, empty_cell, cls_fires)
         pass_mask = frame.invert(deduce_mask_aug.float()) > 0.5 if cfg.augment else deduce_mask_aug
-        cur_state = frame.invert(new_state_aug)
+        pass_mask = pass_mask & ~was_done[:, None, None]
+        cur_state = torch.where(was_done[:, None, None], cur_state, frame.invert(new_state_aug))
         pass_masks.append(pass_mask)
         deduce_union = pass_mask if deduce_union is None else deduce_union | pass_mask
+        done = conflict | solved
         if n_passes == max_passes:
             break
-        if bool((conflict | all_singleton).all()) or not bool(pass_mask.any()):
+        if bool(done.all()) or not bool((pass_mask & ~done[:, None, None]).any()):
             break
     can_decide = ~conflict & ~solved
 
@@ -228,6 +239,8 @@ def dpll_step(
         new_state_aug[cd_b_idx, cell_idx, digit] = 1.0
 
     new_state = frame.invert(new_state_aug)
+    if max_passes > 1:
+        new_state = torch.where(was_done[:, None, None], cur_state, new_state)
     if deduce_union is not None:
         deduce_mask = deduce_union
     else:
