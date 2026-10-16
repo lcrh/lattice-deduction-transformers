@@ -5,7 +5,7 @@ import pytest
 import torch
 
 from lattice_diffusion import config as cfglib
-from lattice_diffusion.eval.stop import FixedN, stop_from_dict
+from lattice_diffusion.eval.stop import SequentialStop, stop_from_dict
 from experiments.registry import experiment_class
 from tests.equivalence import fakes, train_runs
 
@@ -70,11 +70,11 @@ def test_json_round_trip():
         assert cfglib.to_dict(cls.from_json(exp.to_json())) == cfglib.to_dict(exp)
 
 
-def test_ablation_config_uses_first_1000_test_puzzles():
+def test_ablation_config_caps_test_puzzles_at_4096():
     exp = cfglib.load(experiment_class("sudoku"), CONFIGS / "sudoku" / "ablation.yaml")
     spec = exp.eval_spec("/ckpt/a.pt")
     assert spec.index_list == "sudoku_test_perm"
-    assert stop_from_dict(spec.stop) == FixedN(1000)
+    assert stop_from_dict(spec.stop) == SequentialStop(n_max=4096)
 
 
 def test_maze_synthetic_eval_spec():

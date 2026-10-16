@@ -3,7 +3,7 @@ import random
 import pytest
 
 from lattice_diffusion.eval.scheduler import ThreadExecutor, n_blocks, run_blocks
-from lattice_diffusion.eval.stop import PRESETS, FixedN, NoStop, stop_from_dict
+from lattice_diffusion.eval.stop import PRESETS, FixedN, NoStop, SequentialStop, stop_from_dict
 
 from tests.eval.fakes import ReorderExecutor, block_solver, make_spec
 
@@ -113,7 +113,7 @@ def test_fixed_n_longer_than_list_is_exhausted():
 
 def test_fixed_n_round_trips_and_is_the_ablation_preset():
     assert stop_from_dict(FixedN(1000).to_dict()) == FixedN(1000)
-    assert PRESETS["ablation"] == FixedN(1000)
+    assert PRESETS["ablation"] == SequentialStop(n_max=4096)
 
 
 def test_failed_block_drains_in_flight_blocks_then_raises():

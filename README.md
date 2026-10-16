@@ -78,8 +78,9 @@ the finished prefix). Results go to
   the error rate is pinned down (100 failures, or a 95% confidence-sequence
   half-width of 0.1 points, after at least 1,000 puzzles);
 - `full`: every puzzle in the list;
-- `ablation`: exactly the first 1,000 puzzles, so ablation arms are scored
-  on the same puzzles.
+- `ablation`: the same rule, capped at 4,096 puzzles (8 blocks), so ablation
+  arms are compared on a common prefix; `ablation_10k` extends a finished
+  entry to 10,240 from the blocks already on disk.
 
 Blocks do not depend on the stop rule, so a `full` eval after a
 `sequential` one reuses its blocks, and rerunning an eval resumes it. To

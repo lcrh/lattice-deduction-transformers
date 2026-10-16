@@ -96,3 +96,27 @@ def test_inverse_binomial_rate_only_for_runs_stopped_on_failures(tmp_path):
     full = run_eval(dataclasses.replace(spec, stop=NoStop().to_dict()), tmp_path, _threads(spec),
                     log=lambda _: None)
     assert full.failure_rate_inverse_binomial == full.failure_rate
+
+
+
+def test_raising_the_cap_continues_from_existing_blocks(tmp_path):
+    from lattice_diffusion.eval.stop import SequentialStop
+
+    small = make_spec(stop=SequentialStop(n_max=1024, max_failures=10**6), n_workers=4)
+    first = run_eval(small, tmp_path, _threads(small), log=lambda _: None)
+    big = dataclasses.replace(small, stop=SequentialStop(n_max=2048, max_failures=10**6).to_dict())
+    assert big.run_dir(tmp_path) == small.run_dir(tmp_path)
+
+    submitted = []
+
+    class Recording(ThreadExecutor):
+        def submit(self, block):
+            submitted.append(block)
+            super().submit(block)
+
+    second = run_eval(big, tmp_path, lambda _: Recording(block_solver(big), n_workers=4),
+                      log=lambda _: None)
+    assert (first.n, second.n) == (1024, 2048)
+    assert min(submitted) == 1024 // small.block_size     # only the new blocks ran
+    assert summary_path(small.run_dir(tmp_path), small.stop).exists()
+    assert summary_path(big.run_dir(tmp_path), big.stop).exists()

@@ -113,7 +113,9 @@ class FixedN(StopRule):
 PRESETS: dict[str, StopRule] = {
     "sequential": SequentialStop(),
     "full": NoStop(),
-    "ablation": FixedN(1000),
+    # Appendix ablations: 8 blocks of 512; raise chosen entries to 20 blocks later (reuses the first 8).
+    "ablation": SequentialStop(n_max=4096),
+    "ablation_10k": SequentialStop(n_max=10240),
     "select": SequentialStop(n_max=4000),   # phase-1 default selection on sudoku_val
 }
 
