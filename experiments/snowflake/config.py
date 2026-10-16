@@ -14,7 +14,7 @@ from experiments.snowflake.data import SnowflakeConfig
 from experiments.snowflake.train import (
     GRID_COLS, GRID_ROWS, N_CHANNELS, SEQ_LEN, VOCAB, TrainConfig, snowflake_step,
 )
-from experiments.sudoku.config import check_cls_head
+from experiments.sudoku.config import check_options
 from experiments.sudoku.solve import SolveConfig
 
 
@@ -45,7 +45,7 @@ class SnowflakeExperiment(Experiment):
             self.train.step, vocab_dim=VOCAB, augment_dihedral=False))
         self.solve = dataclasses.replace(self.solve, step=dataclasses.replace(
             self.solve.step, vocab_dim=VOCAB, augment_dihedral=False))
-        check_cls_head(self.model, self.train)
+        check_options(self.model, self.train, self.solve, carry_supported=False)
 
     def localized(self, data_dir: str) -> "SnowflakeExperiment":
         return dataclasses.replace(self, data=dataclasses.replace(self.data, data_dir=data_dir))

@@ -175,6 +175,7 @@ def aug_forward(
     cell_perms: torch.Tensor | None = None,  # optional preallocated [8, S]; ignored when augment_dihedral=False
     vocab_dim: int | None = None,         # see sample_chain_augs; permutes only first vocab_dim channels
     return_all: bool = False,
+    carry_kw: dict | None = None,         # orig_x / carry for latent-carry models
 ):
     """Sample fresh per-row aug, apply to inputs, run model forward.
 
@@ -185,6 +186,9 @@ def aug_forward(
     `augment_dihedral=False` skips the spatial dihedral step entirely
     (snowflake covering grid isn't square; only digit-perm is a valid
     symmetry).
+
+    `carry_kw` is passed to the model as-is (a carried latent lives in a
+    fixed frame, so callers use it with `augment=False`).
 
     Returns:
       out: model output dict (logits in AUGMENTED frame).
@@ -223,7 +227,7 @@ def aug_forward(
         gm_aug = given_mask
         orig_y_aug = orig_y
 
-    out = model(state_aug, return_all=return_all)
+    out = model(state_aug, return_all=return_all, **(carry_kw or {}))
     aug_info = {
         "digit_perm": digit_perm,
         "dih_idx": dih_idx,

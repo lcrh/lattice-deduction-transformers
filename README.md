@@ -115,7 +115,19 @@ uv run modal run --detach experiments/sudoku/run.py --config configs/sudoku/pape
 ```
 
 `configs/sudoku/ablation.yaml` is the base for the appendix ablations (2K
-steps, `ablation` stop rule).
+steps, `ablation` stop rule). Each ablation is one override of it:
+
+| Ablation | Options |
+|---|---|
+| Recurrence / shape | `model.n_loops`, `model.num_layers`, `model.dim` (a static transformer is `n_loops=1`) |
+| Deep supervision | `train.supervise=final` |
+| Loss terms | `train.softmax_loss_weight` (λ_CE), `train.bce_pos_mult` / `bce_neg_mult`, `train.conflict_loss_weight=0` with `model.cls_token=false` |
+| Latent carry | `model.carry=h\|z\|zero_z` (with `train.step.augment=false solve.step.augment=false`) |
+| Deduction at inference | `solve.step.n_loops`, `solve.step.deduce_passes` (int or `fixpoint`), `solve.step.threshold`, `solve.step.cls_threshold` |
+| Search | `solve.step.cell_policy`, `solve.step.digit_policy`, `solve.backtrack`, `solve.backtrack_negate`; the same `step` options under `train.step` change the training rollouts |
+
+Eval-only ablations of an existing checkpoint go through
+`experiments/evaluate.py --set "solve...."`.
 
 > **Note.** As reported, these runs match the Sudoku-Extreme solve rate in
 > Table 1 (100%). We have since realized, however, that the reported figure

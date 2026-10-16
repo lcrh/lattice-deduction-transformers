@@ -356,6 +356,12 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
 
     stack = (DecisionStack(B, S, C, cfg.max_decision_depth, device)
              if cfg.backtrack != "root" else None)
+    # Latent-carry models (model.cfg.carry) pass a latent from step to step;
+    # it restarts at zero with its chain.
+    model_cfg = getattr(getattr(model, "_orig_mod", model), "cfg", None)
+    carry_mode = getattr(model_cfg, "carry", "off")
+    carry = (torch.zeros(B, S, model_cfg.dim, device=device)
+             if model_cfg is not None and model_cfg.carries_state else None)
     # rank_k: chain k of each puzzle takes the k-th best candidate.
     decide_rank = (torch.arange(B, device=device) % K
                    if cfg.step.digit_policy == "rank_k" else None)
@@ -419,6 +425,8 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         if in_puzzle_mask_b is not None:
             in_puzzle_mask_b[rows] = in_puzzle_mask[p].unsqueeze(0).expand(K, -1)
         chain_done[rows] = False
+        if carry is not None:
+            carry[rows] = 0
         slot_diag[slot] = 0
         if max_passes > 1:
             slot_pass_diag[slot] = 0
@@ -465,8 +473,11 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         new_state, conflict, just_solved_chain, _, info = dpll_step(
             model, state, given_mask_b, cfg.step,
             in_puzzle_mask=in_puzzle_mask_b, want_stats=False, decide_rank=decide_rank,
+            carry_kw=None if carry_mode == "off" else {
+                "orig_x": original if model_cfg.needs_puzzle else None, "carry": carry},
         )
         total_calls += info["n_passes"]
+        new_carry = info["carry_out"] if carry is not None else None
 
         # ----- Diagnostics on this round (active rows only) -----
         active_rows = ~chain_done                                              # [B]
@@ -572,6 +583,8 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         # Freeze wrong-singleton-frozen and empty-slot rows: don't let their
         # state mutate.
         new_state = torch.where(chain_done.view(-1, 1, 1), state, new_state)
+        if new_carry is not None:
+            new_carry = torch.where(chain_done.view(-1, 1, 1), carry, new_carry)
 
         evictions: list[int] = []
         for slot in range(M):
@@ -654,6 +667,8 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                 idx = local_reset + lo
                 if stack is None:
                     new_state[idx] = original[idx]
+                    if new_carry is not None:
+                        new_carry[idx] = 0
                 else:
                     at_root = stack.backtrack(idx, cfg, new_state, original,
                                               slot_gt_idx[slot], vd)
@@ -729,6 +744,8 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                           flush=True)
 
         state = new_state
+        if new_carry is not None:
+            carry = new_carry
 
         # Refill evicted slots with the next queued puzzles (or mark empty).
         for slot in evictions:

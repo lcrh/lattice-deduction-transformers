@@ -66,6 +66,9 @@ class TrainConfig:
     bce_neg_mult: float = 0.5
     softmax_loss_weight: float = 0.2
     conflict_loss_weight: float = 0.1
+    # Deep supervision: "all" averages the loss over every loop iteration's
+    # readout, "final" supervises only the last one.
+    supervise: str = "all"
 
     # The operator used to advance pool states during training. Augment
     # toggle lives at `step.augment`: both the grad-tracked forward
@@ -193,7 +196,7 @@ def _given_mask(orig_x: torch.Tensor) -> torch.Tensor:
 
 
 def _losses(out, state, orig_y, given_mask, is_sat, gt_conflict_target,
-            bce_pos_mult, bce_neg_mult, softmax_w, conflict_w):
+            bce_pos_mult, bce_neg_mult, softmax_w, conflict_w, supervise="all"):
     B, S, C = state.shape
     device = state.device
     bce_target = state * orig_y
@@ -207,9 +210,12 @@ def _losses(out, state, orig_y, given_mask, is_sat, gt_conflict_target,
     # cells.
     multi_alive_target = orig_y.sum(dim=-1) > 1                          # [B, S]
 
+    # Normalized by the number of supervised iterations, so "final" trains at
+    # the same per-readout gradient scale as "all".
     n_loops = len(out["bce"])
+    iterations = range(n_loops) if supervise == "all" else (n_loops - 1,)
     total = torch.zeros((), device=device)
-    for i in range(n_loops):
+    for i in iterations:
         total = total + weighted_bce_with_logits(out["bce"][i], bce_target, pos_w, neg_w)
 
         # Softmax CE on non-given, single-alive-target cells of SAT puzzles only.
@@ -226,7 +232,7 @@ def _losses(out, state, orig_y, given_mask, is_sat, gt_conflict_target,
             total = total + conflict_w * F.binary_cross_entropy_with_logits(
                 c_logits, gt_conflict_target.float(),
             )
-    return total / n_loops
+    return total / len(iterations)
 
 
 def _monitor_set(cache_dir: str, n: int, device) -> tuple[torch.Tensor, torch.Tensor]:
@@ -308,6 +314,10 @@ def train(exp: SudokuExperiment, ckpt_path: str | Path,
     # cell is multi-alive on all GT bits). α-of-surviving = OR over K.
     pool_last_alpha = pool_solutions.bool().any(dim=1).float()  # [P, S, C]
     pool_age = torch.zeros(pool_size, dtype=torch.long, device=device)
+    # Latent carried between a pool entry's steps (exp.model.carry h / z);
+    # reset to zero whenever the entry is backfilled.
+    pool_carry = (torch.zeros(pool_size, pool_state.shape[1], exp.model.dim, device=device)
+                  if exp.model.carries_state else None)
     print(f"Pool size: {pool_size}  (= bs={cfg.batch_size})  "
           f"augment={cfg.step.augment}", flush=True)
 
@@ -348,6 +358,10 @@ def train(exp: SudokuExperiment, ckpt_path: str | Path,
         last_alpha = pool_last_alpha[sample_idx]  # [B, S, C]
         orig_x = pool_orig_x[sample_idx]
         age = pool_age[sample_idx]
+        carry_kw = None
+        if exp.model.carry != "off":
+            carry_kw = {"orig_x": orig_x if exp.model.needs_puzzle else None,
+                        "carry": pool_carry[sample_idx] if pool_carry is not None else None}
         given_mask = _given_mask(orig_x)
         # `orig_y` for this step is the dynamic α(surviving K solutions),
         # falling back to `last_alpha` when |surviving|=0. For K=1 with
@@ -371,13 +385,14 @@ def train(exp: SudokuExperiment, ckpt_path: str | Path,
             augment=cfg.step.augment,
             cell_perms=cell_perms_train,
             return_all=True,
+            carry_kw=carry_kw,
         )
         loss = _losses(
             out,
             aug_info["aug_state"], aug_info["aug_orig_y"], aug_info["aug_given_mask"],
             is_sat_pre, gt_conflict_pre,
             cfg.bce_pos_mult, cfg.bce_neg_mult,
-            cfg.softmax_loss_weight, cfg.conflict_loss_weight,
+            cfg.softmax_loss_weight, cfg.conflict_loss_weight, cfg.supervise,
         )
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
@@ -399,8 +414,9 @@ def train(exp: SudokuExperiment, ckpt_path: str | Path,
         with torch.no_grad():
             new_state, detected_conflict, solved, _, info = dpll_step(
                 model, state, given_mask, cfg.step, orig_y=orig_y,
-                want_stats=want_info_stats,
+                want_stats=want_info_stats, carry_kw=carry_kw,
             )
+        new_carry = info["carry_out"].clone() if pool_carry is not None else None
         gt_conflict_post = _gt_conflict(new_state, orig_y)
 
         # ---- discard policy on the sampled batch ----
@@ -433,6 +449,8 @@ def train(exp: SudokuExperiment, ckpt_path: str | Path,
             new_solutions[discard] = f_solutions
             new_age[discard] = 0
             new_last_alpha[discard] = f_solutions.bool().any(dim=1).float()
+            if new_carry is not None:
+                new_carry[discard] = 0
         else:
             new_orig_x = orig_x
             new_solutions = solutions
@@ -443,6 +461,8 @@ def train(exp: SudokuExperiment, ckpt_path: str | Path,
         pool_solutions[sample_idx] = new_solutions
         pool_last_alpha[sample_idx] = new_last_alpha
         pool_age[sample_idx] = new_age
+        if pool_carry is not None:
+            pool_carry[sample_idx] = new_carry
 
         # ---- in-train monitoring (mini-solve on validation puzzles) ----
         if cfg.monitor_every > 0 and step % cfg.monitor_every == 0:

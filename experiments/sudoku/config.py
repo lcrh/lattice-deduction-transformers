@@ -16,12 +16,27 @@ from experiments.sudoku.solve import SolveConfig
 from experiments.sudoku.train import TrainConfig
 
 
-def check_cls_head(model: LoopedTransformerConfig, train) -> None:
-    """The conflict head exists iff it is trained."""
+def check_options(model: LoopedTransformerConfig, train, solve: SolveConfig,
+                  carry_supported: bool = True) -> None:
+    """Cross-block constraints between model, training and solver options."""
     if model.cls_token != (train.conflict_loss_weight > 0):
         raise ValueError(
             f"model.cls_token={model.cls_token} but train.conflict_loss_weight="
             f"{train.conflict_loss_weight}; the conflict head is trained iff it exists")
+    if train.supervise not in ("all", "final"):
+        raise ValueError(f"train.supervise must be all or final, got {train.supervise!r}")
+    if model.carry != "off":
+        if not carry_supported:
+            raise ValueError("latent carry is only implemented for the Sudoku trainer")
+        # The carried latent lives in a fixed frame and belongs to one
+        # trajectory: no per-step augmentation, one pass per step, and
+        # conflicts restart from the root (where the latent is reset).
+        for where, step in (("train.step", train.step), ("solve.step", solve.step)):
+            if step.augment or step.max_passes != 1:
+                raise ValueError(f"model.carry={model.carry!r} needs {where}.augment=false "
+                                 f"and {where}.deduce_passes=1")
+        if solve.backtrack != "root":
+            raise ValueError(f"model.carry={model.carry!r} needs solve.backtrack=root")
 
 
 @dataclass
@@ -41,7 +56,7 @@ class SudokuExperiment(Experiment):
     eval: EvalConfig = field(default_factory=EvalConfig)
 
     def __post_init__(self):
-        check_cls_head(self.model, self.train)
+        check_options(self.model, self.train, self.solve)
         if self.data.split != "train":
             raise ValueError("data.split must be train; evaluation splits live in eval")
 
