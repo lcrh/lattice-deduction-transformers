@@ -1,6 +1,8 @@
-"""Evaluate the official HRM maze-30x30-hard checkpoint with LENIENT scoring.
+"""Evaluate HRM checkpoints: Maze-30x30-hard (with LENIENT scoring) and
+Sudoku-Extreme (exact match on the first N puzzles of LDT's
+`sudoku_test_perm` ordering; default N = 10,000).
 
-HRM (https://github.com/sapientinc/HRM, vendored as the `HRM/` submodule) reports
+HRM (https://github.com/sapientinc/HRM, cloned at image-build time) reports
 `exact_accuracy`: the predicted grid must match the dataset's ONE labelled
 shortest path cell-for-cell. Mazes have many shortest paths, so that under-counts
 correct solutions. Here we additionally compute a **lenient** score: a prediction
@@ -16,16 +18,21 @@ dependencies are stubbed at runtime so nothing has to compile:
     the optimizer is only constructed by `init_train_state`).
 
 Usage:
-    uv run modal run experiments/hrm_eval/modal_eval.py
+    uv run modal run baselines/hrm_trm/hrm_eval/modal_eval.py            # maze, released ckpt
+    uv run modal run baselines/hrm_trm/hrm_eval/modal_eval.py::sudoku    # sudoku, released ckpt, first 10k of sudoku_test_perm
 """
 
+import json
 import os
+import time
 from collections import deque
+from pathlib import Path
 
 import modal
 
 HRM_REMOTE = "/root/HRM"
 CKPT_REPO = "sapientinc/HRM-checkpoint-maze-30x30-hard"
+SUDOKU_CKPT_REPO = "sapientinc/HRM-checkpoint-sudoku-extreme"
 # Pinned upstream HRM commit (https://github.com/sapientinc/HRM). Cloned fresh at
 # image-build time.
 # (flash-attn, adam-atan2) are stubbed at runtime in `_install_stubs()`.
@@ -44,9 +51,15 @@ image = (
         f"git clone https://github.com/sapientinc/HRM.git {HRM_REMOTE}",
         f"cd {HRM_REMOTE} && git checkout {HRM_COMMIT}",
     )
+    .add_local_file(Path(__file__).parent.parent / "sudoku_rows.py", "/root/sudoku_rows.py")
 )
 
-app = modal.App("hrm-maze-lenient-eval")
+app = modal.App("hrm-eval")
+
+# LDT volumes: the Sudoku cache (index-alignment check) and the eval root
+# where per-puzzle rows are written.
+ldt_data = modal.Volume.from_name("lattice-diffusion-data", create_if_missing=True)
+ldt_ckpt = modal.Volume.from_name("lattice-diffusion-checkpoints", create_if_missing=True)
 
 # maze token ids (build_maze_dataset.py: CHARSET="# SGo" -> ids 1..5, PAD=0)
 WALL, EMPTY, START, GOAL, PATH = 1, 2, 3, 4, 5
@@ -258,9 +271,8 @@ def _list_ckpts(run_dir: str):
 
 @app.local_entrypoint()
 def sweep(run_dir: str = "Maze-30x30-hard-1k ACT-torch/HierarchicalReasoningModel_ACTV1 pistachio-myna",
-          out: str = "repro/results/hrm_aug_sweep.json"):
+          out: str = "baselines/hrm_trm/results/hrm_aug_sweep.json"):
     """Eval EVERY checkpoint in a run dir (exact+lenient) -> JSON for plotting."""
-    import json
     ckpts = _list_ckpts.remote(run_dir)
     print(f"[sweep] {len(ckpts)} checkpoints in {run_dir}", flush=True)
     results = list(run.map(ckpts))
@@ -275,3 +287,134 @@ def sweep(run_dir: str = "Maze-30x30-hard-1k ACT-torch/HierarchicalReasoningMode
     for r in rows:
         print(f"  step {r['step']:>7}: exact={100*r['exact']/r['n']:.2f}%  "
               f"lenient={100*r['lenient']/r['n']:.2f}%", flush=True)
+
+
+
+@app.function(image=image, gpu="B200", timeout=6 * 3600, memory=32768,
+              volumes={"/ldt_data": ldt_data, "/ldt_ckpt": ldt_ckpt},
+              secrets=[modal.Secret.from_name("huggingface-secret")])
+def run_sudoku(indices: list[int], checkpoint: str = "", batch_size: int = 0,
+               tag: str = "sudoku_test_perm") -> dict:
+    """Exact-match accuracy on the given Sudoku-Extreme test indices, in order.
+
+    checkpoint="" -> the authors' released checkpoint (all_config.yaml beside
+    it). Writes per-puzzle rows + summary to the LDT checkpoint volume under
+    eval/baselines/hrm/<tag>/."""
+    import subprocess
+    import sys
+
+    _install_stubs()
+    os.chdir(HRM_REMOTE)
+    sys.path.insert(0, HRM_REMOTE)
+    sys.path.insert(0, "/root")
+
+    import numpy as np
+    import torch
+    import yaml
+    from huggingface_hub import hf_hub_download
+
+    import sudoku_rows
+
+    if checkpoint:
+        ckpt = checkpoint
+        cfg_path = os.path.join(os.path.dirname(checkpoint), "all_config.yaml")
+    else:
+        ckpt_dir = "/root/ckpt_sudoku"
+        ckpt = hf_hub_download(SUDOKU_CKPT_REPO, "checkpoint", local_dir=ckpt_dir)
+        hf_hub_download(SUDOKU_CKPT_REPO, "all_config.yaml", local_dir=ckpt_dir)
+        cfg_path = os.path.join(ckpt_dir, "all_config.yaml")
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+
+    # The train split is built (unaugmented) only because create_dataloader /
+    # init_train_state need its metadata; the test split is then cut down to
+    # `indices`.
+    print(f"[hrm] building sudoku dataset at {cfg['data_path']} …", flush=True)
+    subprocess.run([sys.executable, "dataset/build_sudoku_dataset.py",
+                    "--output-dir", cfg["data_path"], "--subsample-size", "1000",
+                    "--num-aug", "0"], cwd=HRM_REMOTE, check=True)
+    test_dir = os.path.join(cfg["data_path"], "test")
+    full_inputs = sudoku_rows.subset_test_split(test_dir, indices)
+    aligned = sudoku_rows.check_alignment(full_inputs, "/ldt_data/sudoku_extreme_test.pt")
+    if aligned is False:
+        raise RuntimeError("HRM test split does not match the LDT cache index order")
+
+    from pretrain import PretrainConfig, create_dataloader, init_train_state
+
+    config = PretrainConfig(**cfg)
+    if batch_size:
+        config.global_batch_size = batch_size
+    _, train_md = create_dataloader(
+        config, "train", test_set_mode=False, epochs_per_iter=1,
+        global_batch_size=config.global_batch_size, rank=0, world_size=1)
+    eval_loader, _ = create_dataloader(
+        config, "test", test_set_mode=True, epochs_per_iter=1,
+        global_batch_size=config.global_batch_size, rank=0, world_size=1)
+
+    train_state = init_train_state(config, train_md, world_size=1)
+    state = torch.load(ckpt, map_location="cuda")
+    try:
+        train_state.model.load_state_dict(state, assign=True)
+    except Exception:
+        train_state.model.load_state_dict(
+            {k.removeprefix("_orig_mod."): v for k, v in state.items()}, assign=True)
+    train_state.model.eval()
+
+    # Same loop as HRM's evaluate(), keeping argmax predictions instead of
+    # the full logits.
+    print(f"[hrm] running HRM ACT inference over {len(indices)} sudoku test puzzles …",
+          flush=True)
+    t_eval = time.time()
+    inputs, labels, preds = [], [], []
+    with torch.inference_mode():
+        for _, batch, _ in eval_loader:
+            batch = {k: v.cuda() for k, v in batch.items()}
+            with torch.device("cuda"):
+                carry = train_state.model.initial_carry(batch)
+            while True:
+                carry, _, _, out, all_finish = train_state.model(
+                    carry=carry, batch=batch, return_keys=["logits"])
+                if all_finish:
+                    break
+            inputs.append(batch["inputs"].cpu().numpy())
+            labels.append(batch["labels"].cpu().numpy())
+            preds.append(out["logits"].argmax(-1).cpu().numpy())
+    torch.cuda.synchronize()
+    eval_seconds = time.time() - t_eval
+
+    inputs, labels, preds = (np.concatenate(a) for a in (inputs, labels, preds))
+    keep = sudoku_rows.real_rows(inputs)
+    inputs, labels, preds = inputs[keep], labels[keep], preds[keep]
+    if not np.array_equal(inputs, np.load(os.path.join(test_dir, "all__inputs.npy"))):
+        raise RuntimeError("eval order does not match the subset test split order")
+
+    rows = sudoku_rows.build_rows(indices, labels, preds)
+    summary = sudoku_rows.summarize(
+        rows, model="HRM",
+        checkpoint=ckpt if checkpoint else f"hf://{SUDOKU_CKPT_REPO}/checkpoint",
+        hrm_commit=HRM_COMMIT, index_list="sudoku_test_perm", gpu="B200", n_gpus=1,
+        global_batch_size=config.global_batch_size,
+        eval_seconds=eval_seconds, gpu_seconds=eval_seconds,
+        index_aligned_with_ldt_cache=aligned,
+    )
+    sudoku_rows.write_outputs(f"/ldt_ckpt/eval/baselines/hrm/{tag}", rows, summary)
+    ldt_ckpt.commit()
+    print(json.dumps(summary, indent=2), flush=True)
+    return summary
+
+
+@app.local_entrypoint()
+def sudoku(n: int = 10_000, checkpoint: str = "", batch_size: int = 0,
+           out: str = "baselines/hrm_trm/results/hrm_sudoku.json"):
+    """Evaluate on the first n puzzles of sudoku_test_perm (LDT's ordering)."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import sudoku_rows
+
+    indices = sudoku_rows.first_n_of_test_perm(n)
+    summary = sudoku_rows.add_interval(
+        run_sudoku.remote(indices, checkpoint, batch_size, f"sudoku_test_perm_n{n}"))
+    with open(out, "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"wrote {out}", flush=True)

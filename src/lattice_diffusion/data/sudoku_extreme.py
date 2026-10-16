@@ -205,6 +205,22 @@ def _augment(
     return x.reshape(81, 9), y.reshape(81, 9)
 
 
+def select_pool(n_total: int, cfg: SudokuExtremeConfig) -> tuple[np.ndarray, np.random.Generator]:
+    """Absolute dataset indices a dataset with `cfg` draws from (validation
+    holdout, then the seeded `n_puzzles` subset), and the generator it then
+    continues with. Also used by baselines that must train on the same
+    puzzles as LDT."""
+    pool = np.arange(n_total)
+    if cfg.split == "train" and cfg.exclude_val:
+        from lattice_diffusion.eval.indices import load as load_index_list
+        val = load_index_list("sudoku_val", split_size=n_total).indices
+        pool = np.setdiff1d(pool, val, assume_unique=True)
+    rng = np.random.default_rng(cfg.seed)
+    if cfg.n_puzzles is not None and cfg.n_puzzles < len(pool):
+        pool = np.sort(rng.choice(pool, size=cfg.n_puzzles, replace=False))
+    return pool, rng
+
+
 class SudokuExtremeDataset:
     """Streaming on-demand dataset for sudoku powerset training.
 
@@ -224,16 +240,7 @@ class SudokuExtremeDataset:
         n_total = self.questions.shape[0]
 
         # Absolute dataset indices of the pool, after holdout and subsetting.
-        pool = np.arange(n_total)
-        if cfg.split == "train" and cfg.exclude_val:
-            from lattice_diffusion.eval.indices import load as load_index_list
-            val = load_index_list("sudoku_val", split_size=n_total).indices
-            pool = np.setdiff1d(pool, val, assume_unique=True)
-
-        # Select subset if requested
-        self.rng = np.random.default_rng(cfg.seed)
-        if cfg.n_puzzles is not None and cfg.n_puzzles < len(pool):
-            pool = np.sort(self.rng.choice(pool, size=cfg.n_puzzles, replace=False))
+        pool, self.rng = select_pool(n_total, cfg)
         if len(pool) < n_total:
             self.questions = self.questions[pool]
             self.answers = self.answers[pool]

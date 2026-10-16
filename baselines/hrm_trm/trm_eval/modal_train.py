@@ -4,8 +4,8 @@ CUDA-dev image's nvcc). Neither HRM nor TRM supports clean resume (both save
 weights only), so each run is bounded by Modal's 24h function timeout.
 
 Usage:
-    uv run modal run repro/trm_eval/modal_train.py::run_train --aug
-    uv run modal run repro/trm_eval/modal_train.py::run_train --no-aug
+    uv run modal run baselines/hrm_trm/trm_eval/modal_train.py::run_train --aug
+    uv run modal run baselines/hrm_trm/trm_eval/modal_train.py::run_train --no-aug
 """
 
 import os
@@ -50,6 +50,7 @@ TRAIN_ARGS = [
     "epochs=50000", "eval_interval=5000",
     "lr=2e-4", "puzzle_emb_lr=1e-4",
     "weight_decay=1.0", "puzzle_emb_weight_decay=1.0",
+    # Keep the arch overrides in sync with cfg_maze.yaml (used for eval).
     "arch.L_layers=2", "arch.H_cycles=3", "arch.L_cycles=4",
     "global_batch_size=768", "lr_warmup_steps=4000",
     "checkpoint_every_eval=True", "ema=True",

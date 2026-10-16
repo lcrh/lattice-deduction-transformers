@@ -7,10 +7,10 @@
 # NOTE: `modal run --detach` keeps streaming logs locally, so we background each
 # launch and `wait`. The remote apps survive even if you Ctrl-C this script.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 echo ">> TRM augmented maze training (B200)"
-uv run modal run --detach repro/trm_eval/modal_train.py::run_train --aug &
+uv run modal run --detach baselines/hrm_trm/trm_eval/modal_train.py::run_train --aug &
 echo ">> HRM augmented maze training (B200)"
-uv run modal run --detach repro/hrm_eval/modal_train.py::run_train --aug &
+uv run modal run --detach baselines/hrm_trm/hrm_eval/modal_train.py::run_train --aug &
 wait

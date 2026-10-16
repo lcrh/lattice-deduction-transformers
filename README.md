@@ -169,7 +169,7 @@ also records whether it matches the reference path.
 > solver, whereas a 30×30 maze admits many equally-optimal paths, and a
 > *lenient* "any valid optimal path" criterion scores ~7pp higher. We are
 > reconciling this and will update the paper. See
-> [`repro/README.md`](repro/README.md) for the full independent HRM/TRM
+> [`baselines/hrm_trm/README.md`](baselines/hrm_trm/README.md) for the full independent HRM/TRM
 > reproduction — the lenient metric, released-checkpoint evals, and a
 > with/without-augmentation training study.
 
@@ -221,6 +221,8 @@ experiments/
                       with a pregen cache) + trainer.
   <benchmark>/config.py     typed experiment config (defaults = paper recipe)
   <benchmark>/eval_task.py  adapter for the shared evaluator
+baselines/            HRM/TRM reproduction and evals, fine-tuned Qwen baseline
+                      (see baselines/README.md)
 tests/                CPU tests, including bit-exact equivalence fixtures
 ```
 
