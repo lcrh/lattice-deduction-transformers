@@ -38,8 +38,7 @@ def real_rows(inputs: np.ndarray) -> np.ndarray:
 
 
 def check_alignment(input_tokens: np.ndarray, cache_path: str) -> bool | None:
-    """True iff every upstream test input equals our cached puzzle at the
-    same index; None when the cache is not available."""
+    """Whether every upstream test input equals our cached puzzle at its index (None: no cache)."""
     if not os.path.exists(cache_path):
         return None
     import torch
@@ -52,9 +51,10 @@ def check_alignment(input_tokens: np.ndarray, cache_path: str) -> bool | None:
 
 
 def subset_test_split(test_dir: str, indices: list[int], expected_n: int = N_TEST) -> np.ndarray:
-    """Rewrite an upstream test split (one example per puzzle and group) to
-    the given dataset indices, in order. Returns the full-split inputs from
-    before the rewrite (for the alignment check)."""
+    """Cut an upstream test split down to `indices`, in order.
+
+    Returns the full-split inputs from before the rewrite, for the alignment check.
+    """
     inputs = np.load(os.path.join(test_dir, "all__inputs.npy"))
     labels = np.load(os.path.join(test_dir, "all__labels.npy"))
     if len(inputs) != expected_n:
@@ -116,8 +116,7 @@ def summarize(rows: list[dict], **extra) -> dict:
 
 
 def add_interval(summary: dict, alpha: float = 0.05) -> dict:
-    """Two-sided Clopper-Pearson interval on exact accuracy. Runs locally
-    (needs lattice_diffusion), not in the upstream images."""
+    """Add a two-sided Clopper-Pearson interval on exact accuracy (runs locally)."""
     from lattice_diffusion.eval.stats import binomial_upper
 
     n, k = summary["n"], summary["correct"]

@@ -52,8 +52,7 @@ ckpt_vol = modal.Volume.from_name("hrm-maze-aug-ckpts", create_if_missing=True)
 
 
 def _install_stubs():
-    """Inject fake `flash_attn` / `adam_atan2` modules so HRM imports without
-    any CUDA-extension build. Must run before importing HRM's `pretrain`."""
+    """Stub `flash_attn` / `adam_atan2` so HRM imports without CUDA builds (before `pretrain`)."""
     import types
 
     import torch

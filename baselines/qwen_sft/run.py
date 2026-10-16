@@ -313,8 +313,7 @@ def _evaluate_checkpoint(checkpoint: Path, rows: list[dict[str, Any]], cfg: Eval
               volumes={DATA_MOUNT: data_volume, CHECKPOINT_MOUNT: checkpoint_volume})
 def evaluate_run(run_dir: str, eval_cfg: dict, checkpoints: list[str] | None = None,
                  every_epochs: int = 2) -> list[dict[str, Any]]:
-    """Evaluate saved checkpoints of one run. `checkpoints` names specific
-    checkpoint-* dirs; otherwise every `every_epochs`-th epoch."""
+    """Evaluate the named checkpoint-* dirs of a run, or else every `every_epochs`-th epoch."""
     cfg = EvalConfig(**eval_cfg)
     run = Path(run_dir)
     run_config = json.loads((run / "run_config.json").read_text())

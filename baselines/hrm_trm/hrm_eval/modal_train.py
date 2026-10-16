@@ -98,11 +98,12 @@ def flash_attn_func(q, k, v, causal=False, **kwargs):
                        modal.Secret.from_name("wandb-secret")])  # WANDB_API_KEY
 def train(epochs: int = 120000, aug: bool = True, run_name: str = "",
           project: str = "maze-hard-repro"):
-    """HRM maze training, extended past the 20k-epoch recipe (~26k steps / ~4h)
-    to fill the 24h budget (~150k steps) so we capture the whole trajectory
-    (recipe-point AND overtrained later steps). `aug` toggles 8x dihedral
-    augmentation; checkpoints go to checkpoints/<project>/<run_name>. Uses the
-    REAL adam-atan2 (built into train_image) + flash-attn->SDPA shim."""
+    """HRM maze training, run past the 20k-epoch recipe to fill the 24 h budget.
+
+    `aug` toggles 8x dihedral augmentation; checkpoints go to
+    checkpoints/<project>/<run_name>. Uses the real adam-atan2 and an SDPA
+    shim for flash-attn.
+    """
     import sys
     import threading
 
@@ -160,10 +161,7 @@ def train(epochs: int = 120000, aug: bool = True, run_name: str = "",
 
 
 def _patch_torch_optim_compat():
-    """adam-atan2 0.0.3 was written against an older torch and calls
-    Optimizer._cuda_graph_capture_health_check(), which newer torch removed.
-    It's a CUDA-graph safety hook (no-op for normal training, which HRM uses) —
-    restoring it as a no-op is an API-compat shim, NOT an optimizer change."""
+    """Restore the CUDA-graph health check adam-atan2 0.0.3 calls (a no-op outside capture)."""
     import torch.optim
     if not hasattr(torch.optim.Optimizer, "_cuda_graph_capture_health_check"):
         torch.optim.Optimizer._cuda_graph_capture_health_check = lambda self: None
