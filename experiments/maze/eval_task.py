@@ -69,9 +69,6 @@ class MazeTask(EvalTask):
         from experiments.maze.config import MazeExperiment
         return MazeExperiment().solve_dict()
 
-    def warmup(self, model) -> None:
-        self.solve_block(model, "test", np.arange(4), self.default_solve())
-
     def solve_block(self, model, split: str, indices: np.ndarray, solve_dict: dict) -> TaskBlock:
         solve_dict = dict(solve_dict)
         maze_data = solve_dict.pop("maze_data")

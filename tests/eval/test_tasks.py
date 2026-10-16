@@ -10,6 +10,7 @@ from lattice_diffusion.eval.runner import block_args, solve_block
 from lattice_diffusion.eval.tasks import get_task
 from experiments.registry import experiment_class
 from tests.equivalence import fakes, train_runs
+from tests.eval.fakes import FakeTask
 
 ROW_KEYS = {"idx", "pos", "block", "status", "rounds", "calls", "forwards", "n_resets",
             "solution", "verified"}
@@ -61,3 +62,15 @@ def test_drained_chain_estimate_is_recorded_only_when_enabled(estimate, tmp_path
                       explicit_indices=lst.indices.tolist(), explicit_split="test")
     rows = solve_block(task, model, block_args(spec, lst, 0)).rows
     assert all(("forwards_seq" in r) == estimate for r in rows)
+
+
+def test_warmup_solves_the_blocks_own_split_and_settings():
+    seen = []
+
+    class Recorder(FakeTask):
+        def solve_block(self, model, split, indices, solve):
+            seen.append((split, indices.tolist(), solve))
+            return super().solve_block(model, split, indices, solve)
+
+    Recorder().warmup(None, "synthetic", np.arange(100, 120), {"p_correct": 0.5})
+    assert seen == [("synthetic", list(range(100, 108)), {"p_correct": 0.5})]

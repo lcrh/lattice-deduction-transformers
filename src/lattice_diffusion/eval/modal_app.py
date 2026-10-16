@@ -13,6 +13,7 @@ import time
 from typing import TypedDict
 
 import modal
+import numpy as np
 
 from lattice_diffusion.eval.records import EvalSpec, format_summary
 from lattice_diffusion.eval.runner import BlockArgs, run_eval, solve_block
@@ -54,13 +55,19 @@ class BlockWorker:
         self.task_impl = get_task(self.task, DATA_MOUNT)
         self.model = self.task_impl.load_model(self.checkpoint, float(self.dropout_p),
                                                self.compile)
-        if self.compile:
-            self.task_impl.warmup(self.model)
+        self.warm = not self.compile
         self.startup_seconds = time.time() - t0
 
     @modal.method()
     def solve(self, args: BlockArgs) -> BlockResult:
         """Solve one block; the container's first call also reports its startup time."""
+        if not self.warm:
+            # Compile on the first block's own data: grid sizes and solver settings vary by spec.
+            t0 = time.time()
+            self.task_impl.warmup(self.model, args["split"],
+                                  np.asarray(args["indices"], dtype=np.int64), args["solve"])
+            self.startup_seconds += time.time() - t0
+            self.warm = True
         t0 = time.time()
         out = solve_block(self.task_impl, self.model, args)
         startup, self.startup_seconds = self.startup_seconds, 0.0

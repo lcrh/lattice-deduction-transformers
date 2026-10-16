@@ -26,9 +26,6 @@ class FakeTask(EvalTask):
     def load_model(self, checkpoint, dropout_p, compile):
         return None
 
-    def warmup(self, model) -> None:
-        pass
-
     def split_size(self, split: str) -> int:
         return 5000
 

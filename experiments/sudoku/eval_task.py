@@ -74,9 +74,6 @@ class SudokuTask(EvalTask):
         from experiments.sudoku.config import SudokuExperiment
         return SudokuExperiment().solve_dict()
 
-    def warmup(self, model) -> None:
-        self.solve_block(model, "test", np.arange(8), self.default_solve())
-
     def solve_block(self, model, split: str, indices: np.ndarray, solve_dict: dict) -> TaskBlock:
         x_all, y_all = self._pool(split)
         idx = torch.as_tensor(indices, dtype=torch.long)

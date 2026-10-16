@@ -86,9 +86,6 @@ class SnowflakeTask(EvalTask):
         from experiments.snowflake.config import SnowflakeExperiment
         return SnowflakeExperiment().solve_dict()
 
-    def warmup(self, model) -> None:
-        self.solve_block(model, "test", np.arange(8), self.default_solve())
-
     def solve_block(self, model, split: str, indices: np.ndarray, solve_dict: dict) -> TaskBlock:
         puzzles = self._puzzles(split)
         # Constraint-group IDs are random per load; draw them from the block's
