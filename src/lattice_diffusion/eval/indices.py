@@ -51,12 +51,14 @@ SPECS: dict[str, IndexListSpec] = {
     ),
     # Snowflake splits.  TODO: pin once generated (gen_data.py prints the values).
     "snowflake_test": IndexListSpec(
-        task="snowflake", split="test", split_size=None, seed=20261020,
-        length=None, sha256=None,
+        task="snowflake", split="test", split_size=4292, seed=20261020,
+        length=None,
+        sha256="0fb2e04aa36086d9735d6a2e70dfebab1163fb05ca715cb8e33623ee736bc0cd",
     ),
     "snowflake_val": IndexListSpec(
-        task="snowflake", split="val", split_size=None, seed=20261021,
-        length=None, sha256=None,
+        task="snowflake", split="val", split_size=1761, seed=20261021,
+        length=None,
+        sha256="e4547df0f6af336ee555cc061019d386c16687b9c1eee79c1f47fc9e2ab2b591",
     ),
 }
 

@@ -47,7 +47,7 @@ def resolve_index_list(spec: EvalSpec, split_size: SplitSize | None = None,
     """The index list `spec` walks, after its index_filter.
 
     Args:
-        split_size: Sizes unpinned named lists.
+        split_size: Sizes unpinned named lists and checks pinned ones.
         filter_indices: Applies spec.index_filter.
     """
     lst = _named_or_explicit(spec, split_size)
@@ -67,7 +67,7 @@ def _named_or_explicit(spec: EvalSpec, split_size: SplitSize | None) -> index_li
             raise ValueError("explicit index list needs explicit_indices and explicit_split")
         return index_lists.explicit(spec.task, spec.explicit_split, spec.explicit_indices)
     list_spec = index_lists.SPECS[spec.index_list]
-    n = split_size(list_spec.split) if split_size and not list_spec.pinned else None
+    n = split_size(list_spec.split) if split_size else None
     lst = index_lists.load(spec.index_list, split_size=n)
     if lst.task != spec.task:
         raise ValueError(f"index list {spec.index_list} is for task {lst.task}, not {spec.task}")

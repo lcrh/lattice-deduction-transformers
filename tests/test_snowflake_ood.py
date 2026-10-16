@@ -128,8 +128,11 @@ def test_group_channels_widen_the_model():
 
 
 @pytest.mark.parametrize("group_embed", [False, True])
-def test_order_filtered_eval_end_to_end(group_embed, tmp_path):
+def test_order_filtered_eval_end_to_end(group_embed, tmp_path, monkeypatch):
     tmp = tmp_path
+    # The synthetic test split is tiny, so use an unpinned copy of the list.
+    monkeypatch.setitem(index_lists.SPECS, "snowflake_test", dataclasses.replace(
+        index_lists.SPECS["snowflake_test"], split_size=None, sha256=None))
     from experiments.snowflake.config import SnowflakeExperiment
     from experiments.snowflake.train import TrainConfig, snowflake_step, train
 
