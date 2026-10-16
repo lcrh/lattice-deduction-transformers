@@ -1,7 +1,7 @@
 # Snowflake soundness on the varied-layout dataset: the default recipe gives
 # 3-13% wrong answers on val (P9). One-factor arms, scored on the validation
-# split (orders 4-8): translation augmentation, more steps, more puzzles, and
-# a lower conflict threshold at evaluation.
+# split (orders 4-8): translation augmentation, more steps, more puzzles,
+# constraint-group input channels, and a lower conflict threshold at evaluation.
 exp_id: P11
 benchmark: snowflake
 config: configs/snowflake/paper.yaml
@@ -16,6 +16,8 @@ entries:
     set: {train.steps: 4000}
   - name: puzzles2k
     set: {data.n_puzzles: 2000}
+  - name: group_embed
+    set: {data.constraint_group_embed: true}
   - name: cls
     eval_of: default
     sweep: {solve.step.cls_threshold: [0.5, 0.4]}
