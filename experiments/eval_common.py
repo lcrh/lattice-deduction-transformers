@@ -36,7 +36,9 @@ def load_eval_model(checkpoint: str, dropout_p: float, device: torch.device,
     EMA weights are swapped in when present. With dropout_p > 0 every
     nn.Dropout and MHA attention dropout is set to dropout_p and the model
     is left in train() mode: dropout acts as test-time noise for the search.
+    Float32 matmuls use TF32, as in training.
     """
+    torch.set_float32_matmul_precision("high")
     ckpt = load_checkpoint(checkpoint)
     model = PowersetModel(LoopedTransformerConfig(**ckpt["model_cfg"]))
     model.load_state_dict(ckpt["model_state_dict"])
