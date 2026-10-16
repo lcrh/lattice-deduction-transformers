@@ -1,0 +1,15 @@
+# Appendix B: deep supervision vs supervising the final iteration only.
+exp_id: A5
+benchmark: sudoku
+config: configs/sudoku/ablation.yaml
+eval: ablation
+seeds: [0, 1, 2]
+table:
+  reference: default
+entries:
+  - name: default
+    exp_id: A0
+    label: "All iterations (default)"
+  - name: final_only
+    label: "Final iteration only"
+    set: {train.supervise: final}

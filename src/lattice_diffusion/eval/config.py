@@ -39,9 +39,11 @@ class EvalConfig:
 
 def build_spec(task: str, checkpoint: str, cfg: EvalConfig, solve: dict,
                explicit_indices: list[int] | None = None,
-               explicit_split: str | None = None) -> EvalSpec:
+               explicit_split: str | None = None,
+               provenance: dict | None = None) -> EvalSpec:
     """EvalSpec for `checkpoint`. `explicit_indices` (with `explicit_split`)
-    replaces the configured index list, e.g. for a portfolio failure set."""
+    replaces the configured index list, e.g. for a portfolio failure set.
+    `provenance` (exp_id / entry / code_sha) is recorded, not hashed."""
     index_list = cfg.index_list
     if explicit_indices is None and index_list == "range":
         explicit_indices, explicit_split = list(range(cfg.n)), cfg.split
@@ -69,4 +71,5 @@ def build_spec(task: str, checkpoint: str, cfg: EvalConfig, solve: dict,
         n_workers=cfg.workers,
         max_in_flight=cfg.max_in_flight,
         keep_warm_s=cfg.keep_warm_s,
+        **(provenance or {}),
     )

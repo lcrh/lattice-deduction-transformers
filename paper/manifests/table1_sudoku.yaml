@@ -1,0 +1,29 @@
+# Table 1: Sudoku-Extreme, LDT rows. The 4K-step rows are evaluated on every
+# test puzzle; their seeds 0-2 are also the portfolio anchors (portfolio.yaml
+# trains the same config, so the checkpoints are shared).
+exp_id: M1
+benchmark: sudoku
+config: configs/sudoku/paper.yaml
+eval: sequential
+seeds: [0, 1, 2]
+table:
+  caption: "Sudoku-Extreme test accuracy of LDT."
+  baselines: baselines         # rows from paper/results/baselines.csv
+entries:
+  - name: steps1k
+    label: "LDT, 1K steps"
+    set: {train.steps: 1000}
+  - name: steps2k
+    label: "LDT, 2K steps"
+    set: {train.steps: 2000}
+  - name: steps4k
+    label: "LDT, 4K steps"
+    eval: full
+  - name: noaug4k
+    label: "LDT, 4K steps, no augmentation"
+    eval: full
+    set:
+      data.augment_digit_perm: false
+      data.augment_dihedral: false
+      train.step.augment: false
+      solve.step.augment: false

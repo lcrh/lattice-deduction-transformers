@@ -1,0 +1,42 @@
+# Appendix I: Qwen3.5-0.8B fine-tuned on the same task (existing runs, eval
+# only; baselines/qwen_sft). Each run is evaluated at every second epoch on
+# the first 200 puzzles of sudoku_test_perm (natural) or their K-blank
+# versions, 32 samples per puzzle, pass@k.
+exp_id: B4
+benchmark: baselines
+entries:
+  - name: qwen_natural
+    label: "Qwen3.5-0.8B SFT, natural puzzles"
+    command: [baselines/qwen_sft/run.py::evaluate, --run-dir, /checkpoints/followups/llm_baseline/qwen3_5_0_8b_natural_ep16_seed0,
+              --out, baselines/qwen_sft/results/natural.json]
+    result: baselines/qwen_sft/results/natural.json
+  - name: qwen_blanks1
+    label: "Qwen3.5-0.8B SFT, 1 blanks"
+    command: [baselines/qwen_sft/run.py::evaluate, --run-dir, /checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks1_ep16_seed0,
+              --out, baselines/qwen_sft/results/blanks1.json]
+    result: baselines/qwen_sft/results/blanks1.json
+  - name: qwen_blanks2
+    label: "Qwen3.5-0.8B SFT, 2 blanks"
+    command: [baselines/qwen_sft/run.py::evaluate, --run-dir, /checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks2_ep16_seed0,
+              --out, baselines/qwen_sft/results/blanks2.json]
+    result: baselines/qwen_sft/results/blanks2.json
+  - name: qwen_blanks4
+    label: "Qwen3.5-0.8B SFT, 4 blanks"
+    command: [baselines/qwen_sft/run.py::evaluate, --run-dir, /checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks4_ep16_seed0,
+              --out, baselines/qwen_sft/results/blanks4.json]
+    result: baselines/qwen_sft/results/blanks4.json
+  - name: qwen_blanks8
+    label: "Qwen3.5-0.8B SFT, 8 blanks"
+    command: [baselines/qwen_sft/run.py::evaluate, --run-dir, /checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks8_ep16_seed0,
+              --out, baselines/qwen_sft/results/blanks8.json]
+    result: baselines/qwen_sft/results/blanks8.json
+  - name: qwen_blanks16
+    label: "Qwen3.5-0.8B SFT, 16 blanks"
+    command: [baselines/qwen_sft/run.py::evaluate, --run-dir, /checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks16_ep16_seed0,
+              --out, baselines/qwen_sft/results/blanks16.json]
+    result: baselines/qwen_sft/results/blanks16.json
+  - name: qwen_blanks32
+    label: "Qwen3.5-0.8B SFT, 32 blanks"
+    command: [baselines/qwen_sft/run.py::evaluate, --run-dir, /checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks32_ep16_seed0,
+              --out, baselines/qwen_sft/results/blanks32.json]
+    result: baselines/qwen_sft/results/blanks32.json

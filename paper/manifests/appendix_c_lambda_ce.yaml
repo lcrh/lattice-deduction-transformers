@@ -1,0 +1,14 @@
+# Appendix C: weight of the cross-entropy (decision) loss.
+exp_id: A6
+benchmark: sudoku
+config: configs/sudoku/ablation.yaml
+eval: ablation
+seeds: [0, 1, 2]
+table:
+  reference: default
+entries:
+  - name: default
+    exp_id: A0
+    label: "lambda_CE = 0.2 (default)"
+  - name: ce
+    sweep: {train.softmax_loss_weight: [0.0, 1.0]}
