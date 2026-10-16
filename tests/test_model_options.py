@@ -1,6 +1,5 @@
 """Model and training options: latent carry, deep supervision, cross-option checks."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -45,9 +44,8 @@ def test_scratchpad_modes(mode):
 
 
 @pytest.mark.parametrize("mode", ["h", "z", "zero_z"])
-def test_carry_trains_and_solves(mode):
-    with tempfile.TemporaryDirectory() as tmp:
-        state = _train_with_carry(Path(tmp), mode)
+def test_carry_trains_and_solves(mode, tmp_path):
+    state = _train_with_carry(tmp_path, mode)
     model = PowersetModel(fakes.tiny_model_cfg(carry=mode))
     model.load_state_dict(state)
     x, y = fakes.sudoku_tensors(4, (2, 5), seed=3)
