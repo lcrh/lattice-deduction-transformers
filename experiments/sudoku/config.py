@@ -28,7 +28,7 @@ class SudokuExperiment(Experiment):
         default_factory=lambda: SudokuExtremeConfig(n_puzzles=1000, seed=42))
     train: TrainConfig = field(default_factory=TrainConfig)
     solve: SolveConfig = field(default_factory=lambda: SolveConfig(
-        step=StepConfig(cls_threshold=0.6, augment=True),
+        step=StepConfig(cls_threshold=0.6, augment=True, digit_policy="argmax"),
         max_rounds=1000, n_chains=64, batch_size=512))
     eval: EvalConfig = field(default_factory=EvalConfig)
 

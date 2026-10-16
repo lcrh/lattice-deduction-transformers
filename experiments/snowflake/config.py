@@ -33,11 +33,11 @@ class SnowflakeExperiment(Experiment):
         n_puzzles=500, train_orders=[4, 5, 6, 7, 8], translate_aug=True))
     train: TrainConfig = field(default_factory=TrainConfig)
     solve: SolveConfig = field(default_factory=lambda: SolveConfig(
-        step=snowflake_step(cls_threshold=0.6, augment=True),
+        step=snowflake_step(cls_threshold=0.6, augment=True, digit_policy="argmax"),
         max_rounds=1000, n_chains=64, batch_size=512))
     eval: EvalConfig = field(default_factory=lambda: EvalConfig(
         index_list="snowflake_test", index_filter={"orders": [4, 5, 6, 7, 8]},
-        stop="full", workers=8))
+        stop="full"))
 
     def __post_init__(self):
         self.model = dataclasses.replace(self.model,

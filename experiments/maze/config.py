@@ -35,11 +35,10 @@ class MazeExperiment(Experiment):
     data: MazeConfig = field(default_factory=lambda: MazeConfig(dataset="maze_hard", seed=42))
     train: TrainConfig = field(default_factory=TrainConfig)
     solve: SolveConfig = field(default_factory=lambda: SolveConfig(
-        step=maze_step(threshold=0.5, cls_threshold=0.53, augment=True),
+        step=maze_step(threshold=0.5, cls_threshold=0.53, augment=True, digit_policy="argmax"),
         max_rounds=1000, n_chains=64, batch_size=64))
     eval: EvalConfig = field(default_factory=lambda: EvalConfig(
-        index_list="maze_test", stop="full", dropout_p=0.0, block_size=50, workers=20,
-        compile=True))
+        index_list="maze_test", stop="full", dropout_p=0.0, block_size=50))
 
     def __post_init__(self):
         h, w = grid_dims(self.data)
