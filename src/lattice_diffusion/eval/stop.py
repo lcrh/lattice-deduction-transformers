@@ -65,7 +65,7 @@ class SequentialStop(StopRule):
     """Stop once failures or the accuracy interval's width cross their thresholds.
 
     Fires at `max_failures` failures, or when the confidence-sequence half-width
-    is <= `half_width` (checked every `check_every` puzzles); never before `n_min`.
+    is <= `half_width` (checked every `check_every` puzzles, from `n_min` on).
     With `n_max`, also stops after that many puzzles.
     """
 
@@ -85,11 +85,9 @@ class SequentialStop(StopRule):
     def should_stop(self, counts: PrefixCounts) -> StopReason | None:
         if self.n_max is not None and counts.n >= self.n_max:
             return "n_max"
-        if counts.n < self.n_min:
-            return None
         if counts.failures >= self.max_failures:
             return "failures"
-        if counts.n % self.check_every == 0:
+        if counts.n >= self.n_min and counts.n % self.check_every == 0:
             lo, hi = confidence_sequence(counts.correct, counts.n, self.alpha)
             if (hi - lo) / 2 <= self.half_width:
                 return "half_width"

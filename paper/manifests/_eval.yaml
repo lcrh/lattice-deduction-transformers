@@ -3,7 +3,7 @@
 # in-flight window only change cost and wall-clock time, never results.
 presets:
   # Sudoku test split, walked in a fixed random order until the error rate
-  # is pinned down (K=100 failures, +-0.1pp, n >= 1000). Table 1 rows below
+  # is pinned down (K=100 failures, or +-0.1pp once n >= 1000). Table 1 rows below
   # 4K steps, Figure 2.
   sequential:
     eval.index_list: sudoku_test_perm

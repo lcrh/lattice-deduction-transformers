@@ -145,3 +145,11 @@ def test_sequential_stop_caps_at_n_max():
     assert rule.should_stop(counts) == "failures"
     assert rule.should_stop(PrefixCounts(n=4000, correct=4000)) == "n_max"
     assert PRESETS["select"] == rule
+
+
+def test_failure_rule_fires_before_n_min():
+    from lattice_diffusion.eval.stop import PrefixCounts, SequentialStop
+
+    rule = SequentialStop()
+    assert rule.should_stop(PrefixCounts(n=300, correct=200, timeout=100)) == "failures"
+    assert rule.should_stop(PrefixCounts(n=500, correct=500)) is None   # half-width waits for n_min
