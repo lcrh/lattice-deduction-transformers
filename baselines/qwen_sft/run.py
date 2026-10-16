@@ -205,6 +205,24 @@ app = modal.App("qwen-sudoku-sft")
 
 RUNS_ROOT = f"{CHECKPOINT_MOUNT}/baselines/qwen_sft"
 EVAL_ROOT = f"{CHECKPOINT_MOUNT}/eval/baselines/qwen_sft"
+DEFAULT_RUN = f"{CHECKPOINT_MOUNT}/followups/llm_baseline/qwen3_5_0_8b_natural_ep16_seed0"
+
+
+def _tokenizer(padding_side: str):
+    """The base model's tokenizer (SFT does not change it), with a pad token."""
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = padding_side
+    return tokenizer
+
+
+def _print_summaries(summaries: list[dict], samples_per_puzzle: int) -> None:
+    for s in summaries:
+        print(f"{Path(s['checkpoint']).name} epoch {s['epoch']:g}: " + "  ".join(
+            f"pass@{k}={s[f'pass_at_{k}']:.3f}" for k in PASS_KS if k <= samples_per_puzzle))
 
 
 def _load_dataset(split: str):
@@ -226,12 +244,9 @@ def _eval_rows(n_eval: int, n_blanks: int | None) -> list[dict[str, Any]]:
 def _evaluate_checkpoint(checkpoint: Path, rows: list[dict[str, Any]], cfg: EvalConfig,
                          out_dir: Path) -> dict[str, Any]:
     import torch
-    from transformers import AutoModelForImageTextToText, AutoTokenizer
+    from transformers import AutoModelForImageTextToText
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)  # SFT does not change it
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "left"
+    tokenizer = _tokenizer("left")
     model = AutoModelForImageTextToText.from_pretrained(
         checkpoint, dtype=torch.bfloat16, attn_implementation="sdpa").to("cuda")
     model.config.use_cache = True
@@ -330,7 +345,7 @@ def train_run(train_cfg: dict, resume: bool = False) -> dict[str, Any]:
     import torch
     from torch.nn.utils.rnn import pad_sequence
     from transformers import (
-        AutoModelForImageTextToText, AutoTokenizer, Trainer, TrainingArguments, set_seed,
+        AutoModelForImageTextToText, Trainer, TrainingArguments, set_seed,
     )
 
     from lattice_diffusion.data.sudoku_extreme import SudokuExtremeConfig, select_pool
@@ -354,10 +369,7 @@ def train_run(train_cfg: dict, resume: bool = False) -> dict[str, Any]:
     }, indent=2))
     checkpoint_volume.commit()
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "right"
+    tokenizer = _tokenizer("right")
     examples = []
     for r in rows:
         prompt = tokenizer.apply_chat_template(make_messages(r["question"]), tokenize=False,
@@ -407,9 +419,6 @@ def train_run(train_cfg: dict, resume: bool = False) -> dict[str, Any]:
     return {"run_dir": str(run_dir), "train_seconds": train_seconds}
 
 
-DEFAULT_RUN = "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_natural_ep16_seed0"
-
-
 @app.local_entrypoint()
 def evaluate(run_dir: str = DEFAULT_RUN, checkpoint: str = "", every_epochs: int = 2,
              n_eval: int = 200, samples_per_puzzle: int = 32, seed: int = 0,
@@ -418,9 +427,7 @@ def evaluate(run_dir: str = DEFAULT_RUN, checkpoint: str = "", every_epochs: int
     cfg = EvalConfig(n_eval=n_eval, samples_per_puzzle=samples_per_puzzle, seed=seed)
     summaries = evaluate_run.remote(run_dir, asdict(cfg),
                                     [checkpoint] if checkpoint else None, every_epochs)
-    for s in summaries:
-        print(f"{Path(s['checkpoint']).name} epoch {s['epoch']:g}: " + "  ".join(
-            f"pass@{k}={s[f'pass_at_{k}']:.3f}" for k in PASS_KS if k <= samples_per_puzzle))
+    _print_summaries(summaries, samples_per_puzzle)
     if out:
         Path(out).write_text(json.dumps(summaries, indent=2))
         print(f"wrote {out}")
@@ -436,6 +443,5 @@ def train(epochs: int = 16, n_blanks: int | None = None, seed: int = 0,
     result = train_run.remote(asdict(cfg), resume)
     print(json.dumps(result, indent=2))
     eval_cfg = EvalConfig(n_eval=n_eval, samples_per_puzzle=samples_per_puzzle, seed=seed)
-    for s in evaluate_run.remote(result["run_dir"], asdict(eval_cfg), None, eval_every_epochs):
-        print(f"{Path(s['checkpoint']).name} epoch {s['epoch']:g}: pass@1={s['pass_at_1']:.3f} "
-              f"pass@{samples_per_puzzle}={s[f'pass_at_{samples_per_puzzle}']:.3f}")
+    _print_summaries(evaluate_run.remote(result["run_dir"], asdict(eval_cfg), None,
+                                         eval_every_epochs), samples_per_puzzle)
