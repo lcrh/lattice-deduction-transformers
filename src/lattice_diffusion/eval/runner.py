@@ -22,7 +22,7 @@ from lattice_diffusion.eval.records import (
 )
 from lattice_diffusion.eval.scheduler import Executor, Row, block_bounds, run_blocks
 from lattice_diffusion.eval.stop import PrefixCounts, stop_from_dict
-from lattice_diffusion.eval.tasks import EvalTask
+from lattice_diffusion.eval.tasks import EvalTask, TaskBlock
 
 PERSIST_EVERY_S = 30    # seconds between volume commits while blocks finish
 
@@ -87,7 +87,7 @@ def block_args(spec: EvalSpec, lst: index_lists.IndexList, block: int) -> BlockA
                      indices=lst.indices[start:end].tolist())
 
 
-def solve_block(task: EvalTask, model, args: BlockArgs) -> list[Row]:
+def solve_block(task: EvalTask, model, args: BlockArgs) -> TaskBlock:
     """Seed from (eval_seed, block), solve, and tag rows with pos/block."""
     if args["split_size"] is not None:
         actual = task.split_size(args["split"])
@@ -98,12 +98,12 @@ def solve_block(task: EvalTask, model, args: BlockArgs) -> list[Row]:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    rows = task.solve_block(model, args["split"], np.asarray(args["indices"], dtype=np.int64),
-                            args["solve"])
-    for k, row in enumerate(rows):
+    out = task.solve_block(model, args["split"], np.asarray(args["indices"], dtype=np.int64),
+                           args["solve"])
+    for k, row in enumerate(out.rows):
         row["pos"] = args["start"] + k
         row["block"] = args["block"]
-    return rows
+    return out
 
 
 def run_eval(
@@ -112,7 +112,7 @@ def run_eval(
     make_executor: Callable[[Callable[[int], BlockArgs]], Executor],
     persist: Callable[[], None] = lambda: None,
     log: Callable[[str], None] = print,
-    block_seconds: Callable[[], float] = lambda: 0.0,
+    block_meta: Callable[[int], dict | None] = lambda block: None,
     startup_seconds: Callable[[], float] = lambda: 0.0,
     split_size: SplitSize | None = None,
     filter_indices: FilterIndices | None = None,
@@ -122,7 +122,8 @@ def run_eval(
     Args:
         make_executor: Builds the executor from a block -> BlockArgs function.
         persist: Called after block files are written (e.g. a volume commit).
-        block_seconds: Total worker time spent on blocks, for the summary.
+        block_meta: Per-block worker stats ({"model_calls", "seconds"}) saved next to
+            the block, so the summary's totals survive resumes.
         startup_seconds: Total container load/compile time, for the summary.
         split_size, filter_indices: See resolve_index_list.
     """
@@ -143,7 +144,7 @@ def run_eval(
 
     def on_block_done(block: int, rows: list[Row]) -> None:
         nonlocal last_persist
-        write_block(run_dir, block, rows)
+        write_block(run_dir, block, rows, block_meta(block))
         if time.time() - last_persist > PERSIST_EVERY_S:
             persist()
             last_persist = time.time()
@@ -159,7 +160,7 @@ def run_eval(
         on_block_done=on_block_done, on_progress=on_progress,
     )
     summary = summarize(spec, run_dir, result, wall_seconds=time.time() - t0,
-                        gpu_seconds=block_seconds(), startup_seconds=startup_seconds(),
+                        startup_seconds=startup_seconds(),
                         alpha=getattr(stop, "alpha", 0.05))
     write_summary(run_dir, summary)
     persist()

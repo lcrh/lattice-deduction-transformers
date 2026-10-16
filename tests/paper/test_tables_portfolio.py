@@ -129,7 +129,7 @@ def test_figures_and_main_tables_render(tmp_path):
     from paper.tables import table1_sudoku, table3_maze
 
     records = [_result_record(tmp_path, f"steps_{x}", s, ["correct"] * 9 + ["timeout"], x=x,
-                       gpu_seconds=10.0, train_seconds=600.0)
+                       gpu_seconds=10.0, n_evaluated=10, train_seconds=600.0)
                for x in (500, 4000) for s in (0, 1)]
     curves = fig2.percentile_curves(records, root=tmp_path)
     assert list(curves) == [500, 4000]

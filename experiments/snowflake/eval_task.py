@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from lattice_diffusion.eval.tasks import EvalTask
+from lattice_diffusion.eval.tasks import EvalTask, TaskBlock
 
 from experiments.eval_common import (
     build_solve_config, eval_device, load_eval_model, result_rows, unwrap,
@@ -90,7 +90,7 @@ class SnowflakeTask(EvalTask):
         self.solve_block(model, split_name(SnowflakeExperiment().data.dataset, "test"),
                          np.arange(8), self.default_solve())
 
-    def solve_block(self, model, split: str, indices: np.ndarray, solve_dict: dict) -> list[dict]:
+    def solve_block(self, model, split: str, indices: np.ndarray, solve_dict: dict) -> TaskBlock:
         puzzles = self._puzzles(split)
         # Constraint-group IDs are random per load; draw them from the block's
         # seeded torch RNG so a block's rows are reproducible.
@@ -100,12 +100,13 @@ class SnowflakeTask(EvalTask):
         x, y, mask = x.to(self.device), y.to(self.device), mask.to(self.device)
         groups = groups.to(self.device) if groups is not None else None
         cfg = build_solve_config(solve_dict)
+        given_mask = _given_mask(x)
         with torch.no_grad():
-            res = solve(model, _build_state(x, mask, groups), y, _given_mask(x), cfg,
+            res = solve(model, _build_state(x, mask, groups), y, given_mask, cfg,
                         in_puzzle_mask=mask)
         solution, mask = res.solution.cpu(), mask.cpu()
         recs = [puzzles[int(i)] for i in indices]
         solutions = [solution_string(solution[j], mask[j]) for j in range(len(indices))]
         verified = [is_valid_solution(solution[j], recs[j]) for j in range(len(indices))]
-        return result_rows(res, indices, cfg, solutions, verified,
+        return result_rows(res, indices, cfg, solutions, verified, given_mask,
                            extra=[{"order": int(r["n"])} for r in recs])

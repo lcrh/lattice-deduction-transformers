@@ -34,7 +34,8 @@ def build(records: list[dict], baselines: list[dict], portfolio: dict | None) ->
             pm(*mean_std([r["accuracy"] for r in recs]), digits=3),
             num(sum(r["wrong"] for r in recs)), num(sum(r["timeout"] for r in recs)),
             num(mean([r["calls_mean"] for r in recs])),
-            num(mean([r["gpu_seconds"] / r["n"] for r in recs]), 4),
+            # GPU time covers every evaluated puzzle, including past the stopping point.
+            num(mean([r["gpu_seconds"] / r["n_evaluated"] for r in recs]), 4),
             num(mean([r["train_seconds"] / 60 if r.get("train_seconds") else None
                       for r in recs])),
         ])

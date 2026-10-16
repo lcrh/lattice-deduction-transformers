@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from lattice_diffusion.data.sudoku_extreme import _download_and_cache
-from lattice_diffusion.eval.tasks import EvalTask
+from lattice_diffusion.eval.tasks import EvalTask, TaskBlock
 
 from experiments.eval_common import build_solve_config, eval_device, load_eval_model, result_rows
 from experiments.sudoku.solve import solve
@@ -77,7 +77,7 @@ class SudokuTask(EvalTask):
     def warmup(self, model) -> None:
         self.solve_block(model, "test", np.arange(8), self.default_solve())
 
-    def solve_block(self, model, split: str, indices: np.ndarray, solve_dict: dict) -> list[dict]:
+    def solve_block(self, model, split: str, indices: np.ndarray, solve_dict: dict) -> TaskBlock:
         x_all, y_all = self._pool(split)
         idx = torch.as_tensor(indices, dtype=torch.long)
         x = x_all.index_select(0, idx).to(self.device).float()
@@ -90,4 +90,4 @@ class SudokuTask(EvalTask):
         solution, x = res.solution.cpu(), x.cpu()
         grids = [grid_string(solution[j]) for j in range(len(indices))]
         verified = [is_valid_solution(grids[j], x[j]) for j in range(len(indices))]
-        return result_rows(res, indices, cfg, grids, verified)
+        return result_rows(res, indices, cfg, grids, verified, given_mask)

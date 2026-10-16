@@ -249,6 +249,9 @@ def summary_fields(summary: dict) -> dict:
         "unsound_rate": sound.get("unsound_rate"),
         "gpu_seconds": summary["gpu_seconds"], "startup_seconds": summary["startup_seconds"],
         "wall_seconds": summary["wall_seconds"], "n_evaluated": summary["n_evaluated"],
+        "model_calls_total": summary["model_calls_total"],
+        "mean_rounds_correct": summary["mean_rounds_correct"],
+        "mean_resets": summary["mean_resets"],
     }
 
 

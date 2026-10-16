@@ -31,14 +31,20 @@ class Row(TypedDict, total=False):
     rounds: int             # solver round of the accepted chain (-1 if none)
     calls: int              # model calls while the puzzle held a solver slot
     forwards: int           # single-chain forwards if run unbatched
-    forwards_seq: int       # drained-chain estimate; only with solve.estimate_sequential
     n_resets: int           # chain resets
+    n_givens: int           # cells fixed by the puzzle
     solution: str           # accepted prediction, benchmark-specific encoding
     verified: bool          # rule check of `solution` (never used for acceptance)
     deduced: int            # candidates eliminated over the puzzle's chain-rounds
     unsound: int            # of those, the solution's own
     cls: list[int]          # conflict head [tp, fp, fn, tn] against true conflicts
     pass_deduced_unsound: list[list[int]]   # [deduced, unsound] per deduction pass
+    # Only with solve.estimate_sequential: drained-chain estimate of the
+    # forwards one chain would need, and the attempts it is averaged over.
+    forwards_seq: int
+    seq_winning_idx: int
+    seq_attempts_done: int
+    seq_avg_attempt_len: float | None
 
 
 class Executor(ABC):

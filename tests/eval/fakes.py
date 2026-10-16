@@ -12,7 +12,7 @@ from lattice_diffusion.eval.records import EvalSpec
 from lattice_diffusion.eval.runner import block_args, solve_block
 from lattice_diffusion.eval.scheduler import Executor
 from lattice_diffusion.eval.stop import SequentialStop
-from lattice_diffusion.eval.tasks import EvalTask
+from lattice_diffusion.eval.tasks import EvalTask, TaskBlock
 
 _TORCH_LOCK = threading.Lock()
 
@@ -39,7 +39,7 @@ class FakeTask(EvalTask):
             status = "correct" if u < solve["p_correct"] else ("wrong" if u < 0.975 else "timeout")
             rows.append({"idx": idx, "status": status, "rounds": 1, "calls": int(u * 100),
                          "forwards": 64, "n_resets": 0, "solution": "", "verified": False})
-        return rows
+        return TaskBlock(rows, len(indices))
 
 
 def make_spec(stop=None, **kw) -> EvalSpec:
@@ -64,7 +64,7 @@ def block_solver(spec: EvalSpec, jitter_s: float = 0.0):
         if jitter_s:
             time.sleep(random.random() * jitter_s)
         with _TORCH_LOCK:
-            return solve_block(task, None, block_args(spec, lst, block))
+            return solve_block(task, None, block_args(spec, lst, block)).rows
 
     return solve
 

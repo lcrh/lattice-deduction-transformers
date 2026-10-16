@@ -18,6 +18,7 @@ import hashlib
 import json
 import math
 import os
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import ClassVar, Literal
@@ -94,15 +95,29 @@ def block_path(run_dir: Path, block: int) -> Path:
     return run_dir / "blocks" / f"{block:06d}.jsonl"
 
 
-def write_block(run_dir: Path, block: int, rows: list[Row]) -> None:
-    """Atomic write so a killed coordinator never leaves a partial block."""
+def write_block(run_dir: Path, block: int, rows: list[Row], meta: dict | None = None) -> None:
+    """Atomic write so a killed coordinator never leaves a partial block.
+
+    `meta` (worker stats such as model calls and seconds) goes to a sidecar
+    written first, so a block file on disk always has its stats when they exist.
+    """
     path = block_path(run_dir, block)
     path.parent.mkdir(parents=True, exist_ok=True)
+    if meta is not None:
+        meta_path = path.with_suffix(".meta.json")
+        tmp = meta_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(meta))
+        os.replace(tmp, meta_path)
     tmp = path.with_suffix(".jsonl.tmp")
     with tmp.open("w") as fh:
         for row in rows:
             fh.write(json.dumps(row) + "\n")
     os.replace(tmp, path)
+
+
+def read_block_meta(run_dir: Path) -> dict[int, dict]:
+    return {int(p.name.split(".")[0]): json.loads(p.read_text())
+            for p in (run_dir / "blocks").glob("*.meta.json")}
 
 
 def read_blocks(run_dir: Path) -> dict[int, list[Row]]:
@@ -195,16 +210,26 @@ class Summary:
     n_evaluated: int                    # including work past the stopping point
     overshoot: int
     wall_seconds: float
-    gpu_seconds: float                  # worker time spent solving blocks
+    gpu_seconds: float                  # worker time spent solving every evaluated block
     startup_seconds: float              # worker time loading/compiling the model
+    model_calls_total: int | None       # batched forwards over every evaluated block
+    mean_rounds_correct: float | None   # rounds to accept, over correct puzzles
+    mean_resets: float | None
     alpha: float = 0.05
     soundness: dict = field(default_factory=dict)   # pooled over the reported prefix
+    labels: dict = field(default_factory=dict)      # outcome label counts (Maze)
+
+
+def _mean(vals: list[float]) -> float | None:
+    return sum(vals) / len(vals) if vals else None
 
 
 def summarize(spec: EvalSpec, run_dir: Path, result: ScheduleResult,
-              wall_seconds: float, gpu_seconds: float, startup_seconds: float = 0.0,
+              wall_seconds: float, startup_seconds: float = 0.0,
               alpha: float = 0.05) -> Summary:
     c = result.counts
+    meta = read_block_meta(run_dir)
+    labels = Counter(r["label"] for r in result.rows if "label" in r)
     return Summary(
         spec=asdict(spec),
         run_dir=str(run_dir),
@@ -223,10 +248,14 @@ def summarize(spec: EvalSpec, run_dir: Path, result: ScheduleResult,
         n_evaluated=result.n_evaluated,
         overshoot=result.n_evaluated - c.n,
         wall_seconds=wall_seconds,
-        gpu_seconds=gpu_seconds,
+        gpu_seconds=sum(m["seconds"] for m in meta.values()),
         startup_seconds=startup_seconds,
+        model_calls_total=sum(m["model_calls"] for m in meta.values()) if meta else None,
+        mean_rounds_correct=_mean([r["rounds"] for r in result.rows if r["status"] == "correct"]),
+        mean_resets=_mean([r["n_resets"] for r in result.rows]),
         alpha=alpha,
         soundness=_soundness(result.rows),
+        labels=dict(sorted(labels.items())),
     )
 
 
@@ -240,12 +269,27 @@ def write_summary(run_dir: Path, summary: Summary) -> None:
     path.write_text(json.dumps(asdict(summary), indent=2))
 
 
+def _fmt(x: float | None, spec: str) -> str:
+    return "n/a" if x is None else format(x, spec)
+
+
 def format_summary(s: Summary) -> str:
     lo, hi = s.accuracy_cs
-    return (
+    lines = [
         f"n={s.n} ({s.stop_reason})  acc={s.accuracy:.5%} [{lo:.5%}, {hi:.5%}]  "
         f"correct={s.correct} wrong={s.wrong} (rate <= {s.wrong_rate_upper:.2e}) "
-        f"timeout={s.timeout}  overshoot={s.overshoot}  "
+        f"timeout={s.timeout}  overshoot={s.overshoot}",
+        f"model calls={_fmt(s.model_calls_total, ',')}  "
+        f"rounds (correct)={_fmt(s.mean_rounds_correct, '.1f')}  "
+        f"resets={_fmt(s.mean_resets, '.2f')}  "
         f"wall={s.wall_seconds:.0f}s gpu={s.gpu_seconds / 3600:.2f}h "
-        f"startup={s.startup_seconds / 3600:.2f}h"
-    )
+        f"startup={s.startup_seconds / 3600:.2f}h",
+    ]
+    if s.soundness:
+        sd = s.soundness
+        lines.append(f"unsound eliminations={sd['unsound']}/{sd['deduced']} "
+                     f"({sd['unsound_rate']:.4%})  conflict head "
+                     f"P={_fmt(sd['cls_precision'], '.3f')} R={_fmt(sd['cls_recall'], '.3f')}")
+    if s.labels:
+        lines.append("outcomes: " + "  ".join(f"{k}={v}" for k, v in s.labels.items()))
+    return "\n".join(lines)

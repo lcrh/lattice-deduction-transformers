@@ -37,8 +37,8 @@ def test_task_solves_a_block(benchmark, split, tmp_path):
     spec = build_spec(benchmark, ckpt, exp.eval, solve,
                       explicit_indices=lst.indices.tolist(), explicit_split=split)
     spec.block_size = 4
-    rows = solve_block(task, model, block_args(spec, lst, 1))
-    again = solve_block(task, model, block_args(spec, lst, 1))
+    rows = solve_block(task, model, block_args(spec, lst, 1)).rows
+    again = solve_block(task, model, block_args(spec, lst, 1)).rows
     assert [r["idx"] for r in rows] == [1, 0] and [r["pos"] for r in rows] == [4, 5]
     assert all(ROW_KEYS <= r.keys() for r in rows)
     assert all(r["status"] in {"correct", "wrong", "timeout"} for r in rows)
@@ -59,5 +59,5 @@ def test_drained_chain_estimate_is_recorded_only_when_enabled(estimate, tmp_path
     lst = index_lists.explicit("sudoku", "test", np.arange(4))
     spec = build_spec("sudoku", ckpt, exp.eval, solve,
                       explicit_indices=lst.indices.tolist(), explicit_split="test")
-    rows = solve_block(task, model, block_args(spec, lst, 0))
+    rows = solve_block(task, model, block_args(spec, lst, 0)).rows
     assert all(("forwards_seq" in r) == estimate for r in rows)

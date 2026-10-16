@@ -151,9 +151,9 @@ def test_order_filtered_eval_end_to_end(group_embed, tmp_path):
     assert lst.name == "snowflake_varied_test[orders=7,8]"
     assert len(lst) == 6       # 21 test rows cycle through 7 orders: 3 each of 7 and 8
     model = task.load_model(str(ckpt), 0.05, False)
-    rows = solve_block(task, model, block_args(spec, lst, 0))
+    rows = solve_block(task, model, block_args(spec, lst, 0)).rows
     assert {r["order"] for r in rows} <= {7, 8}
-    assert rows == solve_block(task, model, block_args(spec, lst, 0))
+    assert rows == solve_block(task, model, block_args(spec, lst, 0)).rows
 
 
 def test_filter_needs_task_support():

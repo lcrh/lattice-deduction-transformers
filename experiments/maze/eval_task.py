@@ -17,7 +17,7 @@ import numpy as np
 import torch
 
 from lattice_diffusion.data.maze_hard import _download_and_cache
-from lattice_diffusion.eval.tasks import EvalTask
+from lattice_diffusion.eval.tasks import EvalTask, TaskBlock
 
 from experiments.eval_common import build_solve_config, eval_device, load_eval_model, result_rows
 from experiments.maze.data import MazeConfig, _build_or_load_pregen, grid_dims, rescore
@@ -70,7 +70,7 @@ class MazeTask(EvalTask):
     def warmup(self, model) -> None:
         self.solve_block(model, "test", np.arange(4), self.default_solve())
 
-    def solve_block(self, model, split: str, indices: np.ndarray, solve_dict: dict) -> list[dict]:
+    def solve_block(self, model, split: str, indices: np.ndarray, solve_dict: dict) -> TaskBlock:
         solve_dict = dict(solve_dict)
         maze_data = solve_dict.pop("maze_data")
         x_all, y_all = self._pool(split, maze_data)
@@ -79,8 +79,9 @@ class MazeTask(EvalTask):
         y = y_all.index_select(0, idx).to(self.device).float()
         h, w = grid_dims(self._data_cfg(split, maze_data))
         cfg = build_solve_config(solve_dict)
+        given_mask = x.sum(dim=-1) == 1
         with torch.no_grad():
-            res = solve(model, x, y, x.sum(dim=-1) == 1, cfg)
+            res = solve(model, x, y, given_mask, cfg)
         outcome = rescore(res, y, h, w)
 
         valid, minimal, exact = (outcome.valid.tolist(), outcome.minimal.tolist(),
@@ -95,5 +96,5 @@ class MazeTask(EvalTask):
                 labels.append("CORRECT_GT" if exact[j] else "CORRECT_ALT")
             else:
                 labels.append("WRONG_VALID" if valid[j] else "WRONG_INVALID")
-        return result_rows(res, indices, cfg, solutions, minimal,
+        return result_rows(res, indices, cfg, solutions, minimal, given_mask,
                            [{"label": label} for label in labels])

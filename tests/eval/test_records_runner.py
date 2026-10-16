@@ -3,7 +3,9 @@ import json
 
 import pytest
 
-from lattice_diffusion.eval.records import check_or_write_spec, read_blocks, summary_path
+from lattice_diffusion.eval.records import (
+    check_or_write_spec, format_summary, read_blocks, summary_path,
+)
 from lattice_diffusion.eval.runner import run_eval
 from lattice_diffusion.eval.scheduler import ThreadExecutor
 from lattice_diffusion.eval.stop import NoStop
@@ -65,3 +67,14 @@ def test_run_eval_writes_summary_and_resumes(tmp_path):
     assert result.n == len(spec.explicit_indices) and result.stop_reason == "exhausted"
     assert summary_path(run_dir, full.stop).exists()
 
+
+
+def test_block_stats_are_saved_per_block_and_summed(tmp_path):
+    spec = make_spec(n_workers=4)
+    summary = run_eval(spec, tmp_path, _threads(spec), log=lambda _: None,
+                       block_meta=lambda block: {"model_calls": 10, "seconds": 2.0})
+    n_blocks = len(read_blocks(spec.run_dir(tmp_path)))
+    assert summary.model_calls_total == 10 * n_blocks
+    assert summary.gpu_seconds == 2.0 * n_blocks
+    assert summary.mean_resets == 0 and summary.mean_rounds_correct == 1
+    assert "model calls=" in format_summary(summary)

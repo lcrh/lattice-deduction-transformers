@@ -7,6 +7,7 @@ import torch
 from torch import nn
 
 from lattice_diffusion import config as cfglib
+from lattice_diffusion.eval.tasks import TaskBlock
 from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig, PowersetModel
 from lattice_diffusion.training.utils.checkpoint import load_checkpoint
 
@@ -54,31 +55,41 @@ def load_eval_model(checkpoint: str, dropout_p: float, device: torch.device,
 
 
 def result_rows(res: SolveResult, indices: np.ndarray, cfg: SolveConfig, solutions: list[str],
-                verified: list[bool], extra: list[dict] | None = None) -> list[dict]:
+                verified: list[bool], given_mask: torch.Tensor,
+                extra: list[dict] | None = None) -> TaskBlock:
     """One eval row per puzzle (see lattice_diffusion.eval.scheduler.Row)."""
     correct, wrong = res.correct.tolist(), res.wrong.tolist()
     rounds, calls = res.round_solved.tolist(), res.puzzle_calls.tolist()
     resets = res.n_resets.tolist()
-    forwards_seq = res.forwards_seq.tolist() if cfg.estimate_sequential else None
+    n_givens = given_mask.sum(dim=-1).tolist()
     diag = res.puzzle_diag.tolist()
     pass_diag = res.puzzle_pass_diag.tolist() if res.puzzle_pass_diag is not None else None
+    seq = None
+    if cfg.estimate_sequential:
+        seq = list(zip(res.forwards_seq.tolist(), res.seq_winning_idx.tolist(),
+                       res.seq_attempts_done.tolist()))
     rows = []
     for j, dataset_idx in enumerate(indices.tolist()):
         status = "correct" if correct[j] else ("wrong" if wrong[j] else "timeout")
-        rows.append({
+        row = {
             "idx": dataset_idx,
             "status": status,
             "rounds": rounds[j],
             "calls": calls[j],
             "forwards": ((rounds[j] + 1) if correct[j] else cfg.max_rounds) * cfg.n_chains,
             "n_resets": resets[j],
-            **({"forwards_seq": forwards_seq[j]} if forwards_seq is not None else {}),
+            "n_givens": int(n_givens[j]),
             "solution": solutions[j] if status != "timeout" else "",
             "verified": verified[j] if status != "timeout" else False,
             "deduced": diag[j][0],
             "unsound": diag[j][1],
             "cls": diag[j][2:],
-            **({"pass_deduced_unsound": pass_diag[j]} if pass_diag is not None else {}),
-            **(extra[j] if extra else {}),
-        })
-    return rows
+        }
+        if seq is not None:
+            fwd, win, done = seq[j]
+            row.update(forwards_seq=fwd, seq_winning_idx=win, seq_attempts_done=done,
+                       seq_avg_attempt_len=fwd / (win + 1) if win >= 0 else None)
+        if pass_diag is not None:
+            row["pass_deduced_unsound"] = pass_diag[j]
+        rows.append(row | (extra[j] if extra else {}))
+    return TaskBlock(rows, res.model_calls)

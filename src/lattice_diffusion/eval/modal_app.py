@@ -10,7 +10,6 @@ container serves every block of an eval and every eval of the same model.
 
 import threading
 import time
-from dataclasses import dataclass
 from typing import TypedDict
 
 import modal
@@ -31,14 +30,9 @@ eval_app = modal.App("lattice-eval")
 
 class BlockResult(TypedDict):
     rows: list[Row]
+    model_calls: int            # batched forward passes
     seconds: float              # time solving the block
     startup_seconds: float      # container load/compile time, on its first block only
-
-
-@dataclass
-class WorkerTime:
-    blocks: float = 0.0
-    startup: float = 0.0
 
 
 @eval_app.cls(
@@ -66,9 +60,10 @@ class BlockWorker:
     def solve(self, args: BlockArgs) -> BlockResult:
         """Solve one block; the container's first call also reports its startup time."""
         t0 = time.time()
-        rows = solve_block(self.task_impl, self.model, args)
+        out = solve_block(self.task_impl, self.model, args)
         startup, self.startup_seconds = self.startup_seconds, 0.0
-        return BlockResult(rows=rows, seconds=time.time() - t0, startup_seconds=startup)
+        return BlockResult(rows=out.rows, model_calls=out.model_calls,
+                           seconds=time.time() - t0, startup_seconds=startup)
 
 
 @eval_app.function(
@@ -87,16 +82,18 @@ def coordinate(spec_json: str) -> dict:
         checkpoint=spec.checkpoint, task=spec.task,
         dropout_p=repr(float(spec.solve.get("dropout_p", 0.0))), compile=spec.compile,
     )
-    time_spent = WorkerTime()
+    meta: dict[int, dict] = {}
+    startup_seconds = 0.0
     lock = threading.Lock()
 
     def make_executor(block_args):
         # One blocking remote call per in-flight block; the scheduler bounds how many.
         def solve(block: int) -> list[Row]:
             out = worker.solve.remote(block_args(block))
+            nonlocal startup_seconds
             with lock:
-                time_spent.blocks += out["seconds"]
-                time_spent.startup += out["startup_seconds"]
+                meta[block] = {"model_calls": out["model_calls"], "seconds": out["seconds"]}
+                startup_seconds += out["startup_seconds"]
             return out["rows"]
 
         return ThreadExecutor(solve, n_workers=spec.window)
@@ -105,8 +102,8 @@ def coordinate(spec_json: str) -> dict:
     summary = run_eval(
         spec, EVAL_ROOT, make_executor,
         persist=checkpoint_volume.commit,
-        block_seconds=lambda: time_spent.blocks,
-        startup_seconds=lambda: time_spent.startup,
+        block_meta=lambda block: meta.pop(block, None),
+        startup_seconds=lambda: startup_seconds,
         split_size=task.split_size,
         filter_indices=task.filter_indices if spec.index_filter is not None else None,
     )

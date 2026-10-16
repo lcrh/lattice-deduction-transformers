@@ -12,11 +12,19 @@ from __future__ import annotations
 
 import importlib
 from abc import ABC, abstractmethod
+from typing import NamedTuple
 
 import numpy as np
 from torch import nn
 
 from lattice_diffusion.eval.scheduler import Row
+
+
+class TaskBlock(NamedTuple):
+    """Rows of one solved block and the batched forward passes it took."""
+
+    rows: list[Row]
+    model_calls: int
 
 
 class EvalTask(ABC):
@@ -43,8 +51,8 @@ class EvalTask(ABC):
 
     @abstractmethod
     def solve_block(self, model: nn.Module, split: str, indices: np.ndarray,
-                    solve: dict) -> list[Row]:
-        """Rows for `indices` in order; the caller adds `pos` and `block`."""
+                    solve: dict) -> TaskBlock:
+        """Rows for `indices` in order (the caller adds `pos` and `block`)."""
 
 
 TASKS: dict[str, str] = {
