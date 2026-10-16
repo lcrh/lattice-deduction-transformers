@@ -18,6 +18,7 @@ from lattice_diffusion import config as cfglib
 from lattice_diffusion.eval.config import EvalConfig, build_spec
 from lattice_diffusion.eval.records import EvalSpec
 from lattice_diffusion.provenance import LedgerRecord, Provenance, header
+from lattice_diffusion.training.utils.checkpoint import load_checkpoint
 
 if TYPE_CHECKING:
     import modal
@@ -183,9 +184,10 @@ def run_experiment(exp: Experiment, train_fn: Callable, checkpoint_root: str, da
         ckpt.parent.mkdir(parents=True, exist_ok=True)
         t0 = time.time()
         train_fn(exp.localized(data_dir), ckpt, commit)
-        # Wall-clock of this call only: a resumed run reports its last leg.
+        # Both timings cover this call only: a resumed run reports its last leg.
+        wallclock = load_checkpoint(str(ckpt)).get("train_wallclock", {})
         train_record_path(ckpt).write_text(json.dumps({
-            "train_seconds": time.time() - t0, "gpu": GPU, "n_gpus": 1,
+            "train_seconds": time.time() - t0, **wallclock, "gpu": GPU, "n_gpus": 1,
             "train_hash": exp.train_hash(), **dataclasses.asdict(exp.provenance)}, indent=2))
         commit()
     if spec is None:

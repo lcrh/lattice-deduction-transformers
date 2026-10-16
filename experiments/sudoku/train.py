@@ -20,6 +20,7 @@ from lattice_diffusion.eval import indices as index_lists
 from lattice_diffusion.models.looped_transformer import PowersetModel
 from lattice_diffusion.models.weighted_bce import weighted_bce_with_logits
 from lattice_diffusion.training.utils.checkpoint import save_checkpoint
+from lattice_diffusion.training.utils.clock import TrainClock
 from lattice_diffusion.training.utils.scheduler import make_cosine_scheduler
 
 from experiments.sudoku.aug import aug_forward
@@ -303,7 +304,9 @@ def train(exp: SudokuExperiment, ckpt_path: str | Path,
     n_tp_conflict_total = 0
     n_examples_seen = 0
 
+    clock = TrainClock()
     for step in range(1, cfg.steps + 1):
+        clock.tick()
         sample_idx = torch.randperm(pool_size, device=device)[:cfg.batch_size]
         state = pool_state[sample_idx]
         solutions = pool_solutions[sample_idx]   # [B, K, S, C]
@@ -382,8 +385,9 @@ def train(exp: SudokuExperiment, ckpt_path: str | Path,
             pool_carry[sample_idx] = new_carry
 
         if cfg.monitor_every > 0 and step % cfg.monitor_every == 0:
-            res = monitor_solve(model, ema, eval_x, eval_y, eval_given, cfg)
-            print(format_monitor(res, step, cfg.monitor_max_rounds), flush=True)
+            with clock.monitoring():
+                res = monitor_solve(model, ema, eval_x, eval_y, eval_given, cfg)
+                print(format_monitor(res, step, cfg.monitor_max_rounds), flush=True)
 
         if step % cfg.log_every == 0:
             with torch.no_grad():
@@ -397,6 +401,7 @@ def train(exp: SudokuExperiment, ckpt_path: str | Path,
                      sat_frac, cls_msg)
 
     extra = {
+        "train_wallclock": clock.finish(),
         "n_params": n_params, "n_examples_seen": n_examples_seen,
         "n_solved_total": n_solved_total, "n_tp_conflict_total": n_tp_conflict_total,
     }

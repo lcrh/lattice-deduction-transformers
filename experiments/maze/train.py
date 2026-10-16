@@ -11,6 +11,7 @@ import torch
 
 from lattice_diffusion.models.looped_transformer import PowersetModel
 from lattice_diffusion.training.utils.checkpoint import save_checkpoint
+from lattice_diffusion.training.utils.clock import TrainClock
 from lattice_diffusion.training.utils.scheduler import make_cosine_scheduler
 
 from experiments.maze.data import MazeDataset, grid_dims, rescore
@@ -146,7 +147,9 @@ def train(exp: MazeExperiment, ckpt_path: str | Path,
     n_tp_conflict_total = 0
     n_examples_seen = 0
 
+    clock = TrainClock()
     for step in range(start_step, cfg.steps + 1):
+        clock.tick()
         sample_idx = torch.randperm(pool_size, device=device)[:cfg.batch_size]
         state = pool_state[sample_idx]
         solutions = pool_solutions[sample_idx]   # [B, K, S, C]
@@ -231,9 +234,10 @@ def train(exp: MazeExperiment, ckpt_path: str | Path,
                   f"(also: {unique_path})", flush=True)
 
         if cfg.monitor_every > 0 and step % cfg.monitor_every == 0:
-            res = monitor_solve(model, ema, eval_x, eval_y, eval_given, cfg)
-            rescore(res, eval_y, eval_h, eval_w)     # any valid shortest path counts
-            print(format_monitor(res, step, cfg.monitor_max_rounds), flush=True)
+            with clock.monitoring():
+                res = monitor_solve(model, ema, eval_x, eval_y, eval_given, cfg)
+                rescore(res, eval_y, eval_h, eval_w)     # any valid shortest path counts
+                print(format_monitor(res, step, cfg.monitor_max_rounds), flush=True)
 
         if step % cfg.log_every == 0:
             with torch.no_grad():
@@ -265,6 +269,7 @@ def train(exp: MazeExperiment, ckpt_path: str | Path,
                 print(f"    age: {' '.join(parts)}", flush=True)
 
     extra = {
+        "train_wallclock": clock.finish(),
         "n_params": n_params, "n_examples_seen": n_examples_seen,
         "n_solved_total": n_solved_total, "n_tp_conflict_total": n_tp_conflict_total,
     }

@@ -36,7 +36,9 @@ def build(records: list[dict], baselines: list[dict], portfolio: dict | None) ->
             num(mean([r["calls_mean"] for r in recs])),
             # GPU time covers every evaluated puzzle, including past the stopping point.
             num(mean([r["gpu_seconds"] / r["n_evaluated"] for r in recs]), 4),
-            num(mean([r["train_seconds"] / 60 if r.get("train_seconds") else None
+            # Post-compile training loop, as in paper.compute.
+            num(mean([r["train_post_compile_seconds"] / 60
+                      if r.get("train_post_compile_seconds") else None
                       for r in recs])),
         ])
     if portfolio and portfolio.get("smallest_k") is not None:

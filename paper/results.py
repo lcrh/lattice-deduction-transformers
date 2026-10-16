@@ -15,7 +15,7 @@ NUMERIC_COLUMNS = frozenset({
     "wrong_rate_upper", "failure_rate", "calls_mean", "calls_p50", "calls_p75", "calls_p90",
     "calls_p95", "calls_correct_mean", "unsound_rate", "gpu_seconds", "startup_seconds",
     "wall_seconds", "n_evaluated", "model_calls_total", "mean_rounds_correct", "mean_resets",
-    "train_seconds", "model_dim", "model_layers", "model_loops",
+    "train_seconds", "train_post_compile_seconds", "model_dim", "model_layers", "model_loops",
     "model_heads", "model_seq_len", "model_ffn_mult", "model_channels", "train_steps",
     "train_batch", "solve_chains", "solve_max_rounds",
 })

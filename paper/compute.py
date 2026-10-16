@@ -5,7 +5,8 @@ attention scores/values and the feed-forward block of every layer
 application; embeddings, norms and output heads are omitted (under 2% at
 these sizes). Training is costed as 3x the forward FLOPs (forward plus
 backward) per sample per step. These are estimates for a compute table, not
-measurements.
+measurements. Measured training hours are the post-compile training loop
+(`post_compile_secs`), excluding the compile step and monitoring solves.
 
     uv run python -m paper.compute table1_sudoku table3_maze appendix_a_recurrence
 """
@@ -94,7 +95,8 @@ def run_compute(rec: dict) -> dict:
     out = {
         "forward_gflops": fwd / 1e9,
         "train_pflops": 3 * fwd * rec["train_batch"] * rec["train_steps"] / 1e15,
-        "train_b200_h": (rec.get("train_seconds") or 0) / 3600,
+        # Training loop after the compile step, excluding monitoring solves.
+        "train_b200_h": (rec.get("train_post_compile_seconds") or 0) / 3600,
         "eval_b200_h": ((rec.get("gpu_seconds") or 0) + (rec.get("startup_seconds") or 0)) / 3600,
     }
     if rec.get("calls_mean") is not None:

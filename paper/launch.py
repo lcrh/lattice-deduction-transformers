@@ -292,8 +292,9 @@ def collect(manifest: str, runs: list[Run], view: VolumeView, states: dict[str, 
                 path.write_text("".join(json.dumps(r) + "\n" for r in rows))
                 rec["rows_path"] = _display_path(path)
         if run.checkpoint and view.exists(volume_path(run.train_record)):
-            rec["train_seconds"] = json.loads(view.read(volume_path(run.train_record)))[
-                "train_seconds"]
+            train = json.loads(view.read(volume_path(run.train_record)))
+            rec["train_seconds"] = train["train_seconds"]
+            rec["train_post_compile_seconds"] = train.get("post_compile_secs")
         records.append(rec)
 
     out = results_dir / f"{manifest}.csv"
