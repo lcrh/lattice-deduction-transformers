@@ -137,7 +137,7 @@ def in_flight(runs: list[Run], ledger: list[LedgerRecord],
 def load_ledger(view: VolumeView) -> list[LedgerRecord]:
     try:
         return read_ledger(view.listdir, view.read)
-    except RuntimeError:        # offline snapshot: names only, no contents
+    except RuntimeError:        # offline, and a ledger file was never read online
         return []
 
 

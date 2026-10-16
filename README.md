@@ -112,7 +112,8 @@ uv run python -m paper.launch ledger --exp M1              # launch history
 ```
 
 Status is read off the checkpoint volume (a run is done when its summary
-exists); `--offline` uses the last saved listing. `launch` refuses a dirty
+exists), with one recursive listing per command; `--offline` uses the last
+saved listing and the locally cached ledger files. `launch` refuses a dirty
 working tree. Each run is submitted as `modal run --detach -n
 ldt-<exp_id>-<entry>-s<seed>-<trainhash8>[-<evalhash8>]`; the entry points record
 the code's git SHA in the checkpoint and eval spec (outside every hash),
