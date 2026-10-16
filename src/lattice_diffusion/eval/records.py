@@ -54,7 +54,7 @@ class EvalSpec:
     index_filter: dict | None = None
     n_workers: int = 1
     max_in_flight: int | None = None    # None = n_workers
-    keep_warm_s: int = 300              # idle seconds before a worker scales down
+    keep_warm_s: int = 10               # idle seconds before a worker scales down
     # Provenance (lattice_diffusion.provenance): recorded, never hashed.
     exp_id: str = ""
     entry: str = ""

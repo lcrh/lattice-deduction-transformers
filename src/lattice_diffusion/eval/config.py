@@ -28,7 +28,7 @@ class EvalConfig:
     # Cost and wall-clock only; not part of the eval's identity.
     workers: int = 1
     max_in_flight: int | None = None    # None = workers
-    keep_warm_s: int = 300
+    keep_warm_s: int = 10
 
     def __post_init__(self):
         if self.stop not in PRESETS:
