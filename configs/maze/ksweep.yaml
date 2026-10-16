@@ -1,0 +1,37 @@
+# Figure 3: 15x15 synthetic mazes, K in {1, 8, 32, 64, 128, 256, 512} x
+# 4 seeds. Set K and the seed with --set "data.k_solutions=<K> train.seed=<S>".
+name: ksweep
+
+model:
+  dim: 128
+  use_rope: false
+
+data:
+  dataset: synthetic
+  grid_size: 15
+  n_puzzles: 10000
+  hard: true
+  k_solutions: 1
+
+train:
+  steps: 4000
+  batch_size: 256
+  pool_size_mult: 1.0
+  step:
+    threshold: 0.1
+    cls_threshold: 0.5
+
+solve:
+  step:
+    threshold: 0.1
+    cls_threshold: 0.6
+  batch_size: 256
+
+eval:
+  index_list: range        # a seed-200 pool of fresh 15x15 mazes
+  split: synthetic
+  n: 1000
+  stop: full
+  dropout_p: 0.05
+  block_size: 50
+  workers: 20

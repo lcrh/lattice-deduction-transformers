@@ -26,12 +26,20 @@ from lattice_diffusion.eval.stop import PrefixCounts, stop_from_dict
 from lattice_diffusion.eval.tasks import EvalTask
 
 
-def resolve_index_list(spec: EvalSpec) -> index_lists.IndexList:
+def resolve_index_list(
+    spec: EvalSpec, split_size: Callable[[str], int] | None = None,
+) -> index_lists.IndexList:
+    """`split_size(split)` is consulted for unpinned named lists only."""
     if spec.index_list == "explicit":
         if spec.explicit_indices is None or spec.explicit_split is None:
             raise ValueError("explicit index list needs explicit_indices and explicit_split")
         return index_lists.explicit(spec.task, spec.explicit_split, spec.explicit_indices)
-    lst = index_lists.load(spec.index_list)
+    n = None
+    if not index_lists.is_pinned(spec.index_list):
+        if split_size is None:
+            raise ValueError(f"{spec.index_list} is unpinned and no split_size was given")
+        n = split_size(index_lists.SPECS[spec.index_list].split)
+    lst = index_lists.load(spec.index_list, split_size=n)
     if lst.task != spec.task:
         raise ValueError(f"index list {spec.index_list} is for task {lst.task}, not {spec.task}")
     return lst
@@ -45,15 +53,13 @@ def block_seed(eval_seed: int, block: int) -> int:
 def block_args(spec: EvalSpec, lst: index_lists.IndexList, block: int) -> dict:
     """Everything a worker needs for one block; plain types for RPC."""
     start, end = block_bounds(block, spec.block_size, len(lst))
-    expected = (index_lists.SPECS[lst.name].split_size
-                if lst.name in index_lists.SPECS else None)
     return {
         "solve": spec.solve,
         "eval_seed": spec.eval_seed,
         "block": block,
         "start": start,
         "split": lst.split,
-        "split_size": expected,
+        "split_size": lst.split_size,
         "indices": lst.indices[start:end].tolist(),
     }
 
@@ -79,6 +85,18 @@ def solve_block(task: EvalTask, model, args: dict) -> list[Row]:
     return rows
 
 
+def check_or_write_digest(run_dir: Path, lst: index_lists.IndexList) -> None:
+    """Record which list a run directory's blocks index into; refuse to
+    resume onto a different one (e.g. a regenerated unpinned split)."""
+    path = run_dir / "indices.sha256"
+    digest = index_lists.digest(lst)
+    if path.exists():
+        if path.read_text().strip() != digest:
+            raise RuntimeError(f"{run_dir} was evaluated on a different {lst.name} list")
+        return
+    path.write_text(digest + "\n")
+
+
 def run_eval(
     spec: EvalSpec,
     root: str | Path,
@@ -87,17 +105,23 @@ def run_eval(
     log: Callable[[str], None] = print,
     block_seconds: Callable[[], float] = lambda: 0.0,
     startup_seconds: Callable[[], float] = lambda: 0.0,
+    split_size: Callable[[str], int] | None = None,
 ) -> Summary:
     """Run (or resume) an eval and write its summary.
 
     `make_executor(block_args_fn)` builds the executor; `persist()` is called
     after block files are written (e.g. volume commit); `block_seconds()`
     reports total worker time on blocks and `startup_seconds()` total
-    container load/compile time, both for the summary.
+    container load/compile time, both for the summary. `split_size(split)`
+    sizes unpinned index lists.
     """
-    lst = resolve_index_list(spec)
+    lst = resolve_index_list(spec, split_size)
     run_dir = spec.run_dir(root)
     check_or_write_spec(run_dir, spec)
+    check_or_write_digest(run_dir, lst)
+    if lst.name in index_lists.SPECS and not index_lists.is_pinned(lst.name):
+        log(f"  note: {lst.name} is unpinned ({len(lst)} items, sha256 "
+            f"{index_lists.digest(lst)}); pin it in lattice_diffusion/eval/indices.py")
     completed = read_blocks(run_dir)
     stop = stop_from_dict(spec.stop)
     log(f"eval {run_dir}: {len(lst)} indices ({lst.name}), block_size={spec.block_size}, "

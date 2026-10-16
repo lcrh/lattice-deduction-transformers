@@ -1172,6 +1172,7 @@ dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pyarrow" },
+    { name = "pyyaml" },
     { name = "torch" },
 ]
 
@@ -1188,6 +1189,7 @@ requires-dist = [
     { name = "modal", specifier = ">=1.3.3" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "pyarrow", specifier = ">=23.0.1" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "torch", specifier = ">=2.0.0" },
 ]
 

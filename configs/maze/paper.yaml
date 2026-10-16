@@ -1,0 +1,48 @@
+# Maze-Hard 30x30, paper recipe (Table 3, K=1). These are also the
+# MazeExperiment defaults. The model's grid shape comes from the dataset.
+name: paper
+
+model:
+  dim: 192
+  num_layers: 4
+  n_heads: 4
+  n_loops: 16
+  cls_token: true
+  use_rope: true
+
+data:
+  dataset: maze_hard
+  seed: 42
+  k_solutions: 1           # reference paths supervised per puzzle (Table 3: 1 and 512)
+
+train:
+  steps: 20000
+  batch_size: 192
+  pool_size_mult: 2.0
+  lr: 0.003
+  weight_decay: 0.1
+  seed: 0
+  conflict_loss_weight: 0.1
+  step:
+    threshold: 0.5
+    cls_threshold: 0.5
+    temp_decide: 1.5
+    augment: true
+  checkpoint_every: 1000
+
+solve:
+  step:
+    threshold: 0.5
+    cls_threshold: 0.53    # calibrated on held-out mazes
+    temp_decide: 1.5
+    augment: true
+  max_rounds: 1000
+  n_chains: 64
+  batch_size: 64
+
+eval:
+  index_list: maze_test
+  stop: full
+  dropout_p: 0.0
+  block_size: 50
+  workers: 20

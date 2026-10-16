@@ -92,7 +92,8 @@ def puzzle_to_state(puzzle_rec: dict) -> tuple[np.ndarray, np.ndarray, np.ndarra
 
 @dataclass
 class SnowflakeConfig:
-    data_path: str = "data/snowflake_train.parquet"
+    data_dir: str = "data"
+    data_path: str = "snowflake_train.parquet"   # relative to data_dir (or absolute)
     n_puzzles: int | None = None        # subset size, None = all
     seed: int = 42
     batch_size: int = 512
@@ -180,10 +181,18 @@ def _load_puzzles(data_path: str) -> list[dict]:
         return json.load(f)
 
 
+def load_states(puzzles: list[dict], indices) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """(x, y, in_puzzle_mask) for `puzzles[i]`, i in `indices`, as zero-hint
+    covering-grid tensors."""
+    xs, ys, ms = zip(*(puzzle_to_state(puzzles[int(i)]) for i in indices))
+    return (torch.from_numpy(np.stack(xs)), torch.from_numpy(np.stack(ys)),
+            torch.from_numpy(np.stack(ms)))
+
+
 class SnowflakeDataset:
     def __init__(self, cfg: SnowflakeConfig):
         self.cfg = cfg
-        self.puzzles = _load_puzzles(cfg.data_path)
+        self.puzzles = _load_puzzles(str(Path(cfg.data_dir) / cfg.data_path))
         if cfg.n_puzzles is not None and cfg.n_puzzles < len(self.puzzles):
             rng_init = np.random.default_rng(cfg.seed)
             idx = rng_init.choice(len(self.puzzles), cfg.n_puzzles, replace=False)

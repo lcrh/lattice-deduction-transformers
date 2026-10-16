@@ -49,38 +49,73 @@ of use.
 
 ## Reproducing the paper results
 
-Every experiment is a Modal app with a `local_entrypoint`. Run it with
-`uv run modal run --detach <path>` (the `--detach` lets the run survive
-your laptop sleeping). Each run trains a checkpoint and evaluates it; results
-are written to the `lattice-diffusion-checkpoints` Modal volume (for
-Snowflake and Maze, as `<ckpt>.eval.json` + `<ckpt>.eval.jsonl` next to the
-checkpoint; for Sudoku, see below).
-
-### Sudoku-Extreme (Table 1)
-
-The four LDT rows of Table 1 are the same `run.py` at four configurations.
-After training, `run.py` evaluates the checkpoint with the shared evaluator
-(`lattice_diffusion/eval/`): it walks a fixed random ordering of the full
-422,786-puzzle test split in blocks across B200 workers and, with the default
-`--eval-stop sequential`, stops once the error rate is pinned down (100
-failures, or a 95% confidence-sequence half-width of 0.1 points, after at
-least 1,000 puzzles). `--eval-stop full` evaluates every test puzzle. Results
-are written to `/checkpoints/eval/<checkpoint>/<tag>-<hash>/` on the
-checkpoint volume (one JSONL file per block, plus a `summary-*.json` per stop
-rule).
-
-To (re-)evaluate a saved checkpoint, e.g. with more workers, another stop
-preset, or a different solver setting:
+Every run is described by an experiment config: a YAML file under
+`configs/` plus optional `key.path=value` overrides, merged over the typed
+defaults in `experiments/<benchmark>/config.py` (unknown keys are errors).
+Each benchmark has one Modal entry point:
 
 ```bash
-uv run modal run --detach experiments/sudoku/evaluate.py \
-    --checkpoint /checkpoints/sudoku/<name>.pt --stop full --workers 100
+uv run modal run --detach experiments/<benchmark>/run.py \
+    --config configs/<benchmark>/<name>.yaml --set "train.seed=1 eval.stop=full"
 ```
 
-Rerunning the same command resumes from the blocks already on disk; a
-`--stop full` run after a sequential one reuses the blocks it already has.
-Training pools exclude 10,000 held-out train puzzles (`sudoku_val`), which
-are reserved for choosing defaults.
+`--detach` lets the run survive your laptop sleeping. The run trains a
+checkpoint, then evaluates it with the shared evaluator
+(`src/lattice_diffusion/eval/`). The checkpoint path is derived from the
+training config (`/checkpoints/<benchmark>/<name>-<hash>-seed<seed>.pt` on
+the `lattice-diffusion-checkpoints` volume), so relaunching a finished
+config skips training and only (re)evaluates; the resolved config is stored
+in the checkpoint.
+
+**Evaluation.** The evaluator walks a fixed index list in blocks across
+B200 workers (`eval.workers`, at most `eval.max_in_flight` blocks ahead of
+the finished prefix). Results go to
+`/checkpoints/eval/<checkpoint>/<tag>-<hash>/`: one JSONL file per block
+(one row per puzzle) and a `summary-*.json` per stop rule. The stop rule
+(`eval.stop`) is one of
+
+- `sequential`: walk a random ordering of the full test split and stop once
+  the error rate is pinned down (100 failures, or a 95% confidence-sequence
+  half-width of 0.1 points, after at least 1,000 puzzles);
+- `full`: every puzzle in the list;
+- `ablation`: exactly the first 1,000 puzzles, so ablation arms are scored
+  on the same puzzles.
+
+Blocks do not depend on the stop rule, so a `full` eval after a
+`sequential` one reuses its blocks, and rerunning an eval resumes it. To
+re-evaluate a checkpoint with other settings:
+
+```bash
+uv run modal run --detach experiments/evaluate.py --checkpoint <ckpt> \
+    --set "eval.stop=full eval.workers=100 solve.max_rounds=10000"
+```
+
+Training never sees evaluation puzzles; Sudoku-Extreme training pools also
+exclude 10,000 held-out train puzzles (`sudoku_val`), which are reserved for
+choosing defaults and for in-training monitoring.
+
+### Sudoku-Extreme (Table 1, Figure 2)
+
+`configs/sudoku/paper.yaml` is the 4K-step recipe (1,000 training puzzles).
+The other rows and the step sweep of Figure 2 are overrides of it.
+
+```bash
+# 4K steps, every test puzzle
+uv run modal run --detach experiments/sudoku/run.py --config configs/sudoku/paper.yaml \
+    --set "eval.stop=full eval.workers=100"
+
+# 1K and 2K steps
+uv run modal run --detach experiments/sudoku/run.py --config configs/sudoku/paper.yaml \
+    --set "train.steps=1000"
+
+# No augmentation
+uv run modal run --detach experiments/sudoku/run.py --config configs/sudoku/paper.yaml \
+    --set "train.step.augment=false solve.step.augment=false \
+           data.augment_digit_perm=false data.augment_dihedral=false"
+```
+
+`configs/sudoku/ablation.yaml` is the base for the appendix ablations (2K
+steps, `ablation` stop rule).
 
 > **Note.** As reported, these runs match the Sudoku-Extreme solve rate in
 > Table 1 (100%). We have since realized, however, that the reported figure
@@ -89,24 +124,6 @@ are reserved for choosing defaults.
 > are in the process of correcting the paper. See
 > [this thread](https://x.com/biosemiote/status/2061848053741687016) for
 > context.
-
-```bash
-# LDT, 4K train steps (Table 1 top row)
-uv run modal run --detach experiments/sudoku/run.py \
-    --steps 4000 --n-train-puzzles 1000 --eval-stop full --eval-workers 100
-
-# LDT, 1K and 2K train steps (Table 1 mid-rows)
-uv run modal run --detach experiments/sudoku/run.py --steps 1000 --n-train-puzzles 1000
-uv run modal run --detach experiments/sudoku/run.py --steps 2000 --n-train-puzzles 1000
-
-# No-augmentation variant (last row)
-uv run modal run --detach experiments/sudoku/run.py \
-    --steps 4000 --n-train-puzzles 1000 --eval-stop full --eval-workers 100 \
-    --no-augment --no-data-augment-digit-perm --no-data-augment-dihedral
-```
-
-For the train-vs-test-compute figure (Figure 2a), repeat the above at
-multiple step counts and across 3 seeds.
 
 ### Snowflake Sudoku (Table 2)
 
@@ -118,9 +135,8 @@ package (MIT-licensed, cloned at Modal-image build time).
 # One-time: generate the ~30K-puzzle dataset (CVC5, ~100 CPU workers, parallel)
 uv run modal run --detach experiments/snowflake/gen_data.py
 
-# Train + eval (headline: 100 / 100 on 1,000-puzzle test split)
-uv run modal run --detach experiments/snowflake/run.py \
-    --steps 1000 --n-train-puzzles 500 --n-eval-puzzles 1000
+# Train + evaluate on the whole test split
+uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/paper.yaml
 ```
 
 `gen_data.py` writes `/data/snowflake_train.parquet` and
@@ -128,15 +144,11 @@ uv run modal run --detach experiments/snowflake/run.py \
 
 ### Maze-Hard (Table 3, K=1 and K=512)
 
-`eval_cls_threshold=0.53` is the per-paper Maze-Hard CLS threshold,
-calibrated on a held-out set (vs.\ the `0.6` used elsewhere).
-`eval_dropout_p=0.0` disables eval-time MHA dropout for the 30×30 setting.
-
-The 30×30 training command leaves the in-train final eval at the
-default 200-puzzle quick-check (eval at the training batch size of 192
-runs comfortably here; pushing it to the full 1,000 puzzles inline at
-this grid + model size has been observed to OOM). The headline
-1,000-puzzle number comes from the parallel `eval_only.py` call below.
+`configs/maze/paper.yaml` is the K=1 recipe: 30×30, dim 192 with 2D RoPE,
+20K steps. The evaluation CLS threshold 0.53 was calibrated on held-out
+mazes (0.6 elsewhere), and eval-time dropout is off. A puzzle counts as
+solved when the predicted path is a valid shortest path; each result row
+also records whether it matches the reference path.
 
 > **Note.** The HRM and TRM baselines we compare against on Maze-Hard run
 > ~7pp higher than the figures in their original papers. This is an
@@ -150,54 +162,25 @@ this grid + model size has been observed to OOM). The headline
 > with/without-augmentation training study.
 
 ```bash
-# K=1 (head-to-head with TRM)
-uv run modal run --detach experiments/maze/run.py \
-    --dataset maze_hard --steps 20000 --batch-size 192 \
-    --model-dim 192 --use-rope --pool-size-mult 2.0 \
-    --k-solutions 1 --eval-cls-threshold 0.53 --eval-dropout-p 0.0
+uv run modal run --detach experiments/maze/run.py --config configs/maze/paper.yaml
 
-# K=512
-uv run modal run --detach experiments/maze/run.py \
-    --dataset maze_hard --steps 20000 --batch-size 192 \
-    --model-dim 192 --use-rope --pool-size-mult 2.0 \
-    --k-solutions 512 --eval-cls-threshold 0.53 --eval-dropout-p 0.0
+# K=512: pregenerate the K-path cache on a CPU container first
+uv run modal run --detach experiments/maze/pregen.py --dataset maze_hard --k-solutions 512
+uv run modal run --detach experiments/maze/run.py --config configs/maze/paper_k512.yaml
 ```
 
-For the K=512 setting the K-paths precompute is expensive; pregen the
-canonical pool first on a CPU container (grid-size and worker-count are
-fixed for `maze_hard` since the HF split is exactly 30×30 / single-pool;
-they only matter for `--dataset synthetic`):
-
-```bash
-uv run modal run --detach experiments/maze/pregen.py \
-    --dataset maze_hard --k-solutions 512
-```
-
-Then run the full 1,000-puzzle eval via the parallel `eval_only.py`
-(fans across N B200 workers at a smaller per-worker batch so the
-30×30 dim=192 model stays well under the GPU memory ceiling;
-checkpoints land at `/checkpoints/maze/maze_hard_30x30_seed<N>_<...>.pt`):
-
-```bash
-uv run modal run --detach experiments/maze/eval_only.py \
-    --checkpoint /checkpoints/maze/maze_hard_30x30_seed0_<...>.pt \
-    --workers 20 --batch-size 64 --dataset maze_hard --n-eval 1000 \
-    --cls-threshold 0.53 --dropout-p 0.0
-```
+Maze runs write a resume snapshot every 1,000 steps; relaunching the same
+config resumes from it.
 
 ### Maze K-sweep figure (Figure 3, 15×15 synthetic)
 
-The K-sweep uses the base maze setup (no RoPE, dim=128) but overrides the
-`maze/run.py` default deduce `--threshold 0.5` back to the dpll-default
-`0.1`. Each K is averaged over 4 seeds.
+Each K is averaged over 4 seeds; evaluation is on a seed-200 pool of 1,000
+fresh 15×15 mazes.
 
 ```bash
-# Repeat for K in {1, 8, 32, 64, 128, 256, 512} and seeds in {0, 2, 3, 4}
-uv run modal run --detach experiments/maze/run.py \
-    --dataset synthetic --grid-size 15 \
-    --steps 4000 --batch-size 256 \
-    --threshold 0.1 --n-puzzles 10000 \
-    --k-solutions <K> --seed <S>
+# Repeat for K in {1, 8, 32, 64, 128, 256, 512} and seeds in {0, 1, 2, 3}
+uv run modal run --detach experiments/maze/run.py --config configs/maze/ksweep.yaml \
+    --set "data.k_solutions=<K> train.seed=<S>"
 ```
 
 ---
@@ -210,18 +193,23 @@ src/lattice_diffusion/
   models/             Looped transformer + 2D transformer backbone + weighted-BCE loss
   modal/              Shared Modal image / volume / secret definitions
   training/utils/     Checkpoint I/O and cosine LR scheduler
+  eval/               Shared parallel evaluator: index lists, stop rules,
+                      block scheduler, statistics, Modal coordinator/workers
+  config.py           YAML + override loading for the experiment configs
+configs/              Experiment configs (one directory per benchmark)
 experiments/
-  sudoku/       Owns the shared `dpll_step` deduction primitive, the
-                      pool-based trainer, and the parallel solver. All other
+  common.py           Experiment config base class and the train-then-eval flow
+  evaluate.py         Re-evaluate any checkpoint
+  sudoku/             The shared `dpll_step` deduction primitive, the
+                      pool-based trainer, and the solver. All other
                       experiments import dpll/solve/ema/aug from here.
-  snowflake/    Snowflake-specific data loader + trainer wrapper + CVC5
-                      data generator.
-  maze/         Maze data loader (handles both the `maze_hard` HF
-                      split and on-the-fly `synthetic` mazes, plus a
-                      K-paths sampler with a pregen cache) + trainer
-                      wrapper + parallel eval.
+  snowflake/          Snowflake data loader + trainer + CVC5 data generator.
+  maze/               Maze data loader (the `maze_hard` HF split and
+                      on-the-fly `synthetic` mazes, plus a K-paths sampler
+                      with a pregen cache) + trainer.
+  <benchmark>/config.py     typed experiment config (defaults = paper recipe)
+  <benchmark>/eval_task.py  adapter for the shared evaluator
+tests/                CPU tests, including bit-exact equivalence fixtures
 ```
 
-All hyperparameters live in the `run.py` defaults and in
-Appendix C of the paper. The `--help` of each `modal run …` shows every
-flag.
+All hyperparameters are in `configs/` and in Appendix C of the paper.

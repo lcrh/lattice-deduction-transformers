@@ -1,0 +1,51 @@
+# Snowflake Sudoku, paper recipe (Table 2). These are also the
+# SnowflakeExperiment defaults. The model's grid shape and the operator's
+# vocab/augmentation settings are fixed by the covering-grid encoding and
+# set by the config class.
+name: paper
+
+model:
+  dim: 128
+  num_layers: 4
+  n_heads: 4
+  n_loops: 16
+  cls_token: true
+  use_rope: false
+
+data:
+  data_path: snowflake_train.parquet
+  n_puzzles: 500
+  seed: 42
+
+train:
+  steps: 1000
+  batch_size: 512
+  lr: 0.003
+  weight_decay: 0.1
+  seed: 0
+  bce_pos_mult: 4.0
+  bce_neg_mult: 0.5
+  softmax_loss_weight: 0.2
+  conflict_loss_weight: 0.1
+  step:
+    threshold: 0.10
+    cls_threshold: 0.5
+    temp_decide: 1.5
+    augment: true
+  monitor_data_path: snowflake_test.parquet
+
+solve:
+  step:
+    threshold: 0.10
+    cls_threshold: 0.6
+    temp_decide: 1.5
+    augment: true
+  max_rounds: 1000
+  n_chains: 64
+  batch_size: 512
+
+eval:
+  index_list: snowflake_test
+  stop: full
+  dropout_p: 0.05
+  workers: 8

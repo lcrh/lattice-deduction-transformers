@@ -23,15 +23,18 @@ refers to the *original* puzzle's givens, not the current state's
 
 from __future__ import annotations
 
+import dataclasses
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Callable
 
 import torch
 import torch.nn.functional as F
 
-from lattice_diffusion.data.sudoku_extreme import SudokuExtremeConfig, SudokuExtremeDataset
-from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig, PowersetModel
+from lattice_diffusion.data.sudoku_extreme import SudokuExtremeDataset, load_puzzles
+from lattice_diffusion.eval.indices import load as load_index_list
+from lattice_diffusion.models.looped_transformer import PowersetModel
 from lattice_diffusion.models.weighted_bce import weighted_bce_with_logits
 from lattice_diffusion.training.utils.checkpoint import save_checkpoint
 from lattice_diffusion.training.utils.scheduler import make_cosine_scheduler
@@ -44,13 +47,16 @@ from experiments.sudoku.dpll import StepConfig, dpll_step
 from experiments.sudoku.ema import ModelEMA
 from experiments.sudoku.solve import SolveConfig, solve
 
+if TYPE_CHECKING:
+    from experiments.sudoku.config import SudokuExperiment
+
 
 @dataclass
 class TrainConfig:
-    steps: int = 1000
+    steps: int = 4000
     batch_size: int = 512
     lr: float = 3e-3
-    weight_decay: float = 0.01
+    weight_decay: float = 0.1
     betas: tuple[float, float] = (0.9, 0.95)
     grad_clip: float = 1.0
     warmup_fraction: float = 0.1   # warmup_steps = int(steps * warmup_fraction)
@@ -59,38 +65,30 @@ class TrainConfig:
     bce_pos_mult: float = 4.0
     bce_neg_mult: float = 0.5
     softmax_loss_weight: float = 0.2
-    conflict_loss_weight: float = 1.0
+    conflict_loss_weight: float = 0.1
 
-    # Augment toggle lives at `step.augment` (StepConfig). Both the
-    # grad-tracked forward (`aug_forward`) and the no-grad
-    # `dpll_step` read from there.
-    step: StepConfig = field(default_factory=StepConfig)
+    # The operator used to advance pool states during training. Augment
+    # toggle lives at `step.augment`: both the grad-tracked forward
+    # (`aug_forward`) and the no-grad `dpll_step` read from there.
+    step: StepConfig = field(default_factory=lambda: StepConfig(augment=True))
     max_age: int = 100  # age = train steps since backfill (counts up regardless of sampling)
     compile: bool = True
 
     # EMA of trainable params, evaluated at eval time. TRM paper recommends
-    # decay=0.999. Shadow + live state are both saved — eval (in run.py)
-    # auto-swaps EMA into the live model if `ema_state_dict` is present in
-    # the checkpoint extras.
+    # decay=0.999. Shadow + live state are both saved — eval auto-swaps EMA
+    # into the live model if `ema_state_dict` is present in the checkpoint.
     use_ema: bool = False
     ema_decay: float = 0.999
 
     log_every: int = 20
-    eval_every: int = 100             # in-train mini-solve frequency
-    # In-train eval: same 200-puzzle set as final eval, same K=64, but a
-    # very tight `max_rounds`. Reports how many puzzles solve in the
-    # trivial-deduction tail. With M = batch_size/K = 8, each puzzle gets
-    # ≤ eval_max_rounds forwards in its slot, total forwards ≤
-    # 200/M * eval_max_rounds = 25*5 ≈ 125 forwards = ~3s wall.
-    eval_n_puzzles: int = 200
-    eval_max_rounds: int = 5
-    eval_n_chains: int = 64
-
-    out_dir: str = "checkpoints/sudoku"
-    name: str = ""
-
-    model: LoopedTransformerConfig = field(default_factory=LoopedTransformerConfig)
-    data: SudokuExtremeConfig = field(default_factory=SudokuExtremeConfig)
+    # In-training monitoring: a tight-budget mini-solve on the first
+    # `monitor_n_puzzles` validation puzzles (`sudoku_val`) every
+    # `monitor_every` steps. Logging only; it runs under a forked RNG so it
+    # does not change the trained weights.
+    monitor_every: int = 100
+    monitor_n_puzzles: int = 200
+    monitor_max_rounds: int = 5
+    monitor_n_chains: int = 64
 
 
 def _gt_conflict(
@@ -159,6 +157,36 @@ def _alpha_surviving(
     return alpha
 
 
+def monitor_solve(model, ema, x, y, given_mask, cfg, **solve_kw):
+    """Tight-budget solve for in-training monitoring, with the training
+    operator `cfg.step`. Runs under a forked RNG so it does not shift the
+    training RNG stream (the trained weights do not depend on how often
+    monitoring runs), and on EMA weights when EMA is on."""
+    model.eval()
+    ema_backup = ema.swap_in(model) if ema is not None else None
+    devices = [x.device] if x.device.type == "cuda" else []
+    with torch.no_grad(), torch.random.fork_rng(devices=devices):
+        res = solve(model, x, y, given_mask, SolveConfig(
+            step=cfg.step, max_rounds=cfg.monitor_max_rounds, n_chains=cfg.monitor_n_chains,
+            # Match training batch shape so torch.compile reuses its kernel.
+            batch_size=cfg.batch_size,
+        ), verbose=False, **solve_kw)
+    if ema_backup is not None:
+        ema.swap_out(model, ema_backup)
+    return res
+
+
+def format_monitor(res, step: int, max_rounds: int) -> str:
+    unsound = res.diag_total_unsound_deductions / max(res.diag_total_deduced, 1)
+    cls_p = res.diag_conflict_tp / max(res.diag_conflict_tp + res.diag_conflict_fp, 1)
+    cls_r = res.diag_conflict_tp / max(res.diag_conflict_tp + res.diag_conflict_fn, 1)
+    return (f"  [monitor step={step}, max_rounds={max_rounds}] "
+            f"correct={int(res.correct.sum())}/{res.solved.shape[0]}  "
+            f"wrong={int(res.wrong.sum())}  to={int(res.timeouts.sum())}  "
+            f"calls={res.model_calls}  unsound={unsound:.3%}  "
+            f"cls:P={cls_p:.2f}/R={cls_r:.2f}")
+
+
 def _given_mask(orig_x: torch.Tensor) -> torch.Tensor:
     """[B, S] bool: cells that started as singletons in the original puzzle."""
     return (orig_x.sum(dim=-1) == 1)
@@ -201,15 +229,24 @@ def _losses(out, state, orig_y, given_mask, is_sat, gt_conflict_target,
     return total / n_loops
 
 
-def train(cfg: TrainConfig):
+def _monitor_set(cache_dir: str, n: int, device) -> tuple[torch.Tensor, torch.Tensor]:
+    """First `n` puzzles of the held-out `sudoku_val` list."""
+    idx = load_index_list("sudoku_val").indices[:n]
+    x, y = load_puzzles(cache_dir, "train", idx)
+    return x.to(device).float(), y.to(device).float()
+
+
+def train(exp: SudokuExperiment, ckpt_path: str | Path,
+          commit: Callable[[], None] = lambda: None) -> Path:
+    """Train `exp` and save the checkpoint to `ckpt_path`. (`commit` is unused:
+    runs are short enough to restart instead of resuming.)"""
+    cfg = exp.train
+    ckpt_path = Path(ckpt_path)
     torch.manual_seed(cfg.seed)
     torch.set_float32_matmul_precision("high")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    out_dir = Path(cfg.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    ckpt_path = out_dir / f"{cfg.name}_{ts}.pt"
 
-    model = PowersetModel(cfg.model).to(device)
+    model = PowersetModel(exp.model).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"device={device}  params={n_params:,}  steps={cfg.steps}  bs={cfg.batch_size}",
           flush=True)
@@ -217,33 +254,14 @@ def train(cfg: TrainConfig):
         print("torch.compile(dynamic=False) …", flush=True)
         model = torch.compile(model, dynamic=False)
 
-    cfg.data.batch_size = cfg.batch_size
-    dataset = SudokuExtremeDataset(cfg.data)
+    dataset = SudokuExtremeDataset(dataclasses.replace(exp.data, batch_size=cfg.batch_size))
 
-    # Snapshot a fixed batch of test-distribution SAT puzzles for in-train eval.
-    # IMPORTANT: pull from the SAME 200-puzzle set the final eval uses, then
-    # take the first `eval_n_puzzles` SAT puzzles. SudokuExtremeDataset's
-    # subset selection is `n_puzzles`-dependent (np.random.default_rng(seed)
-    # .choice(N, k) gives different subsets at different k even with the
-    # same seed), so requesting n_puzzles=200 matches the final eval's
-    # subset; requesting the in-train's eval_n_puzzles=16 directly would
-    # land on a different (and harder) subset.
-    eval_ds = SudokuExtremeDataset(SudokuExtremeConfig(
-        cache_dir=cfg.data.cache_dir, split="test",
-        n_puzzles=200, batch_size=200,
-        seed=200,
-        zero_hint_weight=1.0, correct_hint_weight=0.0, error_hint_weight=0.0,
-        augment_digit_perm=False, augment_dihedral=False,
-    ))
-    ex_x, ex_y, ex_sat = eval_ds.next_batch()
-    eval_ds.close()
-    sat_mask = ex_sat.bool()
-    eval_x = ex_x[sat_mask][:cfg.eval_n_puzzles].to(device).float()
-    eval_y = ex_y[sat_mask][:cfg.eval_n_puzzles].to(device).float()
-    eval_given = (eval_x.sum(dim=-1) == 1)
-    print(f"In-train eval set: {eval_x.shape[0]} SAT puzzles "
-          f"(every {cfg.eval_every} steps, "
-          f"K={cfg.eval_n_chains}, max_rounds={cfg.eval_max_rounds})", flush=True)
+    if cfg.monitor_every > 0:
+        eval_x, eval_y = _monitor_set(exp.data.cache_dir, cfg.monitor_n_puzzles, device)
+        eval_given = (eval_x.sum(dim=-1) == 1)
+        print(f"Monitoring set: {eval_x.shape[0]} sudoku_val puzzles "
+              f"(every {cfg.monitor_every} steps, "
+              f"K={cfg.monitor_n_chains}, max_rounds={cfg.monitor_max_rounds})", flush=True)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
                                    weight_decay=cfg.weight_decay, betas=cfg.betas)
@@ -426,46 +444,13 @@ def train(cfg: TrainConfig):
         pool_last_alpha[sample_idx] = new_last_alpha
         pool_age[sample_idx] = new_age
 
-        # ---- in-train eval (mini-solve on held-out SAT puzzles) ----
-        if cfg.eval_every > 0 and step % cfg.eval_every == 0:
+        # ---- in-train monitoring (mini-solve on validation puzzles) ----
+        if cfg.monitor_every > 0 and step % cfg.monitor_every == 0:
             if device.type == "cuda":
                 torch.cuda.synchronize()
             _eval_t0 = time.perf_counter()
-            model.eval()
-            ema_backup = ema.swap_in(model) if ema is not None else None
-            with torch.no_grad():
-                eval_solve_cfg = SolveConfig(
-                    step=cfg.step,  # solve() doesn't pass orig_y, so deduction is deterministic;
-                                    # `cfg.step.augment` controls eval-time aug
-                    max_rounds=cfg.eval_max_rounds,
-                    n_chains=cfg.eval_n_chains,
-                    # Match training batch shape so torch.compile reuses its kernel.
-                    batch_size=cfg.batch_size,
-                )
-                eval_res = solve(
-                    model, eval_x, eval_y, eval_given, eval_solve_cfg,
-                    verbose=False,
-                )
-            if ema is not None and ema_backup is not None:
-                ema.swap_out(model, ema_backup)
-            n_e = eval_res.solved.shape[0]
-            n_cor_e = int(eval_res.correct.sum().item())
-            n_wr_e = int(eval_res.wrong.sum().item())
-            n_to_e = int(eval_res.timeouts.sum().item())
-            den = max(eval_res.diag_total_deduced, 1)
-            unsound_rate_e = eval_res.diag_total_unsound_deductions / den
-            cls_p_e = eval_res.diag_conflict_tp / max(
-                eval_res.diag_conflict_tp + eval_res.diag_conflict_fp, 1)
-            cls_r_e = eval_res.diag_conflict_tp / max(
-                eval_res.diag_conflict_tp + eval_res.diag_conflict_fn, 1)
-            print(
-                f"  [intrain-eval step={step}, max_rounds={cfg.eval_max_rounds}] "
-                f"correct={n_cor_e}/{n_e}  wrong={n_wr_e}  to={n_to_e}  "
-                f"calls={eval_res.model_calls}  "
-                f"unsound={unsound_rate_e:.3%}  "
-                f"cls:P={cls_p_e:.2f}/R={cls_r_e:.2f}",
-                flush=True,
-            )
+            res = monitor_solve(model, ema, eval_x, eval_y, eval_given, cfg)
+            print(format_monitor(res, step, cfg.monitor_max_rounds), flush=True)
             if device.type == "cuda":
                 torch.cuda.synchronize()
             intrain_eval_secs += time.perf_counter() - _eval_t0
@@ -580,8 +565,9 @@ def train(cfg: TrainConfig):
     if ema is not None:
         extra["ema_state_dict"] = ema.state_dict()
         extra["ema_decay"] = cfg.ema_decay
+    extra.update(exp.checkpoint_meta())
     save_checkpoint(
-        path=ckpt_path, model=model, model_cfg=cfg.model, train_cfg=cfg,
+        path=ckpt_path, model=model, model_cfg=exp.model, train_cfg=cfg,
         extra=extra,
     )
     print(f"Saved: {ckpt_path}", flush=True)

@@ -1,0 +1,136 @@
+"""Shared experiment plumbing: the config base class and the Modal run flow.
+
+Each benchmark defines an `Experiment` subclass (experiments/<b>/config.py)
+with `name`, `model`, `data`, `train`, `solve` and `eval` blocks, and a
+Modal app (experiments/<b>/run.py) whose functions call `run_experiment`
+remotely and `launch` locally.
+
+Checkpoints live at a deterministic path derived from the training config,
+so rerunning a config finds its finished checkpoint instead of retraining,
+and a launcher can tell which runs exist.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import json
+from pathlib import Path
+from typing import Callable, ClassVar
+
+from lattice_diffusion import config as cfglib
+from lattice_diffusion.eval.config import build_spec
+from lattice_diffusion.eval.records import EvalSpec
+
+# Training fields that do not change the trained weights: progress logging and
+# in-training monitoring (which runs under a forked RNG), resume-snapshot
+# cadence, and prefetch depth. The seed is kept out of the hash and put in
+# the checkpoint name instead.
+_UNHASHED_TRAIN = ("seed", "log_every", "monitor_every", "monitor_n_puzzles",
+                   "monitor_max_rounds", "monitor_n_chains", "checkpoint_every")
+
+
+@dataclasses.dataclass
+class Experiment:
+    BENCHMARK: ClassVar[str]
+    # Keys computed from other fields in __post_init__; may not be set by hand.
+    DERIVED: ClassVar[tuple[str, ...]] = ()
+    # Keys that depend on where the job runs (data mounts), set by `localized`.
+    ENVIRONMENT: ClassVar[tuple[str, ...]] = ()
+
+    def training_dict(self) -> dict:
+        """Everything that determines the trained weights."""
+        d = {k: cfglib.to_dict(getattr(self, k)) for k in ("model", "data", "train")}
+        for key in _UNHASHED_TRAIN:
+            d["train"].pop(key, None)
+        for path in self.ENVIRONMENT:
+            section, key = path.split(".")
+            d[section].pop(key, None)
+        for key in ("batch_size", "prefetch_batches"):
+            d["data"].pop(key, None)    # batch_size is derived from train.batch_size
+        return d
+
+    def train_hash(self) -> str:
+        return cfglib.stable_hash(self.training_dict())
+
+    def checkpoint_path(self, root: str | Path) -> Path:
+        return (Path(root) / self.BENCHMARK
+                / f"{self.name}-{self.train_hash()}-seed{self.train.seed}.pt")
+
+    def localized(self, data_dir: str):
+        """Copy with data paths resolved against `data_dir`."""
+        return self
+
+    def solve_dict(self) -> dict:
+        return cfglib.to_dict(self.solve)
+
+    def eval_spec(self, checkpoint: str, **kw) -> EvalSpec:
+        return build_spec(self.BENCHMARK, checkpoint, self.eval, self.solve_dict(), **kw)
+
+    def to_json(self) -> str:
+        return json.dumps(cfglib.to_dict(self))
+
+    @classmethod
+    def from_json(cls, s: str):
+        return cfglib.from_dict(cls, json.loads(s))
+
+    def checkpoint_meta(self) -> dict:
+        """Stored in every checkpoint so evals can recover the config."""
+        return {"benchmark": self.BENCHMARK, "experiment": cfglib.to_dict(self),
+                "train_hash": self.train_hash()}
+
+
+def print_config(exp: Experiment) -> None:
+    """Flattened config with values that differ from the class defaults starred."""
+    defaults = cfglib.flatten(cfglib.to_dict(type(exp)()))
+    values = cfglib.flatten(cfglib.to_dict(exp))
+    width = max(len(k) for k in values)
+    changed = 0
+    for key, value in values.items():
+        mark = " " if defaults.get(key) == value else "*"
+        changed += mark == "*"
+        tail = "" if mark == " " else f"   (default {defaults.get(key)!r})"
+        print(f"  {mark} {key:<{width}} = {value!r}{tail}", flush=True)
+    print(f"  {changed}/{len(values)} differ from {type(exp).__name__} defaults", flush=True)
+
+
+def run_experiment(exp: Experiment, train_fn: Callable, checkpoint_root: str, data_dir: str,
+                   commit: Callable[[], None]) -> dict:
+    """Train unless the checkpoint exists, then spawn the shared evaluator.
+
+    `train_fn(exp, ckpt_path, commit)` writes the checkpoint atomically;
+    `commit` persists the volume (trainers that snapshot for resume call it).
+    Runs inside the training container. The eval is spawned, not awaited, so
+    the training GPU is released and a --detach run keeps evaluating after
+    the local client disconnects.
+    """
+    from lattice_diffusion.eval.modal_app import EVAL_ROOT, coordinate
+
+    ckpt = exp.checkpoint_path(checkpoint_root)
+    if ckpt.exists():
+        print(f"Checkpoint exists, skipping training: {ckpt}", flush=True)
+    else:
+        print(f"Training -> {ckpt}", flush=True)
+        ckpt.parent.mkdir(parents=True, exist_ok=True)
+        train_fn(exp.localized(data_dir), ckpt, commit)
+        commit()
+    spec = exp.eval_spec(str(ckpt))
+    call = coordinate.spawn(spec.to_json())
+    run_dir = str(spec.run_dir(EVAL_ROOT))
+    print(f"Spawned eval {run_dir} (call {call.object_id})", flush=True)
+    return {"checkpoint": str(ckpt), "eval_call_id": call.object_id, "eval_run_dir": run_dir}
+
+
+def launch(exp_cls, run_fn, config: str, overrides: str, wait: bool) -> None:
+    """Local entrypoint body: resolve the config, run remotely, optionally
+    wait for the eval."""
+    import modal
+
+    exp = cfglib.load(exp_cls, config or None, overrides)
+    print(f"{exp_cls.BENCHMARK} config {config or '(defaults)'}  overrides: {overrides or '-'}",
+          flush=True)
+    print_config(exp)
+    result = run_fn.remote(exp.to_json())
+    print(f"\nCheckpoint: {result['checkpoint']}\nEval: {result['eval_run_dir']}", flush=True)
+    if wait:
+        eval_result = modal.FunctionCall.from_id(result["eval_call_id"]).get()
+        print(f"\n{eval_result['summary']}", flush=True)

@@ -23,14 +23,16 @@ default-preserving for sudoku.
 
 from __future__ import annotations
 
-import time
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Callable
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
-from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig, PowersetModel
+from lattice_diffusion.models.looped_transformer import PowersetModel
 from lattice_diffusion.models.weighted_bce import weighted_bce_with_logits
 from lattice_diffusion.training.utils.checkpoint import save_checkpoint
 from lattice_diffusion.training.utils.scheduler import make_cosine_scheduler
@@ -38,9 +40,12 @@ from lattice_diffusion.training.utils.scheduler import make_cosine_scheduler
 from experiments.sudoku.aug import aug_forward
 from experiments.sudoku.dpll import StepConfig, dpll_step
 from experiments.sudoku.ema import ModelEMA
-from experiments.sudoku.solve import SolveConfig, solve
+from experiments.sudoku.train import format_monitor, monitor_solve
 
-from experiments.snowflake.data import SnowflakeConfig, SnowflakeDataset
+from experiments.snowflake.data import SnowflakeDataset, _load_puzzles, load_states
+
+if TYPE_CHECKING:
+    from experiments.snowflake.config import SnowflakeExperiment
 
 
 # Snowflake recipe constants (must stay consistent with data.py).
@@ -51,21 +56,10 @@ GRID_COLS = 10
 SEQ_LEN = GRID_ROWS * GRID_COLS  # 150
 
 
-def _default_step_cfg() -> StepConfig:
-    """StepConfig with snowflake-specific defaults: vocab_dim=6, augment_dihedral=False."""
-    return StepConfig(vocab_dim=VOCAB, augment_dihedral=False)
-
-
-def _default_model_cfg() -> LoopedTransformerConfig:
-    """LoopedTransformerConfig with snowflake-specific defaults: n_channels=7,
-    grid_rows=15, grid_cols=10, cls_token=True (for the conflict head)."""
-    return LoopedTransformerConfig(
-        n_channels=N_CHANNELS,
-        seq_len=SEQ_LEN,
-        grid_rows=GRID_ROWS,
-        grid_cols=GRID_COLS,
-        cls_token=True,
-    )
+def snowflake_step(**kw) -> StepConfig:
+    """Snowflake's operator: digit-perm augmentation only (the covering grid
+    is hex, so no dihedral) over the 6 vocab channels."""
+    return StepConfig(vocab_dim=VOCAB, augment_dihedral=False, **kw)
 
 
 @dataclass
@@ -73,7 +67,7 @@ class TrainConfig:
     steps: int = 1000
     batch_size: int = 512
     lr: float = 3e-3
-    weight_decay: float = 0.01
+    weight_decay: float = 0.1
     betas: tuple[float, float] = (0.9, 0.95)
     grad_clip: float = 1.0
     warmup_fraction: float = 0.1
@@ -82,9 +76,9 @@ class TrainConfig:
     bce_pos_mult: float = 4.0
     bce_neg_mult: float = 0.5
     softmax_loss_weight: float = 0.2
-    conflict_loss_weight: float = 1.0
+    conflict_loss_weight: float = 0.1
 
-    step: StepConfig = field(default_factory=_default_step_cfg)
+    step: StepConfig = field(default_factory=lambda: snowflake_step(augment=True))
     max_age: int = 100
     compile: bool = True
 
@@ -92,19 +86,13 @@ class TrainConfig:
     ema_decay: float = 0.999
 
     log_every: int = 20
-    eval_every: int = 100
-    eval_n_puzzles: int = 200
-    eval_max_rounds: int = 5
-    eval_n_chains: int = 64
-
-    out_dir: str = "checkpoints/snowflake"
-    name: str = ""
-
-    model: LoopedTransformerConfig = field(default_factory=_default_model_cfg)
-    data: SnowflakeConfig = field(default_factory=SnowflakeConfig)
-    # Optional separate eval dataset config. If None, we snapshot from cfg.data
-    # with seed=200 + zero_hint_weight=1.0 (eval is all SAT puzzles).
-    eval_data: SnowflakeConfig | None = None
+    # In-training monitoring on a seeded sample of `monitor_data_path`
+    # (relative to the data dir); logging only, see sudoku/train.py.
+    monitor_every: int = 100
+    monitor_n_puzzles: int = 200
+    monitor_max_rounds: int = 5
+    monitor_n_chains: int = 64
+    monitor_data_path: str = "snowflake_test.parquet"
 
 
 def _build_state(orig_x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -239,15 +227,25 @@ def _losses(
     return total / n_loops
 
 
-def train(cfg: TrainConfig):
+def _monitor_set(path: str, n: int, device):
+    puzzles = _load_puzzles(path)
+    idx = np.random.default_rng(200).permutation(len(puzzles))[:n]
+    x, y, mask = load_states(puzzles, idx)
+    x, y, mask = x.to(device), y.to(device), mask.to(device)
+    return _build_state(x, mask), y, _given_mask(x), mask
+
+
+def train(exp: SnowflakeExperiment, ckpt_path: str | Path,
+          commit: Callable[[], None] = lambda: None) -> Path:
+    """Train `exp` and save the checkpoint to `ckpt_path`. (`commit` is unused:
+    runs are short enough to restart instead of resuming.)"""
+    cfg = exp.train
+    ckpt_path = Path(ckpt_path)
     torch.manual_seed(cfg.seed)
     torch.set_float32_matmul_precision("high")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    out_dir = Path(cfg.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    ckpt_path = out_dir / f"{cfg.name}_{ts}.pt"
 
-    model = PowersetModel(cfg.model).to(device)
+    model = PowersetModel(exp.model).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"device={device}  params={n_params:,}  steps={cfg.steps}  bs={cfg.batch_size}",
           flush=True)
@@ -255,53 +253,14 @@ def train(cfg: TrainConfig):
         print("torch.compile(dynamic=False) …", flush=True)
         model = torch.compile(model, dynamic=False)
 
-    cfg.data.batch_size = cfg.batch_size
-    dataset = SnowflakeDataset(cfg.data)
+    dataset = SnowflakeDataset(dataclasses.replace(exp.data, batch_size=cfg.batch_size))
 
-    # In-train eval set: take a snapshot of all-SAT puzzles with a fixed seed.
-    # `cfg.eval_data` should point at a held-out test split. If it's None we
-    # fall back to deriving the test parquet from cfg.data.data_path
-    # (`..._train.parquet` -> `..._test.parquet`); failing that we sample from
-    # the training file with a different seed and warn loudly. The first two
-    # options yield clean held-out evaluation; the warning case will leak.
-    if cfg.eval_data is not None:
-        eval_cfg = cfg.eval_data
-    else:
-        train_path = cfg.data.data_path
-        sibling = train_path.replace("_train.parquet", "_test.parquet").replace(
-            "_train.json", "_test.json"
-        )
-        if sibling != train_path and Path(sibling).exists():
-            print(f"  eval_data unset; using sibling test split at {sibling}",
-                  flush=True)
-            eval_cfg = SnowflakeConfig(
-                data_path=sibling,
-                n_puzzles=cfg.eval_n_puzzles, batch_size=cfg.eval_n_puzzles,
-                seed=200,
-                zero_hint_weight=1.0, correct_hint_weight=0.0, error_hint_weight=0.0,
-            )
-        else:
-            print(f"  WARNING: eval_data unset AND no sibling test split found "
-                  f"({sibling!r} does not exist); inline eval will sample from "
-                  f"the training file with seed=200, expect leak.", flush=True)
-            eval_cfg = SnowflakeConfig(
-                data_path=train_path,
-                n_puzzles=cfg.eval_n_puzzles, batch_size=cfg.eval_n_puzzles,
-                seed=200,
-                zero_hint_weight=1.0, correct_hint_weight=0.0, error_hint_weight=0.0,
-            )
-    eval_ds = SnowflakeDataset(eval_cfg)
-    ex_x, ex_y, ex_mask, ex_sat = eval_ds.next_batch()
-    eval_ds.close()
-    sat_mask = ex_sat.bool()
-    eval_x = ex_x[sat_mask][:cfg.eval_n_puzzles].to(device).float()
-    eval_y = ex_y[sat_mask][:cfg.eval_n_puzzles].to(device).float()
-    eval_in_puzzle = ex_mask[sat_mask][:cfg.eval_n_puzzles].to(device).bool()
-    eval_state = _build_state(eval_x, eval_in_puzzle)
-    eval_given = _given_mask(eval_x)
-    print(f"In-train eval set: {eval_state.shape[0]} SAT puzzles "
-          f"(every {cfg.eval_every} steps, "
-          f"K={cfg.eval_n_chains}, max_rounds={cfg.eval_max_rounds})", flush=True)
+    if cfg.monitor_every > 0:
+        eval_state, eval_y, eval_given, eval_in_puzzle = _monitor_set(
+            str(Path(exp.data.data_dir) / cfg.monitor_data_path), cfg.monitor_n_puzzles, device)
+        print(f"Monitoring set: {eval_state.shape[0]} puzzles from {cfg.monitor_data_path} "
+              f"(every {cfg.monitor_every} steps, "
+              f"K={cfg.monitor_n_chains}, max_rounds={cfg.monitor_max_rounds})", flush=True)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
                                    weight_decay=cfg.weight_decay, betas=cfg.betas)
@@ -452,42 +411,11 @@ def train(cfg: TrainConfig):
         pool_last_alpha[sample_idx] = new_last_alpha
         pool_age[sample_idx] = new_age
 
-        # ---- in-train eval ----
-        if cfg.eval_every > 0 and step % cfg.eval_every == 0:
-            model.eval()
-            ema_backup = ema.swap_in(model) if ema is not None else None
-            with torch.no_grad():
-                eval_solve_cfg = SolveConfig(
-                    step=cfg.step,
-                    max_rounds=cfg.eval_max_rounds,
-                    n_chains=cfg.eval_n_chains,
-                    batch_size=cfg.batch_size,
-                )
-                eval_res = solve(
-                    model, eval_state, eval_y, eval_given, eval_solve_cfg,
-                    in_puzzle_mask=eval_in_puzzle,
-                    verbose=False,
-                )
-            if ema is not None and ema_backup is not None:
-                ema.swap_out(model, ema_backup)
-            n_e = eval_res.solved.shape[0]
-            n_cor_e = int(eval_res.correct.sum().item())
-            n_wr_e = int(eval_res.wrong.sum().item())
-            n_to_e = int(eval_res.timeouts.sum().item())
-            den = max(eval_res.diag_total_deduced, 1)
-            unsound_rate_e = eval_res.diag_total_unsound_deductions / den
-            cls_p_e = eval_res.diag_conflict_tp / max(
-                eval_res.diag_conflict_tp + eval_res.diag_conflict_fp, 1)
-            cls_r_e = eval_res.diag_conflict_tp / max(
-                eval_res.diag_conflict_tp + eval_res.diag_conflict_fn, 1)
-            print(
-                f"  [intrain-eval step={step}, max_rounds={cfg.eval_max_rounds}] "
-                f"correct={n_cor_e}/{n_e}  wrong={n_wr_e}  to={n_to_e}  "
-                f"calls={eval_res.model_calls}  "
-                f"unsound={unsound_rate_e:.3%}  "
-                f"cls:P={cls_p_e:.2f}/R={cls_r_e:.2f}",
-                flush=True,
-            )
+        # ---- in-train monitoring ----
+        if cfg.monitor_every > 0 and step % cfg.monitor_every == 0:
+            res = monitor_solve(model, ema, eval_state, eval_y, eval_given, cfg,
+                                in_puzzle_mask=eval_in_puzzle)
+            print(format_monitor(res, step, cfg.monitor_max_rounds), flush=True)
 
         # ---- logging ----
         if step % cfg.log_every == 0:
@@ -551,8 +479,9 @@ def train(cfg: TrainConfig):
     if ema is not None:
         extra["ema_state_dict"] = ema.state_dict()
         extra["ema_decay"] = cfg.ema_decay
+    extra.update(exp.checkpoint_meta())
     save_checkpoint(
-        path=ckpt_path, model=model, model_cfg=cfg.model, train_cfg=cfg,
+        path=ckpt_path, model=model, model_cfg=exp.model, train_cfg=cfg,
         extra=extra,
     )
     print(f"Saved: {ckpt_path}", flush=True)

@@ -3,7 +3,7 @@ import random
 import pytest
 
 from lattice_diffusion.eval.scheduler import ThreadExecutor, n_blocks, run_blocks
-from lattice_diffusion.eval.stop import NoStop, stop_from_dict
+from lattice_diffusion.eval.stop import PRESETS, FixedN, NoStop, stop_from_dict
 
 from tests.eval.fakes import ReorderExecutor, block_solver, make_spec
 
@@ -89,3 +89,31 @@ def test_no_stop_evaluates_everything():
     assert res.stop_reason == "exhausted"
     assert res.n == res.n_evaluated == len(spec.explicit_indices)
     assert [r["pos"] for r in res.rows] == list(range(res.n))
+
+
+@pytest.mark.parametrize("workers,window", [(1, 1), (4, 1), (4, 4), (16, 16), (16, 64)])
+def test_fixed_n_reports_exactly_n(workers, window):
+    """n is not a multiple of the block size; dispatch stops at the block
+    holding item n, whatever the parallelism."""
+    spec = make_spec(stop=FixedN(1000))
+    executor = ThreadExecutor(block_solver(spec, jitter_s=0.002), n_workers=workers)
+    try:
+        res = _run(spec, executor, max_in_flight=window)
+    finally:
+        executor.shutdown()
+    assert res.stop_reason == "fixed_n"
+    assert res.n == len(res.rows) == 1000
+    assert [r["pos"] for r in res.rows] == list(range(1000))
+    assert max(res.blocks_done) == n_blocks(1000, spec.block_size) - 1
+
+
+def test_fixed_n_longer_than_list_is_exhausted():
+    spec = make_spec(stop=FixedN(10_000))
+    res = _run(spec, ReorderExecutor(block_solver(spec), seed=1), max_in_flight=4)
+    assert res.stop_reason == "exhausted"
+    assert res.n == len(spec.explicit_indices)
+
+
+def test_fixed_n_round_trips_and_is_the_ablation_preset():
+    assert stop_from_dict(FixedN(1000).to_dict()) == FixedN(1000)
+    assert PRESETS["ablation"] == FixedN(1000)

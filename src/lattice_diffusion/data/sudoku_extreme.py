@@ -87,6 +87,18 @@ def _download_and_cache(cache_dir: str, split: str = "train") -> Path:
     return cache_path
 
 
+def load_puzzles(cache_dir: str, split: str, indices) -> tuple[torch.Tensor, torch.Tensor]:
+    """(x, y) uint8 [len(indices), 81, 9] for absolute indices into a split.
+
+    Memory-maps the cache so pulling a few puzzles out of the 3.8M-puzzle
+    train split does not load the whole file.
+    """
+    data = torch.load(_download_and_cache(cache_dir, split), map_location="cpu",
+                      weights_only=True, mmap=True)
+    idx = torch.as_tensor(np.asarray(indices), dtype=torch.long)
+    return data["x"].index_select(0, idx).clone(), data["y"].index_select(0, idx).clone()
+
+
 def _make_sample(
     question: np.ndarray,
     answer: np.ndarray,

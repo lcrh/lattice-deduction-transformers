@@ -10,6 +10,14 @@ the same order and silent drift (e.g. a numpy change) fails loudly.
 - `sudoku_val`: 10k puzzles from the train split, held out from every
   training pool (`SudokuExtremeDataset` excludes them) and used for choosing
   defaults, never for reported numbers.
+- `maze_test`: the 1,000-puzzle Maze-Hard test split.
+- `snowflake_test`: the generated Snowflake test split. Its size is only
+  known once the dataset is generated, so the list is unpinned: the caller
+  supplies the split size and each run directory records the digest it
+  used (runner.py), so a regenerated dataset is caught on resume.
+  TODO: pin split_size and sha256 once the camera-ready Snowflake data is
+  generated; also add a `snowflake_val` list once the generator writes a
+  validation split.
 """
 
 from __future__ import annotations
@@ -24,10 +32,10 @@ import numpy as np
 class IndexListSpec:
     task: str
     split: str
-    split_size: int
+    split_size: int | None  # None = unpinned (see module docstring)
     seed: int
     length: int | None      # None = full permutation
-    sha256: str
+    sha256: str | None      # None = unpinned
 
 
 SPECS: dict[str, IndexListSpec] = {
@@ -41,6 +49,15 @@ SPECS: dict[str, IndexListSpec] = {
         length=10_000,
         sha256="c46dc1bb61b30cfdaf0df93da5ba75b388741f8968647a498bb8ad0f2ede32ad",
     ),
+    "maze_test": IndexListSpec(
+        task="maze", split="test", split_size=1_000, seed=20261017,
+        length=None,
+        sha256="31a7a6ad8ad29ea1c818d39ab870a4b562dc0d70ec8f9c9c963383d4272b0250",
+    ),
+    "snowflake_test": IndexListSpec(
+        task="snowflake", split="test", split_size=None, seed=20261018,
+        length=None, sha256=None,
+    ),
 }
 
 
@@ -50,6 +67,7 @@ class IndexList:
     task: str
     split: str
     indices: np.ndarray     # absolute dataset indices, int64, in evaluation order
+    split_size: int | None = None   # size of the split the indices point into
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -59,15 +77,26 @@ def _digest(indices: np.ndarray) -> str:
     return hashlib.sha256(np.ascontiguousarray(indices, dtype="<i8").tobytes()).hexdigest()
 
 
-def generate(spec: IndexListSpec) -> np.ndarray:
-    perm = np.random.default_rng(spec.seed).permutation(spec.split_size).astype(np.int64)
+def generate(spec: IndexListSpec, split_size: int | None = None) -> np.ndarray:
+    n = spec.split_size if spec.split_size is not None else split_size
+    perm = np.random.default_rng(spec.seed).permutation(n).astype(np.int64)
     return perm if spec.length is None else perm[:spec.length]
+
+
+def is_pinned(name: str) -> bool:
+    return SPECS[name].split_size is not None
 
 
 def load(name: str, split_size: int | None = None) -> IndexList:
     """Build a named list. Pass the actual split size when available so a
-    dataset that changed size is caught here rather than mid-run."""
+    dataset that changed size is caught here rather than mid-run; it is
+    required for unpinned lists."""
     spec = SPECS[name]
+    if spec.split_size is None:
+        if split_size is None:
+            raise ValueError(f"{name} is unpinned; pass the dataset's split size")
+        return IndexList(name=name, task=spec.task, split=spec.split,
+                         indices=generate(spec, split_size), split_size=split_size)
     if split_size is not None and split_size != spec.split_size:
         raise ValueError(f"{name}: dataset split has {split_size} items, "
                          f"index list expects {spec.split_size}")
@@ -75,7 +104,8 @@ def load(name: str, split_size: int | None = None) -> IndexList:
     if _digest(indices) != spec.sha256:
         raise ValueError(f"{name}: generated indices do not match the recorded "
                          f"checksum; refusing to evaluate on a different list")
-    return IndexList(name=name, task=spec.task, split=spec.split, indices=indices)
+    return IndexList(name=name, task=spec.task, split=spec.split, indices=indices,
+                     split_size=spec.split_size)
 
 
 def explicit(task: str, split: str, indices, name: str = "explicit") -> IndexList:

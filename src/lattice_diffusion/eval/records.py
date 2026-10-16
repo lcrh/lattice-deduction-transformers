@@ -22,10 +22,12 @@ Row fields (every benchmark):
     n_resets  chain resets
     solution  the accepted prediction, benchmark-specific string encoding
     verified  rule check of `solution` against the puzzle (never used for
-              acceptance; recorded for portfolio selection and auditing)
+              acceptance; recorded for portfolio selection and auditing);
+              null where the benchmark has no rule check (Snowflake)
 Optional fields:
     forwards_seq  forwards if one chain ran sequentially (drained-chain
-                  estimate; only with solve.estimate_sequential)
+                  estimate; only with `solve.estimate_sequential`)
+    label         Maze only: the exact-vs-alternate-path outcome
 """
 
 from __future__ import annotations
