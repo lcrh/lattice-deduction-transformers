@@ -25,7 +25,8 @@ def _result_record(tmp_path, entry, seed, statuses, **kw):
     return {"entry": entry, "key": f"A1/{entry}/seed{seed}", "seed": seed, "status": "done",
             "label": kw.pop("label", entry), "group": kw.pop("group", ""), "n": n,
             "accuracy": correct / n, "wrong": statuses.count("wrong"),
-            "timeout": statuses.count("timeout"), "calls_mean": 3.0, "unsound_rate": 0.001,
+            "timeout": statuses.count("timeout"), "calls_mean": 3.0, "calls_per_solve": 4.0,
+            "unsound_rate": 0.001,
             "stop_reason": "fixed_n",
             "rows_path": _write_rows(tmp_path, f"{entry}_{seed}", statuses), **kw}
 

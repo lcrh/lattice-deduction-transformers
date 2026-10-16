@@ -178,7 +178,8 @@ def _summary(n, correct, wrong=0, timeout=None):
         "n": n, "stop_reason": "fixed_n", "correct": correct, "wrong": wrong,
         "timeout": timeout, "accuracy": correct / n, "accuracy_cs": [0.9, 1.0],
         "wrong_rate_upper": 0.003, "failure_rate": (n - correct) / n,
-        "calls_all": calls, "calls_correct": calls, "soundness": {"unsound_rate": 0.01},
+        "calls_all": calls, "calls_correct": calls, "calls_per_solve": 7.0,
+        "soundness": {"unsound_rate": 0.01},
         "gpu_seconds": 10.0, "startup_seconds": 5.0, "wall_seconds": 20.0, "n_evaluated": n,
         "model_calls_total": 100, "mean_rounds_correct": 3.0, "mean_resets": 0.5,
     })

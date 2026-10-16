@@ -13,7 +13,7 @@ RESULTS = REPO / "paper" / "results"
 NUMERIC_COLUMNS = frozenset({
     "seed", "eval_seed", "x", "n", "correct", "wrong", "timeout", "accuracy", "acc_lo", "acc_hi",
     "wrong_rate_upper", "failure_rate", "calls_mean", "calls_p50", "calls_p75", "calls_p90",
-    "calls_p95", "calls_correct_mean", "unsound_rate", "gpu_seconds", "startup_seconds",
+    "calls_p95", "calls_correct_mean", "calls_per_solve", "unsound_rate", "gpu_seconds", "startup_seconds",
     "wall_seconds", "n_evaluated", "model_calls_total", "mean_rounds_correct", "mean_resets",
     "train_seconds", "train_post_compile_seconds", "model_dim", "model_layers", "model_loops",
     "model_heads", "model_seq_len", "model_ffn_mult", "model_channels", "train_steps",

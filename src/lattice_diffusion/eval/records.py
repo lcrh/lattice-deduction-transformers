@@ -207,11 +207,12 @@ class Summary:
     wrong_rate_upper: float             # one-sided 95% Clopper-Pearson
     calls_all: dict
     calls_correct: dict
+    calls_per_solve: float | None       # batched model calls / correct, over the reported blocks
     n_evaluated: int                    # including work past the stopping point
     overshoot: int
     wall_seconds: float
     gpu_seconds: float                  # worker time spent solving every evaluated block
-    startup_seconds: float              # worker time loading/compiling the model
+    startup_seconds: float              # worker time loading/compiling the model, every block
     model_calls_total: int | None       # batched forwards over every evaluated block
     mean_rounds_correct: float | None   # rounds to accept, over correct puzzles
     mean_resets: float | None
@@ -224,9 +225,29 @@ def _mean(vals: list[float]) -> float | None:
     return sum(vals) / len(vals) if vals else None
 
 
+def _calls_per_solve(result: ScheduleResult, meta: dict[int, dict]) -> float | None:
+    """Batched model calls per correct puzzle over the blocks the reported prefix touches.
+
+    Model calls are only known per block, so the last block counts in full,
+    including any puzzles past the stopping point.
+    """
+    blocks = sorted({r["block"] for r in result.rows})
+    if not blocks or any(b not in meta for b in blocks):
+        return None
+    calls = sum(meta[b]["model_calls"] for b in blocks)
+    correct = sum(r["status"] == "correct" for b in blocks for r in result.blocks[b])
+    return calls / correct if correct else None
+
+
+def _failure_rate_inverse_binomial(spec: EvalSpec, c, stop_reason: str) -> float:
+    """(K - 1) / (n - 1) when the run stopped at its K-th failure, else failures / n."""
+    if stop_reason == "failures" and c.failures == spec.stop.get("max_failures"):
+        return inverse_binomial_rate(c.failures, c.n)
+    return c.failures / c.n if c.n else 0.0
+
+
 def summarize(spec: EvalSpec, run_dir: Path, result: ScheduleResult,
-              wall_seconds: float, startup_seconds: float = 0.0,
-              alpha: float = 0.05) -> Summary:
+              wall_seconds: float, alpha: float = 0.05) -> Summary:
     c = result.counts
     meta = read_block_meta(run_dir)
     labels = Counter(r["label"] for r in result.rows if "label" in r)
@@ -241,15 +262,16 @@ def summarize(spec: EvalSpec, run_dir: Path, result: ScheduleResult,
         accuracy=c.correct / c.n if c.n else 0.0,
         accuracy_cs=confidence_sequence(c.correct, c.n, alpha),
         failure_rate=c.failures / c.n if c.n else 0.0,
-        failure_rate_inverse_binomial=inverse_binomial_rate(c.failures, c.n),
+        failure_rate_inverse_binomial=_failure_rate_inverse_binomial(spec, c, result.stop_reason),
         wrong_rate_upper=binomial_upper(c.wrong, c.n, alpha),
         calls_all=_call_stats(result.rows),
         calls_correct=_call_stats([r for r in result.rows if r["status"] == "correct"]),
+        calls_per_solve=_calls_per_solve(result, meta),
         n_evaluated=result.n_evaluated,
         overshoot=result.n_evaluated - c.n,
         wall_seconds=wall_seconds,
         gpu_seconds=sum(m["seconds"] for m in meta.values()),
-        startup_seconds=startup_seconds,
+        startup_seconds=sum(m["startup_seconds"] for m in meta.values()),
         model_calls_total=sum(m["model_calls"] for m in meta.values()) if meta else None,
         mean_rounds_correct=_mean([r["rounds"] for r in result.rows if r["status"] == "correct"]),
         mean_resets=_mean([r["n_resets"] for r in result.rows]),
@@ -279,7 +301,8 @@ def format_summary(s: Summary) -> str:
         f"n={s.n} ({s.stop_reason})  acc={s.accuracy:.5%} [{lo:.5%}, {hi:.5%}]  "
         f"correct={s.correct} wrong={s.wrong} (rate <= {s.wrong_rate_upper:.2e}) "
         f"timeout={s.timeout}  overshoot={s.overshoot}",
-        f"model calls={_fmt(s.model_calls_total, ',')}  "
+        f"model calls={_fmt(s.model_calls_total, ',')} "
+        f"(per solve {_fmt(s.calls_per_solve, ',.0f')})  "
         f"rounds (correct)={_fmt(s.mean_rounds_correct, '.1f')}  "
         f"resets={_fmt(s.mean_resets, '.2f')}  "
         f"wall={s.wall_seconds:.0f}s gpu={s.gpu_seconds / 3600:.2f}h "

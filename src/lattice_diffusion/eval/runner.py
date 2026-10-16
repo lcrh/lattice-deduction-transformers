@@ -113,7 +113,6 @@ def run_eval(
     persist: Callable[[], None] = lambda: None,
     log: Callable[[str], None] = print,
     block_meta: Callable[[int], dict | None] = lambda block: None,
-    startup_seconds: Callable[[], float] = lambda: 0.0,
     split_size: SplitSize | None = None,
     filter_indices: FilterIndices | None = None,
 ) -> Summary:
@@ -122,9 +121,8 @@ def run_eval(
     Args:
         make_executor: Builds the executor from a block -> BlockArgs function.
         persist: Called after block files are written (e.g. a volume commit).
-        block_meta: Per-block worker stats ({"model_calls", "seconds"}) saved next to
-            the block, so the summary's totals survive resumes.
-        startup_seconds: Total container load/compile time, for the summary.
+        block_meta: Per-block worker stats ({"model_calls", "seconds", "startup_seconds"})
+            saved next to the block, so the summary's totals survive resumes.
         split_size, filter_indices: See resolve_index_list.
     """
     lst = resolve_index_list(spec, split_size, filter_indices)
@@ -154,13 +152,16 @@ def run_eval(
             f"timeout={counts.timeout} ({prefix_blocks} blocks)")
 
     executor = make_executor(lambda b: block_args(spec, lst, b))
-    result = run_blocks(
-        n_items=len(lst), block_size=spec.block_size, executor=executor, stop=stop,
-        max_in_flight=spec.window, completed=completed,
-        on_block_done=on_block_done, on_progress=on_progress,
-    )
+    try:
+        result = run_blocks(
+            n_items=len(lst), block_size=spec.block_size, executor=executor, stop=stop,
+            max_in_flight=spec.window, completed=completed,
+            on_block_done=on_block_done, on_progress=on_progress,
+        )
+    finally:
+        executor.shutdown()
+        persist()
     summary = summarize(spec, run_dir, result, wall_seconds=time.time() - t0,
-                        startup_seconds=startup_seconds(),
                         alpha=getattr(stop, "alpha", 0.05))
     write_summary(run_dir, summary)
     persist()

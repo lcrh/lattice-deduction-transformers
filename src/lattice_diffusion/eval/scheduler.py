@@ -5,7 +5,9 @@ executor, at most `max_in_flight` beyond the contiguous completed prefix.
 Statistics and the stopping rule only ever see that prefix, walked puzzle by
 puzzle in index-list order, so the reported result does not depend on the
 number of workers, the window size, or completion order. Those only change
-wall-clock time and how much work runs past the stopping point.
+wall-clock time and how much work runs past the stopping point. Blocks already
+running when the rule fires are still collected and persisted, so a later,
+longer eval reuses them.
 
 Modal runs use a thread pool of blocking remote calls as the executor;
 tests use local functions.
@@ -47,6 +49,9 @@ class Row(TypedDict, total=False):
     seq_avg_attempt_len: float | None
 
 
+Finished = tuple[int, "list[Row] | BaseException"]
+
+
 class Executor(ABC):
     """Runs blocks; the scheduler decides which and when."""
 
@@ -54,9 +59,12 @@ class Executor(ABC):
     def submit(self, block: int) -> None: ...
 
     @abstractmethod
-    def wait_any(self) -> list[tuple[int, list[Row]]]:
-        """Wait for a submitted block; return every finished (block, rows) not yet returned."""
+    def wait_any(self) -> list[Finished]:
+        """Wait for a submitted block; return every finished (block, rows or error) not yet returned."""
         ...
+
+    def shutdown(self) -> None:
+        """Release workers; called once the scheduler is done with the executor."""
 
 
 @dataclass
@@ -64,11 +72,15 @@ class ScheduleResult:
     stop_reason: StopReason
     counts: PrefixCounts
     rows: list[Row]                 # the reported prefix, in index-list order
-    n_evaluated: int                # every puzzle evaluated, including overshoot
+    blocks: dict[int, list[Row]]    # every finished block, including overshoot
 
     @property
     def n(self) -> int:
         return self.counts.n
+
+    @property
+    def n_evaluated(self) -> int:
+        return sum(len(r) for r in self.blocks.values())
 
 
 def block_bounds(block: int, block_size: int, n_items: int) -> tuple[int, int]:
@@ -95,6 +107,8 @@ def run_blocks(
     `completed` holds blocks already on disk (resume); they are not
     resubmitted. `on_block_done` is called for every newly finished block
     (persist it); `on_progress` whenever the contiguous prefix advances.
+    If a block fails, nothing new is submitted, the blocks still running are
+    collected (and persisted), and the first error is raised.
     """
     if max_in_flight < 1:
         raise ValueError("max_in_flight must be >= 1")
@@ -110,6 +124,7 @@ def run_blocks(
     counts = PrefixCounts()
     prefix_rows: list[Row] = []
     stop_reason: StopReason | None = None
+    error: tuple[int, BaseException] | None = None
 
     def advance_prefix() -> None:
         nonlocal prefix_blocks, stop_reason
@@ -132,7 +147,7 @@ def run_blocks(
 
     def fill_window() -> None:
         nonlocal next_block
-        while (stop_reason is None and next_block < total_blocks
+        while (stop_reason is None and error is None and next_block < total_blocks
                and next_block < prefix_blocks + max_in_flight):
             if next_block not in done:
                 executor.submit(next_block)
@@ -144,12 +159,17 @@ def run_blocks(
     while in_flight:
         for block, rows in executor.wait_any():
             in_flight.discard(block)
+            if isinstance(rows, BaseException):
+                error = error or (block, rows)
+                continue
             done[block] = rows
             if on_block_done is not None:
                 on_block_done(block, rows)
         advance_prefix()
         fill_window()
 
+    if error is not None:
+        raise RuntimeError(f"block {error[0]} failed") from error[1]
     if stop_reason is None:
         if prefix_blocks < total_blocks:
             raise RuntimeError("scheduler finished without covering all blocks")
@@ -158,7 +178,7 @@ def run_blocks(
         stop_reason=stop_reason,
         counts=counts,
         rows=prefix_rows,
-        n_evaluated=sum(len(r) for r in done.values()),
+        blocks=done,
     )
 
 
@@ -173,13 +193,9 @@ class ThreadExecutor(Executor):
     def submit(self, block: int) -> None:
         self._futures[self._pool.submit(self._solve_block, block)] = block
 
-    def wait_any(self) -> list[tuple[int, list[Row]]]:
+    def wait_any(self) -> list[Finished]:
         finished, _ = wait(list(self._futures), return_when=FIRST_COMPLETED)
-        out = []
-        for fut in finished:
-            block = self._futures.pop(fut)
-            out.append((block, fut.result()))
-        return out
+        return [(self._futures.pop(fut), fut.exception() or fut.result()) for fut in finished]
 
     def shutdown(self) -> None:
-        self._pool.shutdown(wait=True)
+        self._pool.shutdown(wait=True, cancel_futures=True)

@@ -33,7 +33,7 @@ def build(records: list[dict], baselines: list[dict], portfolio: dict | None) ->
             n_range([r["n"] for r in recs]),
             pm(*mean_std([r["accuracy"] for r in recs]), digits=3),
             num(sum(r["wrong"] for r in recs)), num(sum(r["timeout"] for r in recs)),
-            num(mean([r["calls_mean"] for r in recs])),
+            num(mean([r["calls_per_solve"] for r in recs])),
             # GPU time covers every evaluated puzzle, including past the stopping point.
             num(mean([r["gpu_seconds"] / r["n_evaluated"] for r in recs]), 4),
             # Post-compile training loop, as in paper.compute.

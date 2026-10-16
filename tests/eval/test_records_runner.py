@@ -72,9 +72,27 @@ def test_run_eval_writes_summary_and_resumes(tmp_path):
 def test_block_stats_are_saved_per_block_and_summed(tmp_path):
     spec = make_spec(n_workers=4)
     summary = run_eval(spec, tmp_path, _threads(spec), log=lambda _: None,
-                       block_meta=lambda block: {"model_calls": 10, "seconds": 2.0})
-    n_blocks = len(read_blocks(spec.run_dir(tmp_path)))
+                       block_meta=lambda block: {"model_calls": 10, "seconds": 2.0,
+                                                  "startup_seconds": 1.0})
+    blocks = read_blocks(spec.run_dir(tmp_path))
+    n_blocks = len(blocks)
     assert summary.model_calls_total == 10 * n_blocks
     assert summary.gpu_seconds == 2.0 * n_blocks
+    assert summary.startup_seconds == 1.0 * n_blocks
+    # Calls per solve covers only the blocks the reported prefix touches.
+    reported = range(summary.n // spec.block_size + (summary.n % spec.block_size > 0))
+    correct = sum(r["status"] == "correct" for b in reported for r in blocks[b])
+    assert summary.calls_per_solve == pytest.approx(10 * len(reported) / correct)
     assert summary.mean_resets == 0 and summary.mean_rounds_correct == 1
     assert "model calls=" in format_summary(summary)
+
+
+def test_inverse_binomial_rate_only_for_runs_stopped_on_failures(tmp_path):
+    spec = make_spec()
+    seq = run_eval(spec, tmp_path, _threads(spec), log=lambda _: None)
+    assert seq.stop_reason == "failures"
+    failures = seq.wrong + seq.timeout
+    assert seq.failure_rate_inverse_binomial == pytest.approx((failures - 1) / (seq.n - 1))
+    full = run_eval(dataclasses.replace(spec, stop=NoStop().to_dict()), tmp_path, _threads(spec),
+                    log=lambda _: None)
+    assert full.failure_rate_inverse_binomial == full.failure_rate

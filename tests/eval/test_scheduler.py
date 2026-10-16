@@ -114,3 +114,23 @@ def test_fixed_n_longer_than_list_is_exhausted():
 def test_fixed_n_round_trips_and_is_the_ablation_preset():
     assert stop_from_dict(FixedN(1000).to_dict()) == FixedN(1000)
     assert PRESETS["ablation"] == FixedN(1000)
+
+
+def test_failed_block_drains_in_flight_blocks_then_raises():
+    spec = make_spec(stop=NoStop())
+    solve = block_solver(spec)
+
+    def flaky(block):
+        if block == 3:
+            raise ValueError("boom")
+        return solve(block)
+
+    persisted = []
+    executor = ThreadExecutor(flaky, n_workers=4)
+    with pytest.raises(RuntimeError, match="block 3 failed"):
+        run_blocks(n_items=len(spec.explicit_indices), block_size=spec.block_size,
+                   executor=executor, stop=NoStop(), max_in_flight=8,
+                   on_block_done=lambda b, rows: persisted.append(b))
+    executor.shutdown()
+    assert 3 not in persisted
+    assert set(range(8)) - {3} <= set(persisted)    # the rest of the window was kept

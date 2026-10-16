@@ -10,7 +10,7 @@ prefix of an i.i.d. stream (puzzles drawn in a fixed random order).
 - `binomial_upper`: exact one-sided Clopper-Pearson upper bound, used for the
   wrong-answer rate (a rare-event count reported alongside accuracy).
 - `inverse_binomial_rate`: unbiased failure-rate estimate when sampling was
-  stopped at the K-th failure.
+  stopped at the K-th failure (only valid for such runs).
 - `paired_difference`: accuracy difference between two runs on the puzzles
   both evaluated (their common prefix).
 """
@@ -96,7 +96,10 @@ def binomial_upper(k: int, n: int, alpha: float = 0.05) -> float:
 
 
 def inverse_binomial_rate(failures: int, n: int) -> float:
-    """(K - 1) / (n - 1), unbiased when sampling stopped at the K-th failure; else failures / n."""
+    """(K - 1) / (n - 1), unbiased when sampling stopped at the K-th failure.
+
+    Only meaningful for runs stopped that way; falls back to failures / n when K < 2.
+    """
     if failures >= 2 and n >= 2:
         return (failures - 1) / (n - 1)
     return failures / n if n else 0.0

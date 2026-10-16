@@ -56,7 +56,7 @@ def build(manifest: str, records: list[dict], hints: TableHints, root: Path = RE
                          else delta_text(paired_vs(ref_records, recs, root)))
         if orders:
             cells += _per_order(recs, orders, root)
-        cells += [num(mean([r["calls_mean"] for r in recs])),
+        cells += [num(mean([r["calls_per_solve"] for r in recs])),
                   num(sum(r["wrong"] for r in recs)), num(sum(r["timeout"] for r in recs)),
                   pct(mean([r.get("unsound_rate") for r in recs]), digits=2)]
         return cells

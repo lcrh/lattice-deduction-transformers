@@ -245,7 +245,7 @@ def summary_fields(summary: dict) -> dict:
         "failure_rate": summary["failure_rate"],
         "calls_mean": calls["mean"], "calls_p50": calls["p50"], "calls_p75": calls["p75"],
         "calls_p90": calls["p90"], "calls_p95": calls["p95"],
-        "calls_correct_mean": calls_c["mean"],
+        "calls_correct_mean": calls_c["mean"], "calls_per_solve": summary["calls_per_solve"],
         "unsound_rate": sound.get("unsound_rate"),
         "gpu_seconds": summary["gpu_seconds"], "startup_seconds": summary["startup_seconds"],
         "wall_seconds": summary["wall_seconds"], "n_evaluated": summary["n_evaluated"],
