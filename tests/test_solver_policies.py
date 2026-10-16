@@ -1,6 +1,7 @@
-"""Behavior of the solver options (deduction passes, decision and
-backtracking policies). Their defaults are covered bit for bit by
-tests/equivalence."""
+"""Solver options: deduction passes, decision and backtracking policies.
+
+Their defaults are covered bit for bit by tests/equivalence.
+"""
 
 import pytest
 import torch
