@@ -10,6 +10,7 @@ container serves every block of an eval and every eval of the same model.
 
 import threading
 import time
+from collections import Counter
 from typing import TypedDict
 
 import modal
@@ -57,6 +58,8 @@ class BlockWorker:
                                                self.compile)
         self.warm = not self.compile
         self.startup_seconds = time.time() - t0
+        print(f"[worker] loaded {self.checkpoint} ({self.task}, compile={self.compile}) "
+              f"in {self.startup_seconds:.1f}s", flush=True)
 
     @modal.method()
     def solve(self, args: BlockArgs) -> BlockResult:
@@ -68,11 +71,18 @@ class BlockWorker:
                                   np.asarray(args["indices"], dtype=np.int64), args["solve"])
             self.startup_seconds += time.time() - t0
             self.warm = True
+        print(f"[worker] block {args['block']}: {len(args['indices'])} puzzles "
+              f"from {args['split']}", flush=True)
         t0 = time.time()
         out = solve_block(self.task_impl, self.model, args)
+        seconds = time.time() - t0
+        counts = Counter(row["status"] for row in out.rows)
+        print(f"[worker] block {args['block']} done: correct={counts['correct']} "
+              f"wrong={counts['wrong']} timeout={counts['timeout']} "
+              f"calls={out.model_calls} {seconds:.1f}s", flush=True)
         startup, self.startup_seconds = self.startup_seconds, 0.0
         return BlockResult(rows=out.rows, model_calls=out.model_calls,
-                           seconds=time.time() - t0, startup_seconds=startup)
+                           seconds=seconds, startup_seconds=startup)
 
 
 @eval_app.function(

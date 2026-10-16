@@ -82,7 +82,7 @@ class SudokuTask(EvalTask):
         given_mask = x.sum(dim=-1) == 1
         cfg = build_solve_config(solve_dict)
         with torch.no_grad():
-            res = solve(model, x, y, given_mask, cfg)
+            res = solve(model, x, y, given_mask, cfg, verbose=True)
 
         solution, x = res.solution.cpu(), x.cpu()
         grids = [grid_string(solution[j]) for j in range(len(indices))]

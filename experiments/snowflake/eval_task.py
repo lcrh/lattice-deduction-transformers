@@ -99,7 +99,7 @@ class SnowflakeTask(EvalTask):
         given_mask = _given_mask(x)
         with torch.no_grad():
             res = solve(model, _build_state(x, mask, groups), y, given_mask, cfg,
-                        in_puzzle_mask=mask)
+                        in_puzzle_mask=mask, verbose=True)
         solution, mask = res.solution.cpu(), mask.cpu()
         recs = [puzzles[int(i)] for i in indices]
         solutions = [solution_string(solution[j], mask[j]) for j in range(len(indices))]

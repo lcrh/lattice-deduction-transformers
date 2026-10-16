@@ -63,6 +63,22 @@ def test_solve_matches_reference(case):
     assert diag == ref["diag"]
 
 
+
+def test_verbose_solve_logs_each_puzzle_and_matches_reference(capsys):
+    case = sorted(SOLVE)[0]
+    ref = SOLVE[case]
+    inp = ref["inputs"]
+    model = fakes.tiny_model(seed=2)
+    model.load_state_dict(ref["model_state"])
+    model.train()
+    cfg = SolveConfig(step=StepConfig(**inp["step"]), **inp["solve"])
+    torch.manual_seed(321)
+    res = solve(model, inp["x"], inp["y"], inp["given"], cfg, verbose=True)
+    assert torch.equal(res.solution, ref["solution"]) and res.model_calls == ref["model_calls"]
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 1 + inp["x"].shape[0]      # header + one per puzzle
+    print("\n".join(lines[:3]))
+
 @pytest.mark.parametrize("benchmark", ["sudoku", "snowflake", "maze"])
 def test_training_matches_reference(benchmark, tmp_path):
     ref = _load("train")[benchmark]

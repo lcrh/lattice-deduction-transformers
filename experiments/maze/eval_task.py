@@ -80,7 +80,8 @@ class MazeTask(EvalTask):
         cfg = build_solve_config(solve_dict)
         given_mask = x.sum(dim=-1) == 1
         with torch.no_grad():
-            res = solve(model, x, y, given_mask, cfg, is_correct=shortest_path_check(h, w))
+            res = solve(model, x, y, given_mask, cfg, is_correct=shortest_path_check(h, w),
+                        verbose=True)
         outcome = rescore(res, y, h, w)
 
         valid, minimal, exact = (outcome.valid.tolist(), outcome.minimal.tolist(),

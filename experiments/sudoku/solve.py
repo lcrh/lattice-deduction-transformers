@@ -206,7 +206,8 @@ class SolveResult:
 
 def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
           in_puzzle_mask: torch.Tensor | None = None,
-          is_correct: Callable[[torch.Tensor, torch.Tensor], bool] | None = None) -> SolveResult:
+          is_correct: Callable[[torch.Tensor, torch.Tensor], bool] | None = None,
+          verbose: bool = False) -> SolveResult:
     """Solve every puzzle, streaming them through the batch.
 
     Args:
@@ -215,6 +216,7 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         in_puzzle_mask: [P, S]; cells outside it take no part (Snowflake's covering grid).
         is_correct: (solution [S, C], ground truth [S, C]) -> bool for an accepted
             chain; default is exact equality (Maze accepts any shortest path).
+        verbose: Print one line per finished puzzle.
     """
     P, S, C = puzzle.shape
     K = cfg.n_chains
@@ -338,8 +340,29 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
             puzzle_pass_diag_out[p] = slot_pass_diag[slot]
         puzzle_calls_out[p] = total_calls - slot_calls_start[slot]
         puzzle_rounds_out[p] = total_rounds - slot_rounds_start[slot]
+        if verbose:
+            log_puzzle(slot, p)
         slot_puzzle[slot] = -1
         chain_done[slot * K:(slot + 1) * K] = True
+
+    running = {"CORRECT": 0, "WRONG": 0, "TIMEOUT": 0}
+
+    def log_puzzle(slot: int, p: int) -> None:
+        solved = bool(solved_out[p].item())
+        label = ("CORRECT" if bool(correct_out[p].item()) else "WRONG") if solved else "TIMEOUT"
+        running[label] += 1
+        rounds = int(round_solved_out[p].item()) if solved else int(slot_round[slot].item())
+        line = (f"  {p:>7d} | {label:>13} | {rounds:>6d} | {int(slot_resets[slot].item()):>7d} | "
+                f"{total_calls:>8d} || "
+                f"{running['CORRECT']}/{running['WRONG']}/{running['TIMEOUT']}")
+        if seq and solved:
+            line += (f" | W={int(seq_winning_idx_out[p].item())} "
+                     f"seq={int(forwards_seq_out[p].item())}")
+        print(line, flush=True)
+
+    if verbose:
+        print(f"  {'puzzle':>7} | {'outcome':>13} | {'rounds':>6} | {'resets':>7} | "
+              f"{'calls':>8} || {'cor/wr/to':>10}", flush=True)
 
     # Initial fill.
     for slot in range(min(M, P)):
