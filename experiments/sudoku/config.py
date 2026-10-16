@@ -22,7 +22,6 @@ class SudokuExperiment(Experiment):
     BENCHMARK = "sudoku"
     ENVIRONMENT = ("data.cache_dir",)
 
-    name: str = "paper"
     model: LoopedTransformerConfig = field(
         default_factory=lambda: LoopedTransformerConfig(cls_token=True))
     data: SudokuExtremeConfig = field(

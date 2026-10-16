@@ -228,7 +228,7 @@ def test_plan_trains_missing_runs_and_evaluates_existing_checkpoints():
     planned = {p.run.key: p for p in launch.plan_launches(t1, states)}["M1/steps4k/seed0"]
     cmd, why = planned.cmd, planned.reason
     assert "experiments/evaluate.py" in cmd and why == "evaluate existing checkpoint"
-    assert cmd[cmd.index("--checkpoint") + 1].startswith("/checkpoints/sudoku/paper-")
+    assert cmd[cmd.index("--checkpoint") + 1].startswith("/checkpoints/sudoku/")
 
 
 def test_rerun_entries_resolve_once_the_failure_set_exists(monkeypatch):

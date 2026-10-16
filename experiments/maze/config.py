@@ -30,7 +30,6 @@ class MazeExperiment(Experiment):
                "solve.step.augment_dihedral", "solve.step.permute_digits")
     ENVIRONMENT = ("data.cache_dir",)
 
-    name: str = "paper"
     model: LoopedTransformerConfig = field(default_factory=lambda: LoopedTransformerConfig(
         dim=192, use_rope=True, cls_token=True))
     data: MazeConfig = field(default_factory=lambda: MazeConfig(dataset="maze_hard", seed=42))

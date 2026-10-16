@@ -98,15 +98,19 @@ def train(exp: MazeExperiment, ckpt_path: str | Path,
               f"{len(ema.shadow)} param tensors", flush=True)
 
     start_step = 1
+    prior_wallclock = None
     if resume_path is not None and resume_path.exists():
         print(f"[resume] loading snapshot from {resume_path}", flush=True)
-        rckpt = torch.load(resume_path, map_location=device, weights_only=False)
+        # CPU first: RNG states must stay CPU ByteTensors; the optimizer moves its
+        # state to the parameters' device.
+        rckpt = torch.load(resume_path, map_location="cpu", weights_only=False)
         model.load_state_dict(rckpt["model_state_dict"])
         optimizer.load_state_dict(rckpt["optimizer_state_dict"])
         scheduler.load_state_dict(rckpt["scheduler_state_dict"])
         if ema is not None:
             ema.shadow = {k: v.to(device) for k, v in rckpt["ema_state_dict"].items()}
         start_step = int(rckpt["step"]) + 1
+        prior_wallclock = rckpt["train_wallclock"]
         torch.set_rng_state(rckpt["torch_rng"])
         if rckpt["cuda_rng"] is not None:
             torch.cuda.set_rng_state(rckpt["cuda_rng"])
@@ -147,7 +151,7 @@ def train(exp: MazeExperiment, ckpt_path: str | Path,
     n_tp_conflict_total = 0
     n_examples_seen = 0
 
-    clock = TrainClock()
+    clock = TrainClock(prior_wallclock)
     for step in range(start_step, cfg.steps + 1):
         clock.tick()
         sample_idx = torch.randperm(pool_size, device=device)[:cfg.batch_size]
@@ -225,6 +229,7 @@ def train(exp: MazeExperiment, ckpt_path: str | Path,
                 "torch_rng": torch.get_rng_state(),
                 "cuda_rng": (torch.cuda.get_rng_state()
                               if torch.cuda.is_available() else None),
+                "train_wallclock": clock.finish(),
             }
             torch.save(ckpt_payload, resume_path)
             if cfg.keep_step_snapshots:

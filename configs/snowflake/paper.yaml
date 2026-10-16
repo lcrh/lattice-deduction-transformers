@@ -1,8 +1,6 @@
 # Snowflake Sudoku (gen_data.py, orders 4-10), trained and evaluated on
 # orders 4-8; the SnowflakeExperiment defaults.
 # Grid shape and operator vocab / augmentation are fixed by the config class.
-name: paper
-
 model:
   dim: 128
   num_layers: 4

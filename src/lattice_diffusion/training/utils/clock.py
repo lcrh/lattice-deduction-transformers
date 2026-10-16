@@ -10,10 +10,12 @@ class TrainClock:
     """Call `tick()` at the top of every training step and wrap monitoring in `monitoring()`.
 
     The first step includes torch.compile, so it is reported separately;
-    `post_compile_secs` is the loop time after it, minus monitoring.
+    `post_compile_secs` is the loop time after it, minus monitoring. A resumed
+    run passes the snapshot's `finish()` as `prior`, so totals cover every leg.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, prior: dict | None = None) -> None:
+        self._prior = prior or {}
         self._start: float | None = None
         self._first_step_end: float | None = None
         self._ticks = 0
@@ -39,9 +41,10 @@ class TrainClock:
         end = time.perf_counter()
         start = self._start if self._start is not None else end
         first_end = self._first_step_end if self._first_step_end is not None else end
-        return {
+        leg = {
             "total_secs": end - start,
             "step1_compile_secs": first_end - start,
             "monitor_secs": self._monitor,
             "post_compile_secs": end - first_end - self._monitor,
         }
+        return {k: v + self._prior.get(k, 0.0) for k, v in leg.items()}

@@ -1,7 +1,5 @@
 # Snowflake order transfer: train on orders 6-8, evaluate on unseen orders 9-10.
 # 4K steps; everything else as paper.yaml.
-name: ood_6to8_eval9to10
-
 data:
   train_orders: [6, 7, 8]
 

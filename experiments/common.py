@@ -30,9 +30,10 @@ if TYPE_CHECKING:
 GPU = "B200"
 
 # Training fields that do not change the trained weights (logging, monitoring
-# under a forked RNG, snapshot cadence). The seed goes in the checkpoint name.
+# under a forked RNG, snapshots). The seed goes in the checkpoint name.
 _UNHASHED_TRAIN = ("seed", "log_every", "monitor_every", "monitor_n_puzzles",
-                   "monitor_max_rounds", "monitor_n_chains", "checkpoint_every")
+                   "monitor_max_rounds", "monitor_n_chains", "checkpoint_every",
+                   "keep_step_snapshots")
 # batch_size follows train.batch_size; prefetch depth does not change the data.
 _UNHASHED_DATA = ("batch_size", "prefetch_batches")
 
@@ -84,7 +85,6 @@ class Experiment:
     provenance: Provenance = dataclasses.field(default_factory=Provenance)
 
     if TYPE_CHECKING:
-        name: str
         model: LoopedTransformerConfig
         data: Any
         train: TrainConfig
@@ -107,8 +107,8 @@ class Experiment:
         return cfglib.stable_hash(self.training_dict())
 
     def checkpoint_path(self, root: str | Path) -> Path:
-        return (Path(root) / self.BENCHMARK
-                / f"{self.name}-{self.train_hash()}-seed{self.train.seed}.pt")
+        """Depends only on the training settings, so configs that train alike share it."""
+        return Path(root) / self.BENCHMARK / f"{self.train_hash()}-seed{self.train.seed}.pt"
 
     def localized(self, data_dir: str) -> Experiment:
         """Copy with every ENVIRONMENT key pointed at `data_dir`."""
@@ -184,7 +184,8 @@ def run_experiment(exp: Experiment, train_fn: Callable, checkpoint_root: str, da
         ckpt.parent.mkdir(parents=True, exist_ok=True)
         t0 = time.time()
         train_fn(exp.localized(data_dir), ckpt, commit)
-        # Both timings cover this call only: a resumed run reports its last leg.
+        # train_seconds covers this call; the checkpoint's train_wallclock sums every
+        # leg of a resumed run.
         wallclock = load_checkpoint(str(ckpt)).get("train_wallclock", {})
         train_record_path(ckpt).write_text(json.dumps({
             "train_seconds": time.time() - t0, **wallclock, "gpu": GPU, "n_gpus": 1,

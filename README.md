@@ -62,10 +62,10 @@ uv run modal run --detach experiments/<benchmark>/run.py \
 `--detach` lets the run survive your laptop sleeping. The run trains a
 checkpoint, then evaluates it with the shared evaluator
 (`src/lattice_diffusion/eval/`). The checkpoint path is derived from the
-training config (`/checkpoints/<benchmark>/<name>-<hash>-seed<seed>.pt` on
+training settings (`/checkpoints/<benchmark>/<train hash>-seed<seed>.pt` on
 the `lattice-diffusion-checkpoints` volume), so relaunching a finished
-config skips training and only (re)evaluates; the resolved config is stored
-in the checkpoint.
+config, or any config that trains the same way, skips training and only
+(re)evaluates; the resolved config is stored in the checkpoint.
 
 **Evaluation.** The evaluator walks a fixed index list in blocks across
 B200 workers (`eval.workers`, at most `eval.max_in_flight` blocks ahead of

@@ -1,7 +1,5 @@
 # Maze-Hard 30x30 with one supervised path per puzzle; the MazeExperiment
 # defaults. The model's grid shape comes from the dataset.
-name: paper
-
 model:
   dim: 192
   num_layers: 4

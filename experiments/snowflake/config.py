@@ -27,7 +27,6 @@ class SnowflakeExperiment(Experiment):
                "solve.step.vocab_dim", "solve.step.augment_dihedral")
     ENVIRONMENT = ("data.data_dir",)
 
-    name: str = "paper"
     model: LoopedTransformerConfig = field(
         default_factory=lambda: LoopedTransformerConfig(cls_token=True))
     data: SnowflakeConfig = field(default_factory=lambda: SnowflakeConfig(

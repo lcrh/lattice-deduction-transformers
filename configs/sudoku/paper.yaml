@@ -1,7 +1,5 @@
 # Sudoku-Extreme at 4K steps; the SudokuExperiment defaults
 # (tests/test_configs.py checks that they agree).
-name: paper
-
 model:
   dim: 128
   num_layers: 4
