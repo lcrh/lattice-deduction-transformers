@@ -2,7 +2,6 @@
 
 import dataclasses
 import json
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -122,40 +121,39 @@ def test_group_channels_widen_the_model():
 
 
 @pytest.mark.parametrize("group_embed", [False, True])
-def test_order_filtered_eval_end_to_end(group_embed):
+def test_order_filtered_eval_end_to_end(group_embed, tmp_path):
+    tmp = tmp_path
     from experiments.snowflake.config import SnowflakeExperiment
     from experiments.snowflake.train import TrainConfig, snowflake_step, train
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        for split, n, seed in (("train", 60, 31), ("val", 10, 33), ("test", 21, 32)):
-            fakes.write_snowflake_parquet(tmp / f"snowflake_varied_{split}.parquet", n,
-                                          seed=seed, orders=ORDERS)
-        exp = SnowflakeExperiment(
-            model=fakes.tiny_model_cfg(),
-            data=SnowflakeConfig(data_dir=str(tmp), dataset="varied", n_puzzles=30,
-                                 train_orders=[4, 5, 6], translate_aug=True,
-                                 constraint_group_embed=group_embed),
-            train=TrainConfig(steps=2, batch_size=16, step=snowflake_step(augment=True),
-                              compile=False, monitor_every=1, monitor_n_puzzles=4,
-                              monitor_max_rounds=2, log_every=1),
-        )
-        exp.eval.index_filter = {"orders": [7, 8]}
-        ckpt = tmp / "sf.pt"
-        train(exp, ckpt)
+    for split, n, seed in (("train", 60, 31), ("val", 10, 33), ("test", 21, 32)):
+        fakes.write_snowflake_parquet(tmp / f"snowflake_varied_{split}.parquet", n,
+                                      seed=seed, orders=ORDERS)
+    exp = SnowflakeExperiment(
+        model=fakes.tiny_model_cfg(),
+        data=SnowflakeConfig(data_dir=str(tmp), dataset="varied", n_puzzles=30,
+                             train_orders=[4, 5, 6], translate_aug=True,
+                             constraint_group_embed=group_embed),
+        train=TrainConfig(steps=2, batch_size=16, step=snowflake_step(augment=True),
+                          compile=False, monitor_every=1, monitor_n_puzzles=4,
+                          monitor_max_rounds=2, log_every=1),
+    )
+    exp.eval.index_filter = {"orders": [7, 8]}
+    ckpt = tmp / "sf.pt"
+    train(exp, ckpt)
 
-        task = get_task("snowflake", str(tmp))
-        solve = exp.solve_dict()
-        solve.update(max_rounds=3, n_chains=4, batch_size=8)
-        spec = dataclasses.replace(exp.eval_spec(str(ckpt)), solve={**solve, "dropout_p": 0.05},
-                                   block_size=4)
-        lst = resolve_index_list(spec, task.split_size, task.filter_indices)
-        assert lst.name == "snowflake_varied_test[orders=7,8]"
-        assert len(lst) == 6       # 21 test rows cycle through 7 orders: 3 each of 7 and 8
-        model = task.load_model(str(ckpt), 0.05, False)
-        rows = solve_block(task, model, block_args(spec, lst, 0))
-        assert {r["order"] for r in rows} <= {7, 8}
-        assert rows == solve_block(task, model, block_args(spec, lst, 0))
+    task = get_task("snowflake", str(tmp))
+    solve = exp.solve_dict()
+    solve.update(max_rounds=3, n_chains=4, batch_size=8)
+    spec = dataclasses.replace(exp.eval_spec(str(ckpt)), solve={**solve, "dropout_p": 0.05},
+                               block_size=4)
+    lst = resolve_index_list(spec, task.split_size, task.filter_indices)
+    assert lst.name == "snowflake_varied_test[orders=7,8]"
+    assert len(lst) == 6       # 21 test rows cycle through 7 orders: 3 each of 7 and 8
+    model = task.load_model(str(ckpt), 0.05, False)
+    rows = solve_block(task, model, block_args(spec, lst, 0))
+    assert {r["order"] for r in rows} <= {7, 8}
+    assert rows == solve_block(task, model, block_args(spec, lst, 0))
 
 
 def test_filter_needs_task_support():
