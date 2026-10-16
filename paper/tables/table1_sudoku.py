@@ -1,6 +1,7 @@
-"""Table 1: Sudoku-Extreme. LDT rows from table1_sudoku, baseline rows from
-the baselines manifest's result files, and the portfolio row from
-paper/out/portfolio.json (paper.portfolio analyze) when present.
+"""Table 1: Sudoku-Extreme.
+
+LDT rows from table1_sudoku, baseline rows from the baselines manifest, and
+the portfolio row from paper/out/portfolio.json when present.
 
     uv run python -m paper.tables.table1_sudoku [--copy-to DIR]
 """

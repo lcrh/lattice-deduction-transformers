@@ -1,9 +1,8 @@
-"""Table 3: Maze-Hard. LDT is accepted on any shortest path (lenient); the
-exact column counts only the dataset's reference path. Baselines come from
-the HRM/TRM checkpoint sweeps, at the step named by the baselines manifest
-(`maze_step: best` = the checkpoint with the highest lenient accuracy,
-selected on the test set; `last` = the trajectory's final checkpoint; or an
-explicit step).
+"""Table 3: Maze-Hard, lenient (any shortest path) and exact (reference path) accuracy.
+
+Baselines come from the HRM/TRM checkpoint sweeps at the baselines manifest's
+`maze_step`: `best` (highest lenient accuracy, chosen on the test set), `last`,
+or a step number.
 
     uv run python -m paper.tables.table3_maze [--copy-to DIR]
 """

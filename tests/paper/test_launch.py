@@ -101,8 +101,7 @@ def test_entries_need_an_exp_id(tmp_path):
 
 
 def test_eval_overrides_reproduce_the_local_spec():
-    """evaluate.py merges the tokens into whatever config the checkpoint was
-    trained under; the resulting spec must equal the locally resolved one."""
+    """The remote spec built from the tokens equals the locally resolved one."""
     runs = _by_key(_runs("appendix_d_soundness"))
     arm = runs["A7/sym_matched/seed1"]
     # Pretend the checkpoint was trained under a different eval block.

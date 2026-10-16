@@ -96,8 +96,7 @@ def mean_curve(curves: list[list[int]]) -> list[float]:
 
 def bootstrap_curve(firsts: dict[int, Attempt], n_boot: int, n_orders: int,
                     rng: random.Random) -> tuple[list[float], list[float]]:
-    """2.5/97.5 percentiles of the mean residue curve when the model pool is
-    resampled with replacement (the first member always an anchor)."""
+    """95% bootstrap band of the mean residue curve (models resampled; first member an anchor)."""
     models = list(firsts.values())
     anchors = [a for a in models if a.full]
     n = len(models)
@@ -117,8 +116,7 @@ def bootstrap_curve(firsts: dict[int, Attempt], n_boot: int, n_orders: int,
 
 
 def attempts_curve(attempts: list[Attempt]) -> list[float]:
-    """1 model x k attempts: residue after the first k eval seeds of each
-    anchor model, averaged over anchors (compute-matched to k models x 1)."""
+    """Residue after k eval seeds of one anchor model, averaged over anchors (vs. k models)."""
     curves = []
     for model in sorted({a.model for a in attempts if a.full}):
         own = sorted((a for a in attempts if a.model == model), key=_attempt_order)

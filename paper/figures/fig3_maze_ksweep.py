@@ -1,5 +1,6 @@
-"""Figure 3: Maze accuracy against the number K of supervised shortest
-paths (15x15 synthetic mazes), mean over seeds with the seed range.
+"""Figure 3: Maze accuracy against the number K of supervised shortest paths.
+
+15x15 synthetic mazes; mean over seeds with the seed range.
 
     uv run python -m paper.figures.fig3_maze_ksweep [--copy-to DIR]
 """

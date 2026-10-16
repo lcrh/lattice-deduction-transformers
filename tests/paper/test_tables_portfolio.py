@@ -1,5 +1,4 @@
-"""Table generation (paired deltas), portfolio math and compute formulas on
-synthetic rows."""
+"""Tables (paired deltas), portfolio math and compute formulas on synthetic rows."""
 
 import json
 import random
