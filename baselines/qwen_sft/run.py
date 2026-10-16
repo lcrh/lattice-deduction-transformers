@@ -300,13 +300,26 @@ def _evaluate_checkpoint(checkpoint: Path, rows: list[dict[str, Any]], cfg: Eval
         **summarize_records(records, cfg.samples_per_puzzle),
     }
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     with (out_dir / "rows.jsonl").open("w") as fh:
         for r in records:
             fh.write(json.dumps(r) + "\n")
+    # Written last: a summary marks the checkpoint's eval as complete.
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     del model
     torch.cuda.empty_cache()
     return summary
+
+
+def _finished_summary(out_dir: Path, cfg: EvalConfig,
+                      rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The saved summary of an identical, finished eval of this checkpoint, if any."""
+    path = out_dir / "summary.json"
+    if not path.exists():
+        return None
+    summary = json.loads(path.read_text())
+    same = (summary.get("eval_config") == asdict(cfg)
+            and summary.get("eval_digest_sha256") == rows_digest(rows))
+    return summary if same else None
 
 
 @app.function(image=llm_image, gpu="B200", timeout=12 * 3600, secrets=[hf_secret],
@@ -328,9 +341,14 @@ def evaluate_run(run_dir: str, eval_cfg: dict, checkpoints: list[str] | None = N
     tag = f"sudoku_test_perm_n{cfg.n_eval}_s{cfg.samples_per_puzzle}_seed{cfg.seed}"
     summaries = []
     for checkpoint in selected:
+        out_dir = Path(EVAL_ROOT) / run.name / checkpoint.name / tag
+        done = _finished_summary(out_dir, cfg, rows)
+        if done is not None:
+            print(f"already evaluated: {checkpoint}", flush=True)
+            summaries.append({**done, "n_blanks": n_blanks})
+            continue
         print(f"evaluating {checkpoint} ({blanks_tag(n_blanks)}) …", flush=True)
-        summary = _evaluate_checkpoint(
-            checkpoint, rows, cfg, Path(EVAL_ROOT) / run.name / checkpoint.name / tag)
+        summary = _evaluate_checkpoint(checkpoint, rows, cfg, out_dir)
         summary["n_blanks"] = n_blanks
         summaries.append(summary)
         checkpoint_volume.commit()

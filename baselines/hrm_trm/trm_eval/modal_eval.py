@@ -76,6 +76,13 @@ def run(checkpoint: str = CKPT) -> dict:
     sys.path.insert(0, "/root")
     import maze_scoring
 
+    local = checkpoint.startswith("/vol/")
+    with open(f"{TRM_REMOTE}/config/cfg_maze.yaml") as f:
+        settings = {"model": "trm", "trm_commit": TRM_COMMIT, "config": f.read()}
+    if local and (cached := maze_scoring.cached_scores(checkpoint, settings)):
+        print(f"[trm] already scored: {checkpoint}", flush=True)
+        return cached
+
     # 1) build the maze test/train dataset at data/maze-30x30-hard-1k
     print("[trm] building maze dataset …", flush=True)
     subprocess.run([sys.executable, "-m", "trm.data.build_maze_dataset"],
@@ -108,6 +115,9 @@ def run(checkpoint: str = CKPT) -> dict:
     scores = maze_scoring.score_mazes(preds["inputs"].numpy(), preds["labels"].numpy(),
                                       preds["logits"].float().numpy().argmax(-1))
     maze_scoring.print_scores("TRM", scores)
+    if local:
+        maze_scoring.save_scores(checkpoint, settings, scores)
+        ckpt_vol.commit()
     return scores
 
 
@@ -138,13 +148,12 @@ def sweep(run_dir: str, out: str = "baselines/hrm_trm/results/trm_sweep.json"):
 @app.function(image=image, gpu="B200", timeout=6 * 3600, memory=32768,
               volumes={"/ldt_data": ldt_data, "/ldt_ckpt": ldt_ckpt},
               secrets=[modal.Secret.from_name("huggingface-secret")])
-def run_sudoku(indices: list[int], variant: str = "mlp", checkpoint: str = "",
-               batch_size: int = 1536, tag: str = "sudoku_test_perm") -> dict:
-    """Exact-match accuracy on the given Sudoku-Extreme test indices, in order.
+def run_sudoku(chunk: int, start: int, indices: list[int], out_dir: str, variant: str = "mlp",
+               checkpoint: str = "", batch_size: int = 1536) -> None:
+    """Exact-match results for one chunk of Sudoku-Extreme test indices, written to `out_dir`.
 
     Uses TRM's run_eval_only.py (EMA weights, bf16). checkpoint="" is the
-    alphaXiv release for `variant`. Writes per-puzzle rows and a summary under
-    eval/baselines/trm-<variant>/<tag>/ on the LDT checkpoint volume.
+    alphaXiv release for `variant`.
     """
     import glob
     import subprocess
@@ -170,7 +179,7 @@ def run_sudoku(indices: list[int], variant: str = "mlp", checkpoint: str = "",
     if aligned is False:
         raise RuntimeError("TRM test split does not match the LDT cache index order")
 
-    outdir = "/root/trm_sudoku_out"
+    outdir = f"/root/trm_sudoku_out/chunk{chunk:04d}"     # fresh per chunk on a reused container
     os.makedirs(outdir, exist_ok=True)
     cmd = [
         sys.executable, "scripts/run_eval_only.py",
@@ -202,30 +211,53 @@ def run_sudoku(indices: list[int], variant: str = "mlp", checkpoint: str = "",
     if not np.array_equal(inputs, np.load(os.path.join(test_dir, "all__inputs.npy"))):
         raise RuntimeError("eval order does not match the subset test split order")
 
-    rows = sudoku_rows.build_rows(indices, labels, preds)
-    summary = sudoku_rows.summarize(
-        rows, model=f"TRM-{variant}", checkpoint=f"hf://{checkpoint}",
-        trm_commit=TRM_COMMIT, config=config_name, index_list="sudoku_test_perm",
-        gpu="B200", n_gpus=1, global_batch_size=batch_size,
-        eval_seconds=eval_seconds, gpu_seconds=eval_seconds,
-        index_aligned_with_ldt_cache=aligned,
-    )
-    sudoku_rows.write_outputs(f"/ldt_ckpt/eval/baselines/trm-{variant}/{tag}", rows, summary)
+    rows = sudoku_rows.build_rows(indices, labels, preds, start)
+    sudoku_rows.write_chunk(out_dir, chunk, rows, {
+        "model": f"TRM-{variant}", "checkpoint": f"hf://{checkpoint}",
+        "trm_commit": TRM_COMMIT, "config": config_name, "gpu": "B200", "n_gpus": 1,
+        "global_batch_size": batch_size, "eval_seconds": eval_seconds,
+        "index_aligned_with_ldt_cache": aligned,
+    })
     ldt_ckpt.commit()
-    print(json.dumps(summary, indent=2), flush=True)
+    print(f"[trm] chunk {chunk}: {sum(r['status'] == 'correct' for r in rows)}/{len(rows)}",
+          flush=True)
+
+
+@app.function(image=image, timeout=600, volumes={"/ldt_ckpt": ldt_ckpt})
+def done_chunks(out_dir: str) -> set[int]:
+    sys.path.insert(0, "/root")
+    import sudoku_rows
+
+    ldt_ckpt.reload()
+    return sudoku_rows.done_chunks(out_dir)
+
+
+@app.function(image=image, timeout=600, volumes={"/ldt_ckpt": ldt_ckpt})
+def merge_chunks(out_dir: str, n_chunks: int) -> dict:
+    sys.path.insert(0, "/root")
+    import sudoku_rows
+
+    ldt_ckpt.reload()
+    summary = sudoku_rows.merge_chunks(out_dir, n_chunks, index_list="sudoku_test_perm")
+    ldt_ckpt.commit()
     return summary
 
 
 @app.local_entrypoint()
 def sudoku(n: int = 10_000, variant: str = "mlp", checkpoint: str = "",
            batch_size: int = 1536, out: str = ""):
-    """Evaluate on the first n puzzles of sudoku_test_perm (LDT's ordering)."""
+    """Evaluate on the first n puzzles of sudoku_test_perm (LDT's ordering); resumes by chunk."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import sudoku_rows
 
-    indices = sudoku_rows.first_n_of_test_perm(n)
-    summary = sudoku_rows.add_interval(run_sudoku.remote(
-        indices, variant, checkpoint, batch_size, f"sudoku_test_perm_n{n}"))
+    out_dir = f"/ldt_ckpt/eval/baselines/trm-{variant}/sudoku_test_perm_n{n}"
+    parts = sudoku_rows.chunks(sudoku_rows.first_n_of_test_perm(n))
+    done = done_chunks.remote(out_dir)
+    todo = [(c, start, idx, out_dir, variant, checkpoint, batch_size)
+            for c, start, idx in parts if c not in done]
+    print(f"{len(parts) - len(todo)}/{len(parts)} chunks already done", flush=True)
+    list(run_sudoku.starmap(todo))
+    summary = sudoku_rows.add_interval(merge_chunks.remote(out_dir, len(parts)))
     out = out or f"baselines/hrm_trm/results/trm_{variant}_sudoku.json"
     with open(out, "w") as f:
         json.dump(summary, f, indent=2)

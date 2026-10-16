@@ -15,6 +15,10 @@ Rows use the field names of `lattice_diffusion/eval/records.py`
 Search-specific fields (rounds, calls, forwards, n_resets) and `verified` are
 not recorded.
 
+Evaluation is resumable: the index list is cut into chunks of CHUNK_SIZE,
+each chunk is written to `<out_dir>/chunks/` when it finishes, and a rerun
+evaluates only the missing chunks before merging.
+
 Upstream token encoding: 0 = pad, 1 = blank, 2..10 = digits 1..9.
 """
 
@@ -24,6 +28,7 @@ import os
 import numpy as np
 
 N_TEST = 422_786
+CHUNK_SIZE = 1024
 
 
 def to_digits(tokens: np.ndarray) -> np.ndarray:
@@ -82,8 +87,8 @@ def subset_test_split(test_dir: str, indices: list[int], expected_n: int = N_TES
 
 
 def build_rows(indices: list[int], label_tokens: np.ndarray,
-               pred_tokens: np.ndarray) -> list[dict]:
-    """One row per evaluated puzzle, in index-list order."""
+               pred_tokens: np.ndarray, start: int = 0) -> list[dict]:
+    """One row per evaluated puzzle, in index-list order; `start` is the first row's position."""
     if len(indices) != len(label_tokens):
         raise ValueError(f"{len(indices)} indices but {len(label_tokens)} predictions")
     correct = (pred_tokens == label_tokens).all(axis=1)
@@ -91,12 +96,59 @@ def build_rows(indices: list[int], label_tokens: np.ndarray,
     return [
         {
             "idx": int(dataset_idx),
-            "pos": pos,
-            "status": "correct" if correct[pos] else "wrong",
-            "solution": "".join(map(str, pred_digits[pos])),
+            "pos": start + k,
+            "status": "correct" if correct[k] else "wrong",
+            "solution": "".join(map(str, pred_digits[k])),
         }
-        for pos, dataset_idx in enumerate(indices)
+        for k, dataset_idx in enumerate(indices)
     ]
+
+
+def chunks(indices: list[int]) -> list[tuple[int, int, list[int]]]:
+    """(chunk id, start position, indices) for each CHUNK_SIZE slice of `indices`."""
+    return [(c, start, indices[start:start + CHUNK_SIZE])
+            for c, start in enumerate(range(0, len(indices), CHUNK_SIZE))]
+
+
+def _chunk_paths(out_dir: str, chunk: int) -> tuple[str, str]:
+    base = os.path.join(out_dir, "chunks", f"{chunk:04d}")
+    return base + ".jsonl", base + ".json"
+
+
+def write_chunk(out_dir: str, chunk: int, rows: list[dict], info: dict) -> None:
+    """Save one chunk's rows, then its info (whose presence marks the chunk done)."""
+    rows_path, info_path = _chunk_paths(out_dir, chunk)
+    os.makedirs(os.path.dirname(rows_path), exist_ok=True)
+    with open(rows_path, "w") as fh:
+        for row in rows:
+            fh.write(json.dumps(row) + "\n")
+    with open(info_path, "w") as fh:
+        json.dump(info, fh)
+
+
+def done_chunks(out_dir: str) -> set[int]:
+    chunk_dir = os.path.join(out_dir, "chunks")
+    if not os.path.isdir(chunk_dir):
+        return set()
+    return {int(name.removesuffix(".json")) for name in os.listdir(chunk_dir)
+            if name.endswith(".json")}
+
+
+def merge_chunks(out_dir: str, n_chunks: int, **extra) -> dict:
+    """Merge every chunk into rows.jsonl and summary.json; returns the summary."""
+    rows, infos = [], []
+    for chunk in range(n_chunks):
+        rows_path, info_path = _chunk_paths(out_dir, chunk)
+        with open(rows_path) as fh:
+            rows.extend(json.loads(line) for line in fh if line.strip())
+        with open(info_path) as fh:
+            infos.append(json.load(fh))
+    rows.sort(key=lambda r: r["pos"])
+    seconds = sum(info.pop("eval_seconds") for info in infos)
+    summary = summarize(rows, **infos[0], **extra,
+                        eval_seconds=seconds, gpu_seconds=seconds, n_chunks=n_chunks)
+    write_outputs(out_dir, rows, summary)
+    return summary
 
 
 def write_outputs(out_dir: str, rows: list[dict], summary: dict) -> None:

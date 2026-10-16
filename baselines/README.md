@@ -22,6 +22,10 @@ from an existing checkpoint, evaluated with the scripts here.
   `lattice-diffusion-checkpoints` volume. They use the
   `lattice_diffusion/eval/records.py` field names (`idx`, `pos`, `status`,
   `solution`).
+- **Resuming:** every eval saves its work in units and skips finished units
+  when rerun: HRM/TRM Sudoku in chunks of 1,024 puzzles, Maze sweeps per
+  checkpoint (scores cached next to the checkpoint, keyed by the eval
+  settings), Qwen per checkpoint.
 
 ```bash
 uv run python -m paper.launch launch baselines        # HRM/TRM, Sudoku + Maze

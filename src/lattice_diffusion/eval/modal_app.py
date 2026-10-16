@@ -39,6 +39,8 @@ class BlockResult(TypedDict):
     image=image, gpu="B200", timeout=6 * 3600, secrets=[hf_secret],
     volumes={DATA_MOUNT: data_volume, CHECKPOINT_MOUNT: checkpoint_volume},
     max_containers=100, scaledown_window=300,
+    # Blocks are seeded and idempotent, so a failed or preempted call is safe to rerun.
+    retries=modal.Retries(max_retries=3, initial_delay=5.0, backoff_coefficient=2.0),
 )
 class BlockWorker:
     checkpoint: str = modal.parameter()

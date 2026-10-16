@@ -28,3 +28,12 @@ def test_score_mazes_skips_padding_rows():
     labels = np.stack([np.array([[S, E, E], [P, E, E], [P, P, G]]).ravel(), np.zeros(9, dtype=int)])
     preds = np.stack([pred.ravel(), np.zeros(9, dtype=int)])
     assert ms.score_mazes(inputs, labels, preds) == {"n": 1, "exact": 0, "lenient": 1}
+
+
+def test_scores_are_cached_per_checkpoint_and_settings(tmp_path):
+    ckpt = str(tmp_path / "run" / "step_100")
+    settings = {"model": "trm", "config": "L_cycles: 4"}
+    assert ms.cached_scores(ckpt, settings) is None
+    ms.save_scores(ckpt, settings, {"n": 10, "exact": 7, "lenient": 9})
+    assert ms.cached_scores(ckpt, settings) == {"n": 10, "exact": 7, "lenient": 9}
+    assert ms.cached_scores(ckpt, {**settings, "config": "L_cycles: 6"}) is None

@@ -1,7 +1,9 @@
+import dataclasses
 import json
 
 import pytest
 
+from baselines.qwen_sft import run
 from baselines.qwen_sft.run import (
     PASS_KS, apply_n_blanks, checkpoint_dirs, estimate_pass_at_k, make_messages, make_rows,
     parse_solution, pass_at_k_curve, select_checkpoints, summarize_records,
@@ -81,3 +83,14 @@ def test_summary_counts_and_mean_pass_at_k():
     s = summarize_records(records, samples_per_puzzle=4)
     assert s["pass_at_1"] == 0.5 and s["puzzles_passed"] == 1
     assert (s["correct_samples"], s["malformed_samples"], s["total_samples"]) == (4, 1, 8)
+
+
+def test_finished_summary_requires_the_same_eval(tmp_path):
+    rows = [{"idx": 1, "question": "q", "answer": "a"}]
+    cfg = run.EvalConfig()
+    assert run._finished_summary(tmp_path, cfg, rows) is None
+    (tmp_path / "summary.json").write_text(json.dumps(
+        {"eval_config": dataclasses.asdict(cfg), "eval_digest_sha256": run.rows_digest(rows)}))
+    assert run._finished_summary(tmp_path, cfg, rows) is not None
+    other = dataclasses.replace(cfg, seed=cfg.seed + 1)
+    assert run._finished_summary(tmp_path, other, rows) is None

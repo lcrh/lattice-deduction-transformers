@@ -105,6 +105,11 @@ def run(checkpoint: str = "") -> dict:
 
     import maze_scoring
 
+    settings = {"model": "hrm", "hrm_commit": HRM_COMMIT}
+    if checkpoint and (cached := maze_scoring.cached_scores(checkpoint, settings)):
+        print(f"[hrm] already scored: {checkpoint}", flush=True)
+        return cached
+
     # 1) build the maze test/train dataset HRM expects at data/maze-30x30-hard-1k
     print("[hrm] building maze dataset …", flush=True)
     subprocess.run([sys.executable, "dataset/build_maze_dataset.py"], cwd=HRM_REMOTE, check=True)
@@ -151,6 +156,9 @@ def run(checkpoint: str = "") -> dict:
     scores = maze_scoring.score_mazes(preds["inputs"].numpy(), preds["labels"].numpy(),
                                       preds["logits"].float().numpy().argmax(-1))
     maze_scoring.print_scores("HRM", scores)
+    if checkpoint:
+        maze_scoring.save_scores(checkpoint, settings, scores)
+        ckpt_vol.commit()
     return scores
 
 
@@ -181,12 +189,11 @@ def sweep(run_dir: str, out: str = "baselines/hrm_trm/results/hrm_sweep.json"):
 @app.function(image=image, gpu="B200", timeout=6 * 3600, memory=32768,
               volumes={"/ldt_data": ldt_data, "/ldt_ckpt": ldt_ckpt},
               secrets=[modal.Secret.from_name("huggingface-secret")])
-def run_sudoku(indices: list[int], checkpoint: str = "", batch_size: int = 0,
-               tag: str = "sudoku_test_perm") -> dict:
-    """Exact-match accuracy on the given Sudoku-Extreme test indices, in order.
+def run_sudoku(chunk: int, start: int, indices: list[int], out_dir: str,
+               checkpoint: str = "", batch_size: int = 0) -> None:
+    """Exact-match results for one chunk of Sudoku-Extreme test indices, written to `out_dir`.
 
-    checkpoint="" is the authors' release. Writes per-puzzle rows and a summary
-    under eval/baselines/hrm/<tag>/ on the LDT checkpoint volume.
+    checkpoint="" is the authors' release.
     """
     import subprocess
 
@@ -269,31 +276,54 @@ def run_sudoku(indices: list[int], checkpoint: str = "", batch_size: int = 0,
     if not np.array_equal(inputs, np.load(os.path.join(test_dir, "all__inputs.npy"))):
         raise RuntimeError("eval order does not match the subset test split order")
 
-    rows = sudoku_rows.build_rows(indices, labels, preds)
-    summary = sudoku_rows.summarize(
-        rows, model="HRM",
-        checkpoint=ckpt if checkpoint else f"hf://{SUDOKU_CKPT_REPO}/checkpoint",
-        hrm_commit=HRM_COMMIT, index_list="sudoku_test_perm", gpu="B200", n_gpus=1,
-        global_batch_size=config.global_batch_size,
-        eval_seconds=eval_seconds, gpu_seconds=eval_seconds,
-        index_aligned_with_ldt_cache=aligned,
-    )
-    sudoku_rows.write_outputs(f"/ldt_ckpt/eval/baselines/hrm/{tag}", rows, summary)
+    rows = sudoku_rows.build_rows(indices, labels, preds, start)
+    sudoku_rows.write_chunk(out_dir, chunk, rows, {
+        "model": "HRM",
+        "checkpoint": ckpt if checkpoint else f"hf://{SUDOKU_CKPT_REPO}/checkpoint",
+        "hrm_commit": HRM_COMMIT, "gpu": "B200", "n_gpus": 1,
+        "global_batch_size": config.global_batch_size, "eval_seconds": eval_seconds,
+        "index_aligned_with_ldt_cache": aligned,
+    })
     ldt_ckpt.commit()
-    print(json.dumps(summary, indent=2), flush=True)
+    print(f"[hrm] chunk {chunk}: {sum(r['status'] == 'correct' for r in rows)}/{len(rows)}",
+          flush=True)
+
+
+@app.function(image=image, timeout=600, volumes={"/ldt_ckpt": ldt_ckpt})
+def done_chunks(out_dir: str) -> set[int]:
+    sys.path.insert(0, "/root")
+    import sudoku_rows
+
+    ldt_ckpt.reload()
+    return sudoku_rows.done_chunks(out_dir)
+
+
+@app.function(image=image, timeout=600, volumes={"/ldt_ckpt": ldt_ckpt})
+def merge_chunks(out_dir: str, n_chunks: int) -> dict:
+    sys.path.insert(0, "/root")
+    import sudoku_rows
+
+    ldt_ckpt.reload()
+    summary = sudoku_rows.merge_chunks(out_dir, n_chunks, index_list="sudoku_test_perm")
+    ldt_ckpt.commit()
     return summary
 
 
 @app.local_entrypoint()
 def sudoku(n: int = 10_000, checkpoint: str = "", batch_size: int = 0,
            out: str = "baselines/hrm_trm/results/hrm_sudoku.json"):
-    """Evaluate on the first n puzzles of sudoku_test_perm (LDT's ordering)."""
+    """Evaluate on the first n puzzles of sudoku_test_perm (LDT's ordering); resumes by chunk."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import sudoku_rows
 
-    indices = sudoku_rows.first_n_of_test_perm(n)
-    summary = sudoku_rows.add_interval(
-        run_sudoku.remote(indices, checkpoint, batch_size, f"sudoku_test_perm_n{n}"))
+    out_dir = f"/ldt_ckpt/eval/baselines/hrm/sudoku_test_perm_n{n}"
+    parts = sudoku_rows.chunks(sudoku_rows.first_n_of_test_perm(n))
+    done = done_chunks.remote(out_dir)
+    todo = [(c, start, idx, out_dir, checkpoint, batch_size)
+            for c, start, idx in parts if c not in done]
+    print(f"{len(parts) - len(todo)}/{len(parts)} chunks already done", flush=True)
+    list(run_sudoku.starmap(todo))
+    summary = sudoku_rows.add_interval(merge_chunks.remote(out_dir, len(parts)))
     with open(out, "w") as f:
         json.dump(summary, f, indent=2)
     print(f"wrote {out}", flush=True)

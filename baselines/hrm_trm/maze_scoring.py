@@ -97,3 +97,26 @@ def write_sweep(checkpoints: list[str], results: list[dict], out: str) -> None:
     for r in rows:
         print(f"  step {r['step']:>7}: exact={100 * r['exact'] / r['n']:.2f}%  "
               f"lenient={100 * r['lenient'] / r['n']:.2f}%", flush=True)
+
+
+def _cache_path(checkpoint: str) -> str:
+    return os.path.join(os.path.dirname(checkpoint), "maze_scores",
+                        os.path.basename(checkpoint) + ".json")
+
+
+def cached_scores(checkpoint: str, settings: dict) -> dict | None:
+    """Saved scores of `checkpoint` under identical eval `settings`, if any."""
+    path = _cache_path(checkpoint)
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        saved = json.load(f)
+    return saved["scores"] if saved["settings"] == settings else None
+
+
+def save_scores(checkpoint: str, settings: dict, scores: dict) -> None:
+    """Save a checkpoint's scores next to it, so a rerun sweep skips it."""
+    path = _cache_path(checkpoint)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump({"settings": settings, "scores": scores}, f)

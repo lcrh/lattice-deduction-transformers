@@ -77,3 +77,21 @@ def test_first_n_of_test_perm_is_ldt_prefix():
     from lattice_diffusion.eval import indices
 
     assert sudoku_rows.first_n_of_test_perm(5) == indices.load("sudoku_test_perm").indices[:5].tolist()
+
+
+def test_chunks_resume_and_merge_in_order(tmp_path, monkeypatch):
+    monkeypatch.setattr(sudoku_rows, "CHUNK_SIZE", 3)
+    indices = [40, 10, 30, 20, 50, 60, 70]
+    parts = sudoku_rows.chunks(indices)
+    assert [(c, start, len(idx)) for c, start, idx in parts] == [(0, 0, 3), (1, 3, 3), (2, 6, 1)]
+    out = str(tmp_path)
+    for c, start, idx in reversed(parts):
+        assert c not in sudoku_rows.done_chunks(out)
+        rows = [{"idx": i, "pos": start + k, "status": "correct" if i % 20 else "wrong"}
+                for k, i in enumerate(idx)]
+        sudoku_rows.write_chunk(out, c, rows, {"model": "x", "eval_seconds": 1.5})
+    assert sudoku_rows.done_chunks(out) == {0, 1, 2}
+    summary = sudoku_rows.merge_chunks(out, len(parts))
+    assert summary["n"] == 7 and summary["correct"] == 4 and summary["gpu_seconds"] == 4.5
+    rows = [json.loads(line) for line in (tmp_path / "rows.jsonl").read_text().splitlines()]
+    assert [r["idx"] for r in rows] == indices
