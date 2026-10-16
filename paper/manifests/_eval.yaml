@@ -19,11 +19,11 @@ presets:
   ablation:
     eval.index_list: sudoku_test_perm
     eval.stop: ablation
-  # Held-out train puzzles, sequential. Phase-1 default selection only;
+  # Held-out train puzzles, sequential, at most 4,000. Phase-1 default selection only;
   # never touches the test split.
   select:
     eval.index_list: sudoku_val
-    eval.stop: sequential
+    eval.stop: select
   # An explicit puzzle list (entry `indices_file`), every puzzle.
   explicit:
     eval.stop: full

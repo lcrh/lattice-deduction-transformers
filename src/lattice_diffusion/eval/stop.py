@@ -14,7 +14,7 @@ from typing import ClassVar, Literal
 from lattice_diffusion.eval.stats import confidence_sequence
 
 Status = Literal["correct", "wrong", "timeout"]
-StopReason = Literal["failures", "half_width", "fixed_n", "exhausted"]
+StopReason = Literal["failures", "half_width", "n_max", "fixed_n", "exhausted"]
 
 
 @dataclass
@@ -66,6 +66,7 @@ class SequentialStop(StopRule):
 
     Fires at `max_failures` failures, or when the confidence-sequence half-width
     is <= `half_width` (checked every `check_every` puzzles); never before `n_min`.
+    With `n_max`, also stops after that many puzzles.
     """
 
     KIND: ClassVar[str] = "sequential"
@@ -75,8 +76,15 @@ class SequentialStop(StopRule):
     n_min: int = 1000
     alpha: float = 0.05
     check_every: int = 100
+    n_max: int | None = None
+
+    @property
+    def limit(self) -> int | None:
+        return self.n_max
 
     def should_stop(self, counts: PrefixCounts) -> StopReason | None:
+        if self.n_max is not None and counts.n >= self.n_max:
+            return "n_max"
         if counts.n < self.n_min:
             return None
         if counts.failures >= self.max_failures:
@@ -108,6 +116,7 @@ PRESETS: dict[str, StopRule] = {
     "sequential": SequentialStop(),
     "full": NoStop(),
     "ablation": FixedN(1000),
+    "select": SequentialStop(n_max=4000),   # phase-1 default selection on sudoku_val
 }
 
 _RULES = {rule.KIND: rule for rule in (NoStop, SequentialStop, FixedN)}

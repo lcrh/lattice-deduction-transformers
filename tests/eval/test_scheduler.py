@@ -134,3 +134,14 @@ def test_failed_block_drains_in_flight_blocks_then_raises():
     executor.shutdown()
     assert 3 not in persisted
     assert set(range(8)) - {3} <= set(persisted)    # the rest of the window was kept
+
+
+def test_sequential_stop_caps_at_n_max():
+    from lattice_diffusion.eval.stop import PRESETS, PrefixCounts, SequentialStop, stop_from_dict
+
+    rule = SequentialStop(n_max=4000)
+    assert rule.limit == 4000 and stop_from_dict(rule.to_dict()) == rule
+    counts = PrefixCounts(n=3999, correct=3000, timeout=999)  # many failures, but past n_min
+    assert rule.should_stop(counts) == "failures"
+    assert rule.should_stop(PrefixCounts(n=4000, correct=4000)) == "n_max"
+    assert PRESETS["select"] == rule

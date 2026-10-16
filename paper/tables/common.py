@@ -27,6 +27,7 @@ EVAL_RULES = {
                  "(n = {n} per seed)"),
     "half_width": ("a fixed random ordering of the test split, evaluated until the 95% "
                    "interval on accuracy is within 0.1 points (n = {n} per seed)"),
+    "n_max": "a fixed random ordering of the puzzles, evaluated up to a cap (n = {n} per seed)",
 }
 
 
