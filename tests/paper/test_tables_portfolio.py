@@ -5,7 +5,7 @@ import random
 
 import pytest
 
-from paper import portfolio as P
+from paper import portfolio
 from paper.compute import ldt_forward_flops
 from paper.tables import appendix
 from paper.tables.common import eval_rule, paired_vs
@@ -19,7 +19,7 @@ def _write_rows(tmp_path, key, statuses):
     return path.name
 
 
-def _record(tmp_path, entry, seed, statuses, **kw):
+def _result_record(tmp_path, entry, seed, statuses, **kw):
     n = len(statuses)
     correct = statuses.count("correct")
     return {"entry": entry, "key": f"A1/{entry}/seed{seed}", "seed": seed, "status": "done",
@@ -31,10 +31,10 @@ def _record(tmp_path, entry, seed, statuses, **kw):
 
 
 def test_paired_delta_pools_seeds_by_puzzle(tmp_path):
-    ref = [_record(tmp_path, "default", s, ["correct"] * 10) for s in (0, 1)]
+    ref = [_result_record(tmp_path, "default", s, ["correct"] * 10) for s in (0, 1)]
     # Seed 0 fails puzzles 0-1, seed 1 fails puzzle 0 -> 3 of 20 pairs differ.
-    arm = [_record(tmp_path, "arm", 0, ["timeout"] * 2 + ["correct"] * 8),
-           _record(tmp_path, "arm", 1, ["wrong"] + ["correct"] * 9)]
+    arm = [_result_record(tmp_path, "arm", 0, ["timeout"] * 2 + ["correct"] * 8),
+           _result_record(tmp_path, "arm", 1, ["wrong"] + ["correct"] * 9)]
     d = paired_vs(ref, arm, root=tmp_path)
     assert d.n == 20 and d.only_b == 3 and d.only_a == 0
     assert d.delta == pytest.approx(-0.15)
@@ -42,8 +42,8 @@ def test_paired_delta_pools_seeds_by_puzzle(tmp_path):
 
 
 def test_appendix_table_has_reference_groups_and_deltas(tmp_path):
-    records = [_record(tmp_path, "default", s, ["correct"] * 10, label="Default") for s in (0, 1)]
-    records += [_record(tmp_path, "loops_1", s, ["timeout"] * 5 + ["correct"] * 5,
+    records = [_result_record(tmp_path, "default", s, ["correct"] * 10, label="Default") for s in (0, 1)]
+    records += [_result_record(tmp_path, "loops_1", s, ["timeout"] * 5 + ["correct"] * 5,
                         label="1 loop", group="loops") for s in (0, 1)]
     hints = {"reference": "default", "groups": {"loops": "Loop count"}}
     tex = appendix.build("appendix_a_recurrence", records, hints, root=tmp_path).to_latex()
@@ -64,7 +64,7 @@ def _attempt(model, statuses, eval_seed=0, full=False, idx=None, solutions=None)
                               else "") for i, s in zip(idx, statuses)]
     rows = {i: {"idx": i, "status": s, "solution": sol}
             for i, s, sol in zip(idx, statuses, solutions)}
-    return P.Attempt(model=model, eval_seed=eval_seed, full=full, rows=rows)
+    return portfolio.Attempt(model=model, eval_seed=eval_seed, full=full, rows=rows)
 
 
 def test_portfolio_residue_and_selection():
@@ -73,22 +73,22 @@ def test_portfolio_residue_and_selection():
                                                                          "wrong", "correct",
                                                                          "correct"], full=True)
     a1 = _attempt(1, ["correct"] * 5 + ["timeout"] + ["correct"] * 4, full=True)
-    h = P.failure_set([a0, a1])
+    h = portfolio.failure_set([a0, a1])
     assert h == [2, 5, 7]
     # Non-anchor model 2 is only run on H: solves 5, wrong on 2, times out on 7.
     m2 = _attempt(2, ["wrong", "correct", "timeout"], idx=h)
-    assert P.residue_curve([a0, a1, m2]) == [3, 1, 0]
-    assert P.residue_curve([a1, m2]) == [1, 0]
+    assert portfolio.residue_curve([a0, a1, m2]) == [3, 1, 0]
+    assert portfolio.residue_curve([a1, m2]) == [1, 0]
     with pytest.raises(ValueError):
-        P.residue_curve([m2, a0])
-    first = P.select([a0, a1, m2], h, "first")
+        portfolio.residue_curve([m2, a0])
+    first = portfolio.select([a0, a1, m2], h, "first")
     # 2: a0 timeout, a1 correct -> correct; 5: a0, a1 timeout, m2 correct;
     # 7: a0 wrong first -> wrong.
     assert first == {"correct": 2, "wrong": 1}
-    major = P.select([a0, a1, m2], h, "majority")
+    major = portfolio.select([a0, a1, m2], h, "majority")
     # 2: a1 correct vs m2 wrong -> tie -> abstain; 7: a0 wrong vs a1 correct -> tie.
     assert major == {"unsolved": 2, "correct": 1}
-    probs = P.solve_probability([a0, a1, m2], h)
+    probs = portfolio.solve_probability([a0, a1, m2], h)
     assert probs[5] == (1, 3)
 
 
@@ -99,8 +99,8 @@ def test_portfolio_attempts_curve_and_analyze():
     a0_e2 = _attempt(0, ["timeout", "correct"], eval_seed=2, idx=[8, 9])
     m1 = _attempt(1, ["timeout", "timeout"], idx=[8, 9])
     m2 = _attempt(2, ["correct", "correct"], idx=[8, 9])
-    assert P.attempts_curve([a0, a0_e1, a0_e2]) == [2, 1, 0]
-    result = P.analyze([a0, a0_e1, a0_e2, m1, m2], n_total=10, n_orders=50, n_boot=20)
+    assert portfolio.attempts_curve([a0, a0_e1, a0_e2]) == [2, 1, 0]
+    result = portfolio.analyze([a0, a0_e1, a0_e2, m1, m2], n_total=10, n_orders=50, n_boot=20)
     assert result["failure_set_size"] == 2
     assert result["residue_natural_order"] == [2, 2, 0]
     assert result["smallest_k"] == 3
@@ -113,7 +113,7 @@ def test_portfolio_attempts_curve_and_analyze():
 def test_random_orders_start_with_an_anchor():
     firsts = {0: _attempt(0, ["correct"], full=True), 1: _attempt(1, ["correct"]),
               2: _attempt(2, ["correct"])}
-    for order in P.random_orders(firsts, 20, random.Random(0)):
+    for order in portfolio.random_orders(firsts, 20, random.Random(0)):
         assert order[0].full and sorted(a.model for a in order) == [0, 1, 2]
 
 
@@ -128,7 +128,7 @@ def test_figures_and_main_tables_render(tmp_path):
     from paper.figures import fig2_sudoku_compute as fig2, fig3_maze_ksweep as fig3
     from paper.tables import table1_sudoku, table3_maze
 
-    records = [_record(tmp_path, f"steps_{x}", s, ["correct"] * 9 + ["timeout"], x=x,
+    records = [_result_record(tmp_path, f"steps_{x}", s, ["correct"] * 9 + ["timeout"], x=x,
                        gpu_seconds=10.0, train_seconds=600.0)
                for x in (500, 4000) for s in (0, 1)]
     curves = fig2.percentile_curves(records, root=tmp_path)

@@ -12,8 +12,8 @@ from lattice_diffusion import config as cfglib
 from lattice_diffusion.provenance import (
     LedgerRecord, app_run_name, entry_key, read_ledger, require_clean_sha,
 )
-from paper import launch as L
 import paper.manifest as manifest
+from paper import launch
 from paper.manifest import eval_overrides, load_manifest, volume_path
 from tests.paper.fakes import FakeVolumeView
 
@@ -137,19 +137,19 @@ def test_every_run_name_is_unique_within_a_manifest():
         assert len(set(named)) == len(named)
 
 
-def _record(entry, ts, call="fc-1", kind="train+eval"):
+def _ledger_record(entry, ts, call="fc-1", kind="train+eval"):
     return LedgerRecord(kind=kind, exp_id=entry.split("/")[0], entry=entry, app_name="n",
                         app_id="ap-1", app_url="u", call_id=call, code_sha="sha",
                         checkpoint="/checkpoints/x.pt", train_hash="h", ts=ts)
 
 
 def test_ledger_reads_back_in_time_order():
-    recs = [_record("A1/a/seed0", 3.0), _record("A1/a/seed0", 1.0, call="fc-0")]
+    recs = [_ledger_record("A1/a/seed0", 3.0), _ledger_record("A1/a/seed0", 1.0, call="fc-0")]
     view = FakeVolumeView({f"ledger/{i}.json": json.dumps(dataclasses.asdict(r))
                            for i, r in enumerate(recs)})
-    got = L.load_ledger(view)
+    got = launch.load_ledger(view)
     assert [r.ts for r in got] == [1.0, 3.0]
-    assert L.latest_ledger(got)["A1/a/seed0"].call_id == "fc-1"
+    assert launch.latest_ledger(got)["A1/a/seed0"].call_id == "fc-1"
     assert read_ledger(lambda d: [], lambda p: b"") == []
 
 
@@ -183,7 +183,7 @@ def _summary(n, correct, wrong=0, timeout=None):
     })
 
 
-def test_status_states():
+def test_status_of_each_run_state():
     runs = _by_key(_runs("appendix_d_soundness"))
     done_run, trained_run = runs["A0/default/seed0"], runs["A7/sym/seed0"]
     running, failed = runs["A7/ratio2/seed0"], runs["A7/ratio32/seed0"]
@@ -195,8 +195,8 @@ def test_status_states():
         volume_path(partial.checkpoint): b"",
         volume_path(partial.run_dir) + "/blocks/000000.jsonl": b"{}\n",
     }
-    ledger = [_record(running.key, 1.0, call="fc-run"), _record(failed.key, 1.0, call="fc-bad")]
-    states = L.statuses(list(runs.values()), FakeVolumeView(files), ledger,
+    ledger = [_ledger_record(running.key, 1.0, call="fc-run"), _ledger_record(failed.key, 1.0, call="fc-bad")]
+    states = launch.statuses(list(runs.values()), FakeVolumeView(files), ledger,
                         {"fc-run": "running", "fc-bad": "failed"}.get)
     assert states[done_run.key] == "done"
     assert states[trained_run.key] == "trained"
@@ -206,14 +206,14 @@ def test_status_states():
     assert states["A7/sym_matched/seed0"] == "trained"      # its checkpoint exists
     assert states["A7/ratio2_matched/seed0"] == "blocked"   # training still running
     assert states["A0/default/seed1"] == "not started"
-    offline = L.statuses(list(runs.values()), FakeVolumeView(files), ledger, None)
+    offline = launch.statuses(list(runs.values()), FakeVolumeView(files), ledger, None)
     assert offline[running.key] == "launched"
 
 
-def test_plan_launches():
+def test_plan_trains_missing_runs_and_evaluates_existing_checkpoints():
     runs = _runs("portfolio")
     states = {r.key: "not started" for r in runs}
-    plan = {p.run.key: (p.cmd, p.reason) for p in L.plan_launches(runs, states)}
+    plan = {p.run.key: (p.cmd, p.reason) for p in launch.plan_launches(runs, states)}
     cmd, _ = plan["X1/anchor/seed0"]
     assert cmd[:6] == ["uv", "run", "modal", "run", "--detach", "-n"]
     assert "experiments/sudoku/run.py" in cmd and "--no-wait" in cmd
@@ -223,8 +223,8 @@ def test_plan_launches():
     # A checkpoint that exists is only evaluated.
     t1 = _runs("table1_sudoku")
     states = {r.key: "trained" for r in t1}
-    launch = {p.run.key: p for p in L.plan_launches(t1, states)}["M1/steps4k/seed0"]
-    cmd, why = launch.cmd, launch.reason
+    planned = {p.run.key: p for p in launch.plan_launches(t1, states)}["M1/steps4k/seed0"]
+    cmd, why = planned.cmd, planned.reason
     assert "experiments/evaluate.py" in cmd and why == "evaluate existing checkpoint"
     assert cmd[cmd.index("--checkpoint") + 1].startswith("/checkpoints/sudoku/paper-")
 
@@ -235,7 +235,7 @@ def test_rerun_entries_resolve_once_the_failure_set_exists(monkeypatch):
     rerun = runs["X1/rerun_models/seed5/eval2"]
     assert rerun.spec.explicit_indices == [5, 17] and rerun.spec.eval_seed == 2
     assert rerun.checkpoint == runs["X1/models/seed5"].checkpoint
-    cmd = L.eval_command(rerun)
+    cmd = launch.eval_command(rerun)
     assert cmd[cmd.index("--indices-file") + 1] == "paper/results/portfolio_failures.txt"
 
 
@@ -254,9 +254,9 @@ def test_collect_writes_csv_and_reported_rows(tmp_path, monkeypatch):
             "".join(json.dumps(r) + "\n" for r in rows),
     }
     view = FakeVolumeView(files)
-    monkeypatch.setattr(L, "REPO", tmp_path)
-    states = L.statuses(runs, view, [], None)
-    out = L.collect("appendix_b_supervision", runs, view, states, tmp_path, with_rows=True)
+    monkeypatch.setattr(launch, "REPO", tmp_path)
+    states = launch.statuses(runs, view, [], None)
+    out = launch.collect("appendix_b_supervision", runs, view, states, tmp_path, with_rows=True)
     with out.open() as fh:
         recs = {r["key"]: r for r in csv.DictReader(fh)}
     rec = recs[run.key]

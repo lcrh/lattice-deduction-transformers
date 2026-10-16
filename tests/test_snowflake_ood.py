@@ -29,7 +29,7 @@ def _puzzles(tmp: Path, n: int = 140) -> list[dict]:
     return load_puzzles(tmp / "p.parquet")
 
 
-def test_default_pool_is_the_historical_subset(tmp_path):
+def test_default_pool_is_a_seeded_subset(tmp_path):
     puzzles = _puzzles(tmp_path)
     pool = select_pool(puzzles, SnowflakeConfig(n_puzzles=40, seed=42))
     expected = np.random.default_rng(42).choice(len(puzzles), 40, replace=False)
