@@ -73,7 +73,7 @@ def test_make_rows_keeps_order_and_normalizes_blanks():
     assert all(r["question"].count("0") == 3 for r in blanked)
 
 
-def test_summarize_records():
+def test_summary_counts_and_mean_pass_at_k():
     records = [
         {"n_correct": 0, "n_malformed": 1, **pass_at_k_curve(4, 0, (1, 2, 4))},
         {"n_correct": 4, "n_malformed": 0, **pass_at_k_curve(4, 4, (1, 2, 4))},
