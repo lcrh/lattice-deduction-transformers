@@ -271,19 +271,23 @@ def gen_shard(
             "path": str(out_path)}
 
 
-def assign_split(fingerprint: bytes, test_frac: float, val_frac: float, seed: int) -> str:
-    """Split of a row from its fingerprint: test is buckets [0, test_frac), val the next val_frac."""
+def assign_split(key: bytes, test_frac: float, val_frac: float, seed: int) -> str:
+    """Split from a row's split key: test is buckets [0, test_frac), val the next val_frac."""
     salt = f"snowflake-split-seed{seed}".encode()
-    bucket = int.from_bytes(hashlib.sha256(salt + fingerprint).digest()[:4], "big") % 1000
+    bucket = int.from_bytes(hashlib.sha256(salt + key).digest()[:4], "big") % 1000
     test_hi = int(round(test_frac * 1000))
     val_hi = test_hi + int(round(val_frac * 1000))
     return "test" if bucket < test_hi else ("val" if bucket < val_hi else "train")
 
 
 def fingerprint(row: dict) -> bytes:
-    """Dedup / split key: puzzle, solution and layout."""
-    return (bytes(bytearray(row["puzzle"])) + b"|" + bytes(bytearray(row["solution"]))
-            + b"|" + row["topology"].encode())
+    """Dedup key: puzzle, solution and layout."""
+    return bytes(bytearray(row["puzzle"])) + b"|" + split_key(row)
+
+
+def split_key(row: dict) -> bytes:
+    """Split key: solution and layout, so every given-count variant of a puzzle shares a split."""
+    return bytes(bytearray(row["solution"])) + b"|" + row["topology"].encode()
 
 
 def content_sha256(rows: list[dict]) -> str:
@@ -308,7 +312,7 @@ def split_rows(rows: list[dict], test_frac: float, val_frac: float,
     splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
     for i, r in enumerate(deduped):
         r["id"] = i
-        splits[assign_split(fingerprint(r), test_frac, val_frac, seed)].append(r)
+        splits[assign_split(split_key(r), test_frac, val_frac, seed)].append(r)
     return splits, len(rows) - len(deduped)
 
 

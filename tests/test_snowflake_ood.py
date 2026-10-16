@@ -73,8 +73,9 @@ def test_constraint_groups_get_distinct_random_ids(tmp_path):
     assert (a[mask].sum(axis=1) >= 1).all() and a[~mask].sum() == 0
 
 
-def _row(i, n, puzzle):
-    return {"id": -1, "n": n, "code": f"c{i:04d}", "puzzle": puzzle, "solution": [1] * 6,
+def _row(i, n, puzzle, solution=None):
+    return {"id": -1, "n": n, "code": f"c{i:04d}", "puzzle": puzzle,
+            "solution": solution or [i % 7 + 1, i // 7 % 7 + 1, i // 49 % 7 + 1, 1, 1, 1],
             "givens": 1, "topology": json.dumps({"layout": i % 3})}
 
 
@@ -90,9 +91,23 @@ def test_validation_split_leaves_test_unchanged():
 
 
 def test_dedup_keeps_distinct_layouts():
-    rows = [_row(i, 4, [1, 2, 3, 7, 7, 7]) for i in range(6)]   # same digits, 3 layouts
+    rows = [_row(i, 4, [1, 2, 3, 7, 7, 7], [1] * 6) for i in range(6)]   # same digits, 3 layouts
     splits, dropped = gen_data.split_rows([dict(r) for r in rows], 0.1, 0.05, 0)
     assert dropped == 3 and sum(len(v) for v in splits.values()) == 3
+
+
+def test_variants_of_a_puzzle_share_a_split():
+    rows = [_row(100 * b + v, 4, [b % 7 + 1] + [7] * v + [1] * (5 - v),
+                 [b % 7 + 1, b // 7 % 7 + 1, 1, 1, 1, 1])
+            for b in range(49) for v in range(4)]   # 4 given-count variants per puzzle
+    for r in rows:
+        r["topology"] = json.dumps({"layout": r["solution"][:2]})
+    splits, _ = gen_data.split_rows([dict(r) for r in rows], 0.2, 0.1, 0)
+    split_of = {}
+    for name, rs in splits.items():
+        for r in rs:
+            assert split_of.setdefault(gen_data.split_key(r), name) == name
+    assert splits["test"] and splits["train"]
 
 
 def test_ood_configs_load_with_their_order_settings():
