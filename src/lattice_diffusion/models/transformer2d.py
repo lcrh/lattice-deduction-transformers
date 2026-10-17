@@ -74,8 +74,7 @@ def _precompute_2d_rope(
 
 
 def _apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-    """x: [..., L, head_dim]. cos/sin: [L, head_dim]. Pair-wise rotation
-    (2i, 2i+1) → (x_even*cos - x_odd*sin, x_even*sin + x_odd*cos)."""
+    """Rotate (2i, 2i+1) pairs of x [..., L, head_dim] by angles with cos/sin [L, head_dim]."""
     x_even = x[..., 0::2]
     x_odd = x[..., 1::2]
     cos_pair = cos[..., 0::2]   # one entry per pair
@@ -86,11 +85,7 @@ def _apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.
 
 
 class _RoPEAttention(nn.Module):
-    """Multi-head attention with 2D RoPE applied to Q/K. Uses
-    `F.scaled_dot_product_attention` (Flash if available). RoPE is applied to
-    grid tokens (positions 0..seq_len-1); the optional CLS token at position
-    seq_len is rotated with zeros (effectively no RoPE — global aggregator).
-    """
+    """Multi-head attention with 2D RoPE on the grid tokens' Q/K (the CLS token is not rotated)."""
 
     def __init__(self, cfg: "Transformer2DConfig"):
         super().__init__()

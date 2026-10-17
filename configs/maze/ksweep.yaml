@@ -1,7 +1,5 @@
-# Figure 3: 15x15 synthetic mazes, K in {1, 8, 32, 64, 128, 256, 512} x
-# 4 seeds. Set K and the seed with --set "data.k_solutions=<K> train.seed=<S>".
-name: ksweep
-
+# 15x15 synthetic mazes for the K sweep (K in {1, 8, 32, 64, 128, 256, 512}).
+# Set K and the seed with --set "data.k_solutions=<K> train.seed=<S>".
 model:
   dim: 128
   use_rope: false
@@ -12,6 +10,7 @@ data:
   n_puzzles: 10000
   hard: true
   k_solutions: 1
+  prefetch_batches: 8      # the K-path sampler is slow for K > 1
 
 train:
   steps: 4000
@@ -34,4 +33,3 @@ eval:
   stop: full
   dropout_p: 0.05
   block_size: 50
-  workers: 20

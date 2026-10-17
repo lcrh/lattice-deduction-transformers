@@ -1,4 +1,4 @@
-# HRM & TRM baselines: Maze-Hard reproductions (lenient evaluation) and Sudoku-Extreme evals
+# HRM and TRM baselines
 
 Independent reproductions of **HRM** ([sapientinc/HRM](https://github.com/sapientinc/HRM))
 and **TRM** ([alphaXiv/TinyRecursiveModels](https://github.com/alphaXiv/TinyRecursiveModels))
@@ -41,7 +41,7 @@ uv run modal run baselines/hrm_trm/trm_eval/modal_eval.py::main    # TRM
 
 Training streams to **Weights & Biases** (online via `wandb-secret`) and writes a
 persistent `<run_name>.train.log` to the checkpoint volume. Eval sweeps + plots
-land in `baselines/hrm_trm/results/` (committed once runs complete).
+land in `baselines/hrm_trm/results/`.
 
 ## Sudoku-Extreme: evaluation of existing checkpoints
 
@@ -66,7 +66,8 @@ Each run:
   `scripts/run_eval_only.py` with EMA weights and bf16);
 - writes per-puzzle rows (`idx`, `pos`, `status`, `solution`, the
   `lattice_diffusion/eval/records.py` field names) and a summary to
-  `eval/baselines/<model>/sudoku_test_perm_n<N>/` on the
+  `eval/baselines/<model>/sudoku_test_perm_n<N>-<hash>/` (hash of the
+  checkpoint and batch size) on the
   `lattice-diffusion-checkpoints` volume;
 - writes the summary with a Clopper–Pearson interval and the eval time
   (`gpu_seconds`, single B200) to `baselines/hrm_trm/results/`.
@@ -100,9 +101,9 @@ released checkpoints agrees:
 | TRM (7M)  | 85.1%† | 85.3% | 83.8%† | 91.6%† |
 | HRM (27M) | 74.8% | 74.5% | 74.4% | 82.2% |
 
-† TRM Maze evals in this section ran `run_eval_only.py` with the default
-`L_cycles=6`, but the checkpoints were trained with `L_cycles=4`. Eval now
-uses `trm_eval/cfg_maze.yaml`; these numbers need re-evaluation.
+† Evaluated with `L_cycles=6`; the checkpoints were trained with
+`L_cycles=4`. `trm_eval/cfg_maze.yaml` sets 4; these numbers need
+re-evaluation.
 
 **2. 8× dihedral augmentation hurts TRM, and helps HRM only on long runs (lenient
 only).** Best performance reached over each training trajectory:

@@ -1,7 +1,5 @@
-# Sudoku-Extreme, paper recipe (Table 1, 4K-step row). These are also the
-# SudokuExperiment defaults; tests/test_configs.py checks that they agree.
-name: paper
-
+# Sudoku-Extreme at 4K steps; the SudokuExperiment defaults
+# (tests/test_configs.py checks that they agree).
 model:
   dim: 128
   num_layers: 4
@@ -54,7 +52,7 @@ solve:                     # operator and search at evaluation
     deduce_passes: 1       # forward+eliminate passes per round (or "fixpoint")
     n_loops: null          # model loops at inference (null = as trained)
     cell_policy: uniform   # uniform | mrv | min_entropy | max_entropy
-    digit_policy: sample   # sample | argmax | rank_k
+    digit_policy: argmax   # sample | argmax | rank_k
   backtrack: root          # root | last | geometric | uniform_depth
   backtrack_negate: false
   max_rounds: 1000
@@ -65,4 +63,3 @@ eval:
   index_list: sudoku_test_perm
   stop: sequential
   dropout_p: 0.05
-  workers: 32

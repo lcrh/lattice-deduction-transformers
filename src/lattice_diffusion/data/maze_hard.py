@@ -212,8 +212,7 @@ def _augment(
 
 
 def _to_straight_line(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Replace the maze with a wall-less puzzle whose GT is a straight line
-    from S to G.
+    """Replace the maze with a wall-less puzzle whose target is a straight S-to-G line.
 
     Removes all walls (every non-S/G cell becomes a free-cell powerset state
     in x, i.e., both `free` and `path` alive). Computes the Bresenham-like

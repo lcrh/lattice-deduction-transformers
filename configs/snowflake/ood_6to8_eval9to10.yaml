@@ -1,10 +1,5 @@
-# Snowflake order transfer (appendix): train on orders 6-8, evaluate on the
-# never-seen orders 9-10.
-# Varied-topology dataset, 500 training puzzles, 4K steps (the budget the
-# archived order-transfer runs used; Table 2 uses 1K). Everything not set
-# here is the paper recipe (paper.yaml).
-name: ood_6to8_eval9to10
-
+# Snowflake order transfer: train on orders 6-8, evaluate on unseen orders 9-10.
+# 4K steps; everything else as paper.yaml.
 data:
   train_orders: [6, 7, 8]
 

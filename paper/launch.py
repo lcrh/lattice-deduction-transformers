@@ -1,7 +1,8 @@
 """Launch, track and collect the runs of a paper manifest.
 
-    uv run python -m paper.launch status  <manifest> [--offline]
+    uv run python -m paper.launch status  <manifest> [--offline] [--only GLOB]
     uv run python -m paper.launch launch  <manifest> [--dry-run] [--only GLOB] [--limit N]
+                                          [--max-running N]
     uv run python -m paper.launch collect <manifest> [--rows]
     uv run python -m paper.launch ledger  [--exp A1]
     uv run python -m paper.launch list
@@ -9,12 +10,16 @@
 Every run is resolved locally (paper/manifest.py) to its checkpoint path and
 eval summary path, so status is read off the checkpoint volume: a run is done
 when its summary (or, for train-only runs, its checkpoint) exists. The launch
-ledger (`ledger/` on the volume, written by the entrypoints) adds which runs
-are in flight and their Modal app and call IDs.
+ledger (`ledger/` on the volume, written by the entrypoints) records each
+run's Modal app; a run is in flight while that app is live (one `modal app
+list` per command). A launched run whose app has stopped without a result is
+`stopped` and is relaunched like a missing one.
 
 `launch` submits only what is missing, one `modal run --detach -n <name>`
-per run, without waiting. A run whose checkpoint exists is only evaluated;
-eval-only runs wait for their training run. Launching refuses a dirty tree.
+per run, without waiting, and keeps at most `--max-running` ldt apps live in
+the environment; rerun it to submit the next batch. A run whose checkpoint
+exists is only evaluated; eval-only runs wait for their training run.
+Launching refuses a dirty tree.
 `collect` writes paper/results/<manifest>.csv (and with --rows the reported
 per-puzzle rows) for the table and figure scripts.
 """
@@ -23,49 +28,51 @@ from __future__ import annotations
 
 import argparse
 import csv
+import dataclasses
 import fnmatch
 import json
 import shlex
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from collections.abc import Container
+from typing import Literal, get_args
 
 from lattice_diffusion.provenance import (
-    LedgerRecord, app_run_name, read_ledger, require_clean_sha,
+    LedgerRecord, announce, app_run_name, read_ledger, require_clean_sha, write_ledger,
 )
 
 from paper.manifest import (
     REPO, Run, eval_overrides, list_manifests, load_manifest, train_overrides, volume_path,
 )
-from paper.volume import ModalVolumeView, SnapshotVolumeView, VolumeView
+from paper.results import RESULTS
+from paper.volume import VOLUME_NAME, ModalVolumeView, SnapshotVolumeView, VolumeView
 
-RESULTS = REPO / "paper" / "results"
-
-# Status values, in display order.
-STATES = ("done", "running", "launched", "partial", "trained", "blocked", "failed", "not started")
+State = Literal["done", "running", "launched", "partial", "trained", "blocked", "stopped",
+                "not started"]
+STATES = get_args(State)      # display order
+MAX_RUNNING = 8               # default cap on live ldt apps per environment
 
 
 # --------------------------------------------------------------------------
 # Status
 # --------------------------------------------------------------------------
 
-def modal_call_state(call_id: str) -> str:
-    """running | finished | failed for a Modal function call. A finished
-    training call that spawned an eval reports that eval's state."""
-    import modal
+def live_apps() -> dict[str, str]:
+    """App ID -> description of every app in the Modal environment that has not stopped.
 
-    try:
-        result = modal.FunctionCall.from_id(call_id).get(timeout=0)
-    except TimeoutError:
-        return "running"
-    except Exception as exc:
-        if type(exc).__name__ == "TimeoutError":    # modal.exception.TimeoutError
-            return "running"
-        return "failed"
-    if isinstance(result, dict) and result.get("eval_call_id"):
-        return modal_call_state(result["eval_call_id"])
-    return "finished"
+    The environment comes from MODAL_ENVIRONMENT (or the profile default), as for `modal run`.
+    """
+    out = subprocess.run([sys.executable, "-m", "modal", "app", "list", "--json"],
+                         capture_output=True, text=True, check=True)
+    return {a["App ID"]: a["Description"] for a in json.loads(out.stdout)
+            if a["State"] != "stopped"}
+
+
+def running_ldt_apps(live: dict[str, str]) -> int:
+    """Live apps launched by this repo (all experiments, baselines included)."""
+    return sum(desc.startswith("ldt-") for desc in live.values())
 
 
 def latest_ledger(records: list[LedgerRecord]) -> dict[str, LedgerRecord]:
@@ -77,8 +84,8 @@ def latest_ledger(records: list[LedgerRecord]) -> dict[str, LedgerRecord]:
 
 
 def run_state(run: Run, view: VolumeView, ledger: dict[str, LedgerRecord],
-              call_state: Callable[[str], str] | None) -> str:
-    """One of STATES. `call_state=None` means offline (no call lookups)."""
+              live: Container[str] | None) -> State:
+    """A run's state; `live` holds the live app IDs, None when offline."""
     if run.kind == "command":
         return "done" if run.result and (REPO / run.result).exists() else "not started"
     trained = view.exists(volume_path(run.checkpoint))
@@ -92,32 +99,48 @@ def run_state(run: Run, view: VolumeView, ledger: dict[str, LedgerRecord],
         return "blocked"
     record = ledger.get(run.key)
     if record is not None:
-        if call_state is None or record.call_id is None:
+        if live is None or record.app_id is None:
             return "launched"
-        state = call_state(record.call_id)
-        if state == "running":
+        if record.app_id in live:
             return "running"
-        if state == "failed":
-            return "failed"
     if run.spec is not None and view.listdir(volume_path(run.run_dir) + "/blocks"):
         return "partial"
     if run.kind == "eval" and not trained:
         return "blocked"
     if trained:
         return "trained"
-    return "not started" if record is None else "failed"
+    return "not started" if record is None else "stopped"
 
 
 def statuses(runs: list[Run], view: VolumeView, ledger: list[LedgerRecord],
-             call_state: Callable[[str], str] | None) -> dict[str, str]:
+             live: Container[str] | None) -> dict[str, State]:
     latest = latest_ledger(ledger)
-    return {r.key: run_state(r, view, latest, call_state) for r in runs}
+    return {r.key: run_state(r, view, latest, live) for r in runs}
+
+
+def in_flight(runs: list[Run], ledger: list[LedgerRecord],
+              live: Container[str] | None) -> set[str]:
+    """Checkpoints and eval run dirs of `runs` that a live launch under any key is writing.
+
+    Manifests share checkpoints and eval blocks across keys, so a run's own
+    ledger entry is not enough. Offline (`live=None`), every launched target
+    counts as in flight.
+    """
+    wanted = {r.checkpoint for r in runs if r.checkpoint} | {r.run_dir for r in runs if r.run_dir}
+    busy: set[str] = set()
+    for record in latest_ledger(ledger).values():
+        targets = {record.checkpoint, record.eval_run_dir} & wanted
+        if not targets or record.kind == "command":
+            continue
+        if live is None or record.app_id is None or record.app_id in live:
+            busy |= targets
+    return busy
 
 
 def load_ledger(view: VolumeView) -> list[LedgerRecord]:
     try:
         return read_ledger(view.listdir, view.read)
-    except RuntimeError:        # offline snapshot: names only, no contents
+    except RuntimeError:        # offline, and a ledger file was never read online
         return []
 
 
@@ -129,6 +152,16 @@ def _modal_run(name: str, script: str, args: list[str]) -> list[str]:
     return ["uv", "run", "modal", "run", "--detach", "-n", name, script, *args]
 
 
+@dataclass
+class Launch:
+    """What `launch` does for one run: a command, or None with the reason it is skipped."""
+
+    run: Run
+    cmd: list[str] | None
+    reason: str
+    app_name: str | None = None
+
+
 def train_command(run: Run) -> list[str]:
     args = []
     if run.config:
@@ -136,50 +169,62 @@ def train_command(run: Run) -> list[str]:
     args += ["--set", shlex.join(train_overrides(run)), "--no-wait"]
     if run.kind == "train":
         args.append("--no-evaluate")
-    return _modal_run(run.app_name, f"experiments/{run.benchmark}/run.py", args)
+    return _modal_run(run.app_name(), f"experiments/{run.benchmark}/run.py", args)
 
 
 def eval_command(run: Run) -> list[str]:
-    name = app_run_name(run.exp_id, f"{run.entry}-s{run.seed}", run.train_hash, run.eval_hash)
     args = ["--checkpoint", run.checkpoint, "--set", shlex.join(eval_overrides(run)),
             "--no-wait"]
     if run.indices_file:
         args += ["--indices-file", run.indices_file, "--split", run.split or "test"]
-    return _modal_run(name, "experiments/evaluate.py", args)
+    return _modal_run(run.app_name(with_eval=True), "experiments/evaluate.py", args)
 
 
-def command_command(run: Run) -> list[str]:
+def baseline_name(run: Run) -> str:
+    return app_run_name(run.exp_id, run.entry, "baseline")
+
+
+def baseline_command(run: Run) -> list[str]:
     # Baselines write their result locally at the end, so no --detach.
-    name = app_run_name(run.exp_id, run.entry, "baseline")
-    return ["uv", "run", "modal", "run", "-n", name, *run.command]
+    return ["uv", "run", "modal", "run", "-n", baseline_name(run), *run.command]
 
 
-def plan_launches(runs: list[Run], states: dict[str, str],
-                  retry_failed: bool = False) -> list[tuple[Run, list[str] | None, str]]:
-    """(run, command or None, reason) for every run, in manifest order.
-    Runs that share a checkpoint are trained once."""
+def plan_launches(runs: list[Run], states: dict[str, State],
+                  busy: set[str] | frozenset[str] = frozenset()) -> list[Launch]:
+    """One Launch per run, in manifest order.
+
+    Runs that share a checkpoint train once and runs that share eval blocks
+    evaluate once; `busy` (see `in_flight`) holds targets already being written.
+    """
     out = []
-    training: set[str] = set()
+    training: set[str] = set(busy)
+    evaluating: set[str] = set(busy)
     for run in runs:
         state = states[run.key]
         if state in ("done", "running", "launched", "blocked"):
-            out.append((run, None, state))
-            continue
-        if state == "failed" and not retry_failed:
-            out.append((run, None, "failed (use --retry-failed)"))
-            continue
-        if run.kind == "command":
-            out.append((run, command_command(run), "baseline eval"))
+            out.append(Launch(run, None, state))
+        elif run.kind == "command":
+            out.append(Launch(run, baseline_command(run), "baseline eval", baseline_name(run)))
         elif state in ("trained", "partial") and run.kind != "train":
-            out.append((run, eval_command(run), "evaluate existing checkpoint"))
+            if run.run_dir in evaluating:
+                out.append(Launch(run, None, "waits for a run evaluating the same blocks"))
+                continue
+            evaluating.add(run.run_dir)
+            out.append(Launch(run, eval_command(run), "evaluate existing checkpoint",
+                              run.app_name(with_eval=True)))
         elif run.kind == "eval":
-            out.append((run, None, "blocked: training not finished"))
+            out.append(Launch(run, None, "blocked: training not finished"))
         elif run.checkpoint in training:
-            out.append((run, None, "waits for a run training the same checkpoint"))
+            out.append(Launch(run, None, "waits for a run training the same checkpoint"))
+        elif run.kind != "train" and run.run_dir in evaluating:
+            out.append(Launch(run, None, "waits for a run evaluating the same blocks"))
         else:
             training.add(run.checkpoint)
-            out.append((run, train_command(run), "train" if run.kind == "train"
-                        else "train + evaluate"))
+            if run.kind != "train":
+                evaluating.add(run.run_dir)
+            out.append(Launch(run, train_command(run),
+                              "train" if run.kind == "train" else "train + evaluate",
+                              run.app_name()))
     return out
 
 
@@ -198,7 +243,8 @@ def _safe(key: str) -> str:
     return key.replace("/", "__")
 
 
-def run_record(run: Run, state: str) -> dict:
+def run_record(run: Run, state: State) -> dict:
+    """The CSV columns describing a run (identity, settings, state)."""
     rec = {
         "manifest": run.manifest, "exp_id": run.exp_id, "entry": run.entry, "key": run.key,
         "kind": run.kind, "label": run.label, "group": run.group, "x": run.x,
@@ -220,6 +266,7 @@ def run_record(run: Run, state: str) -> dict:
 
 
 def summary_fields(summary: dict) -> dict:
+    """The CSV columns taken from an eval summary."""
     lo, hi = summary["accuracy_cs"]
     calls, calls_c = summary["calls_all"], summary["calls_correct"]
     sound = summary.get("soundness") or {}
@@ -231,10 +278,13 @@ def summary_fields(summary: dict) -> dict:
         "failure_rate": summary["failure_rate"],
         "calls_mean": calls["mean"], "calls_p50": calls["p50"], "calls_p75": calls["p75"],
         "calls_p90": calls["p90"], "calls_p95": calls["p95"],
-        "calls_correct_mean": calls_c["mean"],
+        "calls_correct_mean": calls_c["mean"], "calls_per_solve": summary["calls_per_solve"],
         "unsound_rate": sound.get("unsound_rate"),
         "gpu_seconds": summary["gpu_seconds"], "startup_seconds": summary["startup_seconds"],
         "wall_seconds": summary["wall_seconds"], "n_evaluated": summary["n_evaluated"],
+        "model_calls_total": summary["model_calls_total"],
+        "mean_rounds_correct": summary["mean_rounds_correct"],
+        "mean_resets": summary["mean_resets"],
     }
 
 
@@ -253,17 +303,19 @@ def reported_rows(view: VolumeView, run: Run, n: int) -> list[dict]:
     return sorted(rows, key=lambda r: r["pos"])
 
 
-def collect(manifest: str, runs: list[Run], view: VolumeView, states: dict[str, str],
+def _display_path(path: Path) -> str:
+    return str(path.relative_to(REPO)) if path.is_relative_to(REPO) else str(path)
+
+
+def collect(manifest: str, runs: list[Run], view: VolumeView, states: dict[str, State],
             results_dir: Path = RESULTS, with_rows: bool = False) -> Path:
+    """Write paper/results/<manifest>.csv (and with `with_rows`, the reported rows)."""
     records = []
     for run in runs:
         rec = run_record(run, states[run.key])
-        if run.kind == "command":
-            if rec["status"] == "done":
-                rec["result_path"] = run.result
-        elif run.kind == "train":
-            pass
-        elif rec["status"] == "done":
+        if rec["status"] == "done" and run.kind == "command":
+            rec["result_path"] = run.result
+        elif rec["status"] == "done" and run.kind in ("eval", "train+eval"):
             summary = json.loads(view.read(volume_path(run.summary_file)))
             rec.update(summary_fields(summary))
             if with_rows:
@@ -271,11 +323,11 @@ def collect(manifest: str, runs: list[Run], view: VolumeView, states: dict[str, 
                 path.parent.mkdir(parents=True, exist_ok=True)
                 rows = reported_rows(view, run, summary["n"])
                 path.write_text("".join(json.dumps(r) + "\n" for r in rows))
-                rec["rows_path"] = str(path.relative_to(REPO)) if path.is_relative_to(REPO) \
-                    else str(path)
+                rec["rows_path"] = _display_path(path)
         if run.checkpoint and view.exists(volume_path(run.train_record)):
-            rec["train_seconds"] = json.loads(view.read(volume_path(run.train_record)))[
-                "train_seconds"]
+            train = json.loads(view.read(volume_path(run.train_record)))
+            rec["train_seconds"] = train["train_seconds"]
+            rec["train_post_compile_seconds"] = train.get("post_compile_secs")
         records.append(rec)
 
     out = results_dir / f"{manifest}.csv"
@@ -322,33 +374,39 @@ def main(argv: list[str] | None = None) -> None:
         p.add_argument("--only", help="glob over entry names or keys")
         p.add_argument("--offline", action="store_true",
                        help="use the last saved volume listing; no network")
-    sub.choices["launch"].add_argument("--dry-run", action="store_true")
-    sub.choices["launch"].add_argument("--limit", type=int, default=None)
-    sub.choices["launch"].add_argument("--retry-failed", action="store_true")
+    sub.choices["launch"].add_argument("--dry-run", action="store_true",
+                                       help="print the plan and commands; uses the saved "
+                                            "volume listing")
+    sub.choices["launch"].add_argument("--limit", type=int, default=None,
+                                       help="launch at most this many runs")
+    sub.choices["launch"].add_argument("--max-running", type=int, default=MAX_RUNNING,
+                                       help="keep at most this many ldt apps live in the "
+                                            f"environment (default {MAX_RUNNING})")
     sub.choices["collect"].add_argument("--rows", action="store_true",
                                         help="also download the reported per-puzzle rows")
     p = sub.add_parser("ledger")
-    p.add_argument("--exp")
-    p.add_argument("--offline", action="store_true")
+    p.add_argument("--exp", help="only this experiment ID")
+    p.add_argument("--offline", action="store_true", help="use the last saved volume listing")
     sub.add_parser("list")
     args = ap.parse_args(argv)
 
     if args.cmd == "list":
         print("\n".join(list_manifests()))
         return
-    offline = getattr(args, "offline", False) or getattr(args, "dry_run", False)
-    view = _view(offline)
+    offline = getattr(args, "offline", False)
+    view = _view(offline or getattr(args, "dry_run", False))
     ledger = load_ledger(view)
     if args.cmd == "ledger":
         for r in ledger:
             if args.exp and r.exp_id != args.exp:
                 continue
-            print(json.dumps(r.__dict__))
+            print(json.dumps(dataclasses.asdict(r)))
         return
 
-    _, runs = load_manifest(args.manifest)
+    runs = load_manifest(args.manifest)
     runs = _filter(runs, args.only)
-    states = statuses(runs, view, ledger, None if offline else modal_call_state)
+    live = None if offline else live_apps()
+    states = statuses(runs, view, ledger, live)
     if isinstance(view, ModalVolumeView):
         view.save_snapshot()
 
@@ -357,33 +415,43 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "collect":
         print(f"wrote {collect(args.manifest, runs, view, states, with_rows=args.rows)}")
     elif args.cmd == "launch":
-        plan = plan_launches(runs, states, args.retry_failed)
-        todo = [(r, c) for r, c, _ in plan if c is not None][:args.limit]
-        for run, cmd, reason in plan:
-            print(f"  {run.key:<40} {reason}")
+        if live is None:
+            sys.exit("launch needs the live app list to enforce --max-running; drop --offline")
+        plan = plan_launches(runs, states, in_flight(runs, ledger, live))
+        launchable = [launch for launch in plan if launch.cmd is not None]
+        n_running = running_ldt_apps(live)
+        budget = max(0, args.max_running - n_running)
+        if args.limit is not None:
+            budget = min(budget, args.limit)
+        todo = launchable[:budget]
+        for launch in plan:
+            print(f"  {launch.run.key:<40} {launch.reason}")
+        print(f"{n_running} ldt apps live (cap {args.max_running}): submitting {len(todo)} "
+              f"of {len(launchable)}")
+        if len(todo) < len(launchable):
+            print(f"  {len(launchable) - len(todo)} deferred; rerun this command to submit "
+                  "the next batch once runs finish")
         if args.dry_run:
-            for _, cmd in todo:
-                print("  $ " + shlex.join(cmd))
+            for launch in todo:
+                print("  $ " + shlex.join(launch.cmd))
             return
         sha = require_clean_sha(REPO)
-        for run, cmd in todo:
-            print(f"\n$ {shlex.join(cmd)}", flush=True)
-            result = subprocess.run(cmd, cwd=REPO)
+        for launch in todo:
+            print(f"\n$ {shlex.join(launch.cmd)}", flush=True)
+            result = subprocess.run(launch.cmd, cwd=REPO)
             if result.returncode != 0:
-                print(f"launch of {run.key} failed (exit {result.returncode})", file=sys.stderr)
-            elif run.kind == "command":
-                # Baseline scripts do not write the ledger themselves.
-                _ledger_command(run, cmd, sha)
+                print(f"launch of {launch.run.key} failed (exit {result.returncode})",
+                      file=sys.stderr)
+            elif launch.run.kind == "command":
+                _ledger_baseline(launch, sha)     # baseline scripts do not write the ledger
 
 
-def _ledger_command(run: Run, cmd: list[str], sha: str) -> None:
+def _ledger_baseline(launch: Launch, sha: str) -> None:
     import modal
 
-    from lattice_diffusion.provenance import announce, write_ledger
-    from paper.volume import VOLUME_NAME
-
+    run = launch.run
     record = LedgerRecord(kind="command", exp_id=run.exp_id, entry=run.key,
-                          app_name=cmd[cmd.index("-n") + 1], app_id=None, app_url=None,
+                          app_name=launch.app_name, app_id=None, app_url=None,
                           call_id=None, code_sha=sha, checkpoint="", train_hash="",
                           eval_run_dir=run.result)
     announce(record, write_ledger(modal.Volume.from_name(VOLUME_NAME), record))

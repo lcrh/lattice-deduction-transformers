@@ -15,6 +15,8 @@ from queue import Queue
 import numpy as np
 import torch
 
+from lattice_diffusion.eval import indices as index_lists
+
 
 @dataclass
 class SudokuExtremeConfig:
@@ -87,7 +89,8 @@ def _download_and_cache(cache_dir: str, split: str = "train") -> Path:
     return cache_path
 
 
-def load_puzzles(cache_dir: str, split: str, indices) -> tuple[torch.Tensor, torch.Tensor]:
+def load_puzzles(cache_dir: str, split: str,
+                 indices: np.ndarray | list[int]) -> tuple[torch.Tensor, torch.Tensor]:
     """(x, y) uint8 [len(indices), 81, 9] for absolute indices into a split.
 
     Memory-maps the cache so pulling a few puzzles out of the 3.8M-puzzle
@@ -206,14 +209,14 @@ def _augment(
 
 
 def select_pool(n_total: int, cfg: SudokuExtremeConfig) -> tuple[np.ndarray, np.random.Generator]:
-    """Absolute dataset indices a dataset with `cfg` draws from (validation
-    holdout, then the seeded `n_puzzles` subset), and the generator it then
-    continues with. Also used by baselines that must train on the same
-    puzzles as LDT."""
+    """Absolute indices a dataset with `cfg` trains on, and the RNG it continues with.
+
+    Applies the validation holdout, then the seeded `n_puzzles` subset.
+    Baselines use it to train on the same puzzles as LDT.
+    """
     pool = np.arange(n_total)
     if cfg.split == "train" and cfg.exclude_val:
-        from lattice_diffusion.eval.indices import load as load_index_list
-        val = load_index_list("sudoku_val", split_size=n_total).indices
+        val = index_lists.load("sudoku_val", split_size=n_total).indices
         pool = np.setdiff1d(pool, val, assume_unique=True)
     rng = np.random.default_rng(cfg.seed)
     if cfg.n_puzzles is not None and cfg.n_puzzles < len(pool):
@@ -239,12 +242,11 @@ class SudokuExtremeDataset:
         self.answers = data["y"].numpy()    # [N, 81, 9] uint8
         n_total = self.questions.shape[0]
 
-        # Absolute dataset indices of the pool, after holdout and subsetting.
         pool, self.rng = select_pool(n_total, cfg)
         if len(pool) < n_total:
             self.questions = self.questions[pool]
             self.answers = self.answers[pool]
-        self.pool_indices = pool
+        self.pool_indices = pool        # absolute dataset indices, after holdout and subsetting
 
         self.n_puzzles = self.questions.shape[0]
 

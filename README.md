@@ -14,7 +14,7 @@ self-contained subdirectories under `experiments/`:
 | Snowflake Sudoku | `experiments/snowflake/` | Table 2 |
 | Maze-Hard (30×30) | `experiments/maze/` | Table 3 + Figure 3 (K-sweep) |
 
-The shared package `lattice_diffusion/` holds the looped-transformer model,
+The shared package `src/lattice_diffusion/` holds the looped-transformer model,
 the dataset loaders, and the Modal image / checkpoint utilities used by all
 three.
 
@@ -62,10 +62,10 @@ uv run modal run --detach experiments/<benchmark>/run.py \
 `--detach` lets the run survive your laptop sleeping. The run trains a
 checkpoint, then evaluates it with the shared evaluator
 (`src/lattice_diffusion/eval/`). The checkpoint path is derived from the
-training config (`/checkpoints/<benchmark>/<name>-<hash>-seed<seed>.pt` on
+training settings (`/checkpoints/<benchmark>/<train hash>-seed<seed>.pt` on
 the `lattice-diffusion-checkpoints` volume), so relaunching a finished
-config skips training and only (re)evaluates; the resolved config is stored
-in the checkpoint.
+config, or any config that trains the same way, skips training and only
+(re)evaluates; the resolved config is stored in the checkpoint.
 
 **Evaluation.** The evaluator walks a fixed index list in blocks across
 B200 workers (`eval.workers`, at most `eval.max_in_flight` blocks ahead of
@@ -78,8 +78,9 @@ the finished prefix). Results go to
   the error rate is pinned down (100 failures, or a 95% confidence-sequence
   half-width of 0.1 points, after at least 1,000 puzzles);
 - `full`: every puzzle in the list;
-- `ablation`: exactly the first 1,000 puzzles, so ablation arms are scored
-  on the same puzzles.
+- `ablation`: the same rule, capped at 4,096 puzzles (8 blocks), so ablation
+  arms are compared on a common prefix; `ablation_10k` extends a finished
+  entry to 10,240 from the blocks already on disk.
 
 Blocks do not depend on the stop rule, so a `full` eval after a
 `sequential` one reuses its blocks, and rerunning an eval resumes it. To
@@ -108,13 +109,14 @@ uv run python -m paper.launch launch table1_sudoku --dry-run
 uv run python -m paper.launch launch table1_sudoku         # submits only what is missing
 uv run python -m paper.launch collect table1_sudoku --rows # -> paper/results/table1_sudoku.csv
 uv run python -m paper.tables.table1_sudoku --copy-to ../latticeDiffusion/figs
-uv run python -m paper.launch ledger --exp T1              # launch history
+uv run python -m paper.launch ledger --exp M1              # launch history
 ```
 
 Status is read off the checkpoint volume (a run is done when its summary
-exists); `--offline` uses the last saved listing. `launch` refuses a dirty
+exists), with one recursive listing per command; `--offline` uses the last
+saved listing and the locally cached ledger files. `launch` refuses a dirty
 working tree. Each run is submitted as `modal run --detach -n
-ldt-<exp_id>-<entry>-<trainhash8>[-<evalhash8>]`; the entry points record
+ldt-<exp_id>-<entry>-s<seed>-<trainhash8>[-<evalhash8>]`; the entry points record
 the code's git SHA in the checkpoint and eval spec (outside every hash),
 print a greppable `[ldt-train]` / `[ldt-eval]` header, and append a record
 with the Modal app and call IDs to `ledger/` on the volume. Tables and
@@ -169,32 +171,26 @@ Eval-only ablations of an existing checkpoint go through
 
 The Snowflake puzzles are generated with CVC5 via
 [snowflakesudoku](https://github.com/lcrh/snowflakesudoku) (an MIT-licensed
-fork of [santolucito/snowflakesudoku](https://github.com/santolucito/snowflakesudoku)
-that adds varied layouts; pinned commit, cloned at Modal-image build time).
-The paper uses the varied-topology dataset: every base puzzle gets its own
-randomly grown connected layout, orders 4–10. Table 2 trains and evaluates on
-orders 4–8; the order-transfer configs hold out larger orders.
+fork of [santolucito/snowflakesudoku](https://github.com/santolucito/snowflakesudoku);
+pinned commit, cloned at Modal-image build time). Every base puzzle gets its
+own randomly grown connected layout, orders 4–10. Table 2 trains and evaluates
+on orders 4–8; the order-transfer configs hold out larger orders.
 
 ```bash
 # One-time: generate the dataset (CVC5, ~100 CPU workers, parallel). Writes
-# snowflake_varied_{train,val,test}.parquet and prints index-list values to pin.
+# snowflake_{train,val,test}.parquet and prints index-list values to pin.
 uv run modal run --detach experiments/snowflake/gen_data.py
 
 # Table 2: train on orders 4-8, evaluate on the order 4-8 test puzzles
 uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/paper.yaml
 
-# Order transfer: train on 4-6, evaluate on 7-10 (and 6-8 -> 9-10, and 4-6
-# with 12/25/50 of the 500 training puzzles drawn from orders 7-10)
+# Order transfer: train on 4-6, evaluate on 7-10; train on 6-8, evaluate on 9-10
 uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/ood_4to6_eval7to10.yaml
 uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/ood_6to8_eval9to10.yaml
-uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/ood_4to6_mixin25.yaml
 ```
 
 Eval rows record each puzzle's order, so per-order accuracy comes from the
-rows. The submitted paper's canonical-topology dataset (one concentric layout
-per order, orders 4–8) is still available with
-`gen_data.py --topology canonical --n-max 8` and `--set "data.dataset=canonical
-data.translate_aug=false eval.index_list=snowflake_test"`.
+rows.
 
 ### Maze-Hard (Table 3, K=1 and K=512)
 
@@ -232,9 +228,7 @@ Each K is averaged over 4 seeds; evaluation is on a seed-200 pool of 1,000
 fresh 15×15 mazes.
 
 ```bash
-# Repeat for K in {1, 8, 32, 64, 128, 256, 512} and seeds in {0, 1, 2, 3}
-uv run modal run --detach experiments/maze/run.py --config configs/maze/ksweep.yaml \
-    --set "data.k_solutions=<K> train.seed=<S>"
+uv run python -m paper.launch launch fig3_maze_ksweep   # K in {1, 8, ..., 512} x 4 seeds
 ```
 
 ---
@@ -265,10 +259,10 @@ experiments/
   <benchmark>/eval_task.py  adapter for the shared evaluator
 baselines/            HRM/TRM reproduction and evals, fine-tuned Qwen baseline
                       (see baselines/README.md)
-paper/               Manifests (runs per table/figure), launcher, tables,
+paper/                Manifests (runs per table/figure), launcher, tables,
                       figures, portfolio and compute analysis
 tools/                inspect_wrong.py: print puzzles a run got wrong
 tests/                CPU tests, including bit-exact equivalence fixtures
 ```
 
-All hyperparameters are in `configs/` and in Appendix C of the paper.
+All hyperparameters are in `configs/` and in the paper's appendix.

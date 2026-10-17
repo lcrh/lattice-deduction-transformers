@@ -3,7 +3,9 @@ import json
 
 import pytest
 
-from lattice_diffusion.eval.records import check_or_write_spec, read_blocks, summary_path
+from lattice_diffusion.eval.records import (
+    check_or_write_spec, format_summary, read_blocks, summary_path,
+)
 from lattice_diffusion.eval.runner import run_eval
 from lattice_diffusion.eval.scheduler import ThreadExecutor
 from lattice_diffusion.eval.stop import NoStop
@@ -65,3 +67,56 @@ def test_run_eval_writes_summary_and_resumes(tmp_path):
     assert result.n == len(spec.explicit_indices) and result.stop_reason == "exhausted"
     assert summary_path(run_dir, full.stop).exists()
 
+
+
+def test_block_stats_are_saved_per_block_and_summed(tmp_path):
+    spec = make_spec(n_workers=4)
+    summary = run_eval(spec, tmp_path, _threads(spec), log=lambda _: None,
+                       block_meta=lambda block: {"model_calls": 10, "seconds": 2.0,
+                                                  "startup_seconds": 1.0})
+    blocks = read_blocks(spec.run_dir(tmp_path))
+    n_blocks = len(blocks)
+    assert summary.model_calls_total == 10 * n_blocks
+    assert summary.gpu_seconds == 2.0 * n_blocks
+    assert summary.startup_seconds == 1.0 * n_blocks
+    # Calls per solve covers only the blocks the reported prefix touches.
+    reported = range(summary.n // spec.block_size + (summary.n % spec.block_size > 0))
+    correct = sum(r["status"] == "correct" for b in reported for r in blocks[b])
+    assert summary.calls_per_solve == pytest.approx(10 * len(reported) / correct)
+    assert summary.mean_resets == 0 and summary.mean_rounds_correct == 1
+    assert "model calls=" in format_summary(summary)
+
+
+def test_inverse_binomial_rate_only_for_runs_stopped_on_failures(tmp_path):
+    spec = make_spec()
+    seq = run_eval(spec, tmp_path, _threads(spec), log=lambda _: None)
+    assert seq.stop_reason == "failures"
+    failures = seq.wrong + seq.timeout
+    assert seq.failure_rate_inverse_binomial == pytest.approx((failures - 1) / (seq.n - 1))
+    full = run_eval(dataclasses.replace(spec, stop=NoStop().to_dict()), tmp_path, _threads(spec),
+                    log=lambda _: None)
+    assert full.failure_rate_inverse_binomial == full.failure_rate
+
+
+
+def test_raising_the_cap_continues_from_existing_blocks(tmp_path):
+    from lattice_diffusion.eval.stop import SequentialStop
+
+    small = make_spec(stop=SequentialStop(n_max=1024, max_failures=10**6), n_workers=4)
+    first = run_eval(small, tmp_path, _threads(small), log=lambda _: None)
+    big = dataclasses.replace(small, stop=SequentialStop(n_max=2048, max_failures=10**6).to_dict())
+    assert big.run_dir(tmp_path) == small.run_dir(tmp_path)
+
+    submitted = []
+
+    class Recording(ThreadExecutor):
+        def submit(self, block):
+            submitted.append(block)
+            super().submit(block)
+
+    second = run_eval(big, tmp_path, lambda _: Recording(block_solver(big), n_workers=4),
+                      log=lambda _: None)
+    assert (first.n, second.n) == (1024, 2048)
+    assert min(submitted) == 1024 // small.block_size     # only the new blocks ran
+    assert summary_path(small.run_dir(tmp_path), small.stop).exists()
+    assert summary_path(big.run_dir(tmp_path), big.stop).exists()

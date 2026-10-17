@@ -1,6 +1,7 @@
 """Manifest resolution, status, launch planning, collect, naming and ledger."""
 
 import csv
+import dataclasses
 import json
 import subprocess
 import textwrap
@@ -11,15 +12,16 @@ from lattice_diffusion import config as cfglib
 from lattice_diffusion.provenance import (
     LedgerRecord, app_run_name, entry_key, read_ledger, require_clean_sha,
 )
-from paper import launch as L
+import paper.manifest as manifest
+from paper import launch
 from paper.manifest import eval_overrides, load_manifest, volume_path
-from paper.volume import FakeVolumeView
+from tests.paper.fakes import FakeVolumeView
 
 from experiments.registry import experiment_class
 
 
 def _runs(name):
-    return load_manifest(name)[1]
+    return load_manifest(name)
 
 
 def _by_key(runs):
@@ -99,8 +101,7 @@ def test_entries_need_an_exp_id(tmp_path):
 
 
 def test_eval_overrides_reproduce_the_local_spec():
-    """evaluate.py merges the tokens into whatever config the checkpoint was
-    trained under; the resulting spec must equal the locally resolved one."""
+    """The remote spec built from the tokens equals the locally resolved one."""
     runs = _by_key(_runs("appendix_d_soundness"))
     arm = runs["A7/sym_matched/seed1"]
     # Pretend the checkpoint was trained under a different eval block.
@@ -132,24 +133,23 @@ def test_every_run_name_is_unique_within_a_manifest():
     for name in ("appendix_g_search", "portfolio", "fig3_maze_ksweep"):
         runs = _runs(name)
         assert len({r.key for r in runs}) == len(runs)
-        named = [L.eval_command(r)[6] if r.kind == "eval" else r.app_name
-                 for r in runs if r.kind != "eval" or r.spec is not None]
+        named = [r.app_name() for r in runs if r.kind != "eval" or r.spec is not None]
         assert len(set(named)) == len(named)
 
 
-def _record(entry, ts, call="fc-1", kind="train+eval"):
+def _ledger_record(entry, ts, call="fc-1", kind="train+eval", app="ap-1"):
     return LedgerRecord(kind=kind, exp_id=entry.split("/")[0], entry=entry, app_name="n",
-                        app_id="ap-1", app_url="u", call_id=call, code_sha="sha",
+                        app_id=app, app_url="u", call_id=call, code_sha="sha",
                         checkpoint="/checkpoints/x.pt", train_hash="h", ts=ts)
 
 
 def test_ledger_reads_back_in_time_order():
-    recs = [_record("A1/a/seed0", 3.0), _record("A1/a/seed0", 1.0, call="fc-0")]
-    view = FakeVolumeView({f"ledger/{i}.json": json.dumps(r.__dict__)
+    recs = [_ledger_record("A1/a/seed0", 3.0), _ledger_record("A1/a/seed0", 1.0, call="fc-0")]
+    view = FakeVolumeView({f"ledger/{i}.json": json.dumps(dataclasses.asdict(r))
                            for i, r in enumerate(recs)})
-    got = L.load_ledger(view)
+    got = launch.load_ledger(view)
     assert [r.ts for r in got] == [1.0, 3.0]
-    assert L.latest_ledger(got)["A1/a/seed0"].call_id == "fc-1"
+    assert launch.latest_ledger(got)["A1/a/seed0"].call_id == "fc-1"
     assert read_ledger(lambda d: [], lambda p: b"") == []
 
 
@@ -178,15 +178,17 @@ def _summary(n, correct, wrong=0, timeout=None):
         "n": n, "stop_reason": "fixed_n", "correct": correct, "wrong": wrong,
         "timeout": timeout, "accuracy": correct / n, "accuracy_cs": [0.9, 1.0],
         "wrong_rate_upper": 0.003, "failure_rate": (n - correct) / n,
-        "calls_all": calls, "calls_correct": calls, "soundness": {"unsound_rate": 0.01},
+        "calls_all": calls, "calls_correct": calls, "calls_per_solve": 7.0,
+        "soundness": {"unsound_rate": 0.01},
         "gpu_seconds": 10.0, "startup_seconds": 5.0, "wall_seconds": 20.0, "n_evaluated": n,
+        "model_calls_total": 100, "mean_rounds_correct": 3.0, "mean_resets": 0.5,
     })
 
 
-def test_status_states():
+def test_status_of_each_run_state():
     runs = _by_key(_runs("appendix_d_soundness"))
     done_run, trained_run = runs["A0/default/seed0"], runs["A7/sym/seed0"]
-    running, failed = runs["A7/ratio2/seed0"], runs["A7/ratio32/seed0"]
+    running, stopped = runs["A7/ratio2/seed0"], runs["A7/ratio32/seed0"]
     partial = runs["A7/nocls/seed0"]
     files = {
         volume_path(done_run.checkpoint): b"",
@@ -195,25 +197,26 @@ def test_status_states():
         volume_path(partial.checkpoint): b"",
         volume_path(partial.run_dir) + "/blocks/000000.jsonl": b"{}\n",
     }
-    ledger = [_record(running.key, 1.0, call="fc-run"), _record(failed.key, 1.0, call="fc-bad")]
-    states = L.statuses(list(runs.values()), FakeVolumeView(files), ledger,
-                        {"fc-run": "running", "fc-bad": "failed"}.get)
+    ledger = [_ledger_record(running.key, 1.0, app="ap-live"),
+              _ledger_record(stopped.key, 1.0, app="ap-gone"),
+              _ledger_record(partial.key, 1.0, app="ap-gone")]
+    states = launch.statuses(list(runs.values()), FakeVolumeView(files), ledger, {"ap-live"})
     assert states[done_run.key] == "done"
     assert states[trained_run.key] == "trained"
     assert states[running.key] == "running"
-    assert states[failed.key] == "failed"
-    assert states[partial.key] == "partial"
+    assert states[stopped.key] == "stopped"         # app ended without a result
+    assert states[partial.key] == "partial"         # app ended; finished blocks are kept
     assert states["A7/sym_matched/seed0"] == "trained"      # its checkpoint exists
     assert states["A7/ratio2_matched/seed0"] == "blocked"   # training still running
     assert states["A0/default/seed1"] == "not started"
-    offline = L.statuses(list(runs.values()), FakeVolumeView(files), ledger, None)
+    offline = launch.statuses(list(runs.values()), FakeVolumeView(files), ledger, None)
     assert offline[running.key] == "launched"
 
 
-def test_plan_launches():
+def test_plan_trains_missing_runs_and_evaluates_existing_checkpoints():
     runs = _runs("portfolio")
     states = {r.key: "not started" for r in runs}
-    plan = {r.key: (cmd, why) for r, cmd, why in L.plan_launches(runs, states)}
+    plan = {p.run.key: (p.cmd, p.reason) for p in launch.plan_launches(runs, states)}
     cmd, _ = plan["X1/anchor/seed0"]
     assert cmd[:6] == ["uv", "run", "modal", "run", "--detach", "-n"]
     assert "experiments/sudoku/run.py" in cmd and "--no-wait" in cmd
@@ -223,20 +226,19 @@ def test_plan_launches():
     # A checkpoint that exists is only evaluated.
     t1 = _runs("table1_sudoku")
     states = {r.key: "trained" for r in t1}
-    cmd, why = {r.key: (c, w) for r, c, w in L.plan_launches(t1, states)}["M1/steps4k/seed0"]
+    planned = {p.run.key: p for p in launch.plan_launches(t1, states)}["M1/steps4k/seed0"]
+    cmd, why = planned.cmd, planned.reason
     assert "experiments/evaluate.py" in cmd and why == "evaluate existing checkpoint"
-    assert cmd[cmd.index("--checkpoint") + 1].startswith("/checkpoints/sudoku/paper-")
+    assert cmd[cmd.index("--checkpoint") + 1].startswith("/checkpoints/sudoku/")
 
 
 def test_rerun_entries_resolve_once_the_failure_set_exists(monkeypatch):
-    import paper.manifest as manifest
-
     monkeypatch.setattr(manifest, "_read_indices", lambda path: [5, 17])
     runs = _by_key(_runs("portfolio"))
     rerun = runs["X1/rerun_models/seed5/eval2"]
     assert rerun.spec.explicit_indices == [5, 17] and rerun.spec.eval_seed == 2
     assert rerun.checkpoint == runs["X1/models/seed5"].checkpoint
-    cmd = L.eval_command(rerun)
+    cmd = launch.eval_command(rerun)
     assert cmd[cmd.index("--indices-file") + 1] == "paper/results/portfolio_failures.txt"
 
 
@@ -255,9 +257,9 @@ def test_collect_writes_csv_and_reported_rows(tmp_path, monkeypatch):
             "".join(json.dumps(r) + "\n" for r in rows),
     }
     view = FakeVolumeView(files)
-    monkeypatch.setattr(L, "REPO", tmp_path)
-    states = L.statuses(runs, view, [], None)
-    out = L.collect("appendix_b_supervision", runs, view, states, tmp_path, with_rows=True)
+    monkeypatch.setattr(launch, "REPO", tmp_path)
+    states = launch.statuses(runs, view, [], None)
+    out = launch.collect("appendix_b_supervision", runs, view, states, tmp_path, with_rows=True)
     with out.open() as fh:
         recs = {r["key"]: r for r in csv.DictReader(fh)}
     rec = recs[run.key]
@@ -267,3 +269,65 @@ def test_collect_writes_csv_and_reported_rows(tmp_path, monkeypatch):
     got = [json.loads(line)
            for line in (tmp_path / rec["rows_path"]).read_text().splitlines()]
     assert [r["pos"] for r in got] == [0, 1, 2, 3]
+
+
+def test_plan_waits_for_shared_targets_in_flight_under_another_key():
+    t1 = _by_key(_runs("table1_sudoku"))
+    a0 = _by_key(_runs("appendix_d_soundness"))
+    m1, default = t1["M1/steps2k/seed0"], a0["A0/default/seed0"]
+    assert m1.checkpoint == default.checkpoint          # same training settings, one checkpoint
+    record = dataclasses.replace(_ledger_record(m1.key, 1.0, call="fc-m1"),
+                                 checkpoint=m1.checkpoint)
+    runs = list(a0.values())
+    busy = launch.in_flight(runs, [record], {"ap-1"})
+    assert busy == {default.checkpoint}
+    states = {r.key: "not started" for r in runs}
+    plan = {p.run.key: p for p in launch.plan_launches(runs, states, busy=busy)}
+    assert plan[default.key].cmd is None and "same checkpoint" in plan[default.key].reason
+    assert not launch.in_flight(runs, [record], set())
+    # Two runs of one plan that share eval blocks evaluate them once.
+    trained = {r.key: "trained" for r in runs}
+    twice = [default, dataclasses.replace(default, key="A0/default_copy/seed0")]
+    plan = launch.plan_launches(twice, {**trained, "A0/default_copy/seed0": "trained"})
+    assert plan[0].cmd is not None and plan[1].cmd is None
+
+
+def test_stopped_runs_are_relaunched():
+    runs = _runs("appendix_b_supervision")
+    states = {r.key: "stopped" for r in runs}
+    plan = launch.plan_launches(runs, states)
+    assert all(p.cmd is not None for p in plan if p.run.kind != "eval")
+
+
+def _live(n_ldt, n_other=0):
+    live = {f"ap-l{i}": f"ldt-x-{i}" for i in range(n_ldt)}
+    live.update({f"ap-o{i}": f"other-{i}" for i in range(n_other)})
+    return live
+
+
+def test_launch_submits_up_to_the_running_cap(monkeypatch, capsys):
+    submitted = []
+    monkeypatch.setattr(launch, "_view", lambda offline: FakeVolumeView({}))
+    monkeypatch.setattr(launch, "live_apps", lambda: _live(5, n_other=3))
+    monkeypatch.setattr(launch, "require_clean_sha", lambda repo: "sha")
+    monkeypatch.setattr(launch.subprocess, "run",
+                        lambda cmd, cwd=None: submitted.append(cmd) or
+                        subprocess.CompletedProcess(cmd, 0))
+    launch.main(["launch", "appendix_b_supervision", "--max-running", "8"])
+    assert len(submitted) == 3                      # 8 - 5 live ldt apps; other apps ignored
+    out = capsys.readouterr().out
+    assert "submitting 3 of" in out and "deferred" in out
+    submitted.clear()
+    monkeypatch.setattr(launch, "live_apps", lambda: _live(9))
+    launch.main(["launch", "appendix_b_supervision"])
+    assert submitted == []                          # over the default cap: nothing new
+
+
+def test_live_apps_ignores_stopped(monkeypatch):
+    listing = [{"App ID": "ap-a", "Description": "ldt-a", "State": "ephemeral (detached)"},
+               {"App ID": "ap-b", "Description": "ldt-b", "State": "stopping..."},
+               {"App ID": "ap-c", "Description": "ldt-c", "State": "stopped"}]
+    monkeypatch.setattr(launch.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(listing)))
+    live = launch.live_apps()
+    assert set(live) == {"ap-a", "ap-b"} and launch.running_ldt_apps(live) == 2

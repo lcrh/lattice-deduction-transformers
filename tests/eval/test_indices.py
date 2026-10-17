@@ -34,7 +34,7 @@ def small_train_cache(tmp_path, monkeypatch):
     torch.save({"x": x, "y": x.clone(), "n": n}, tmp_path / "sudoku_extreme_train.pt")
     spec = index_lists.IndexListSpec(task="sudoku", split="train", split_size=n, seed=1,
                                      length=50, sha256="")
-    spec = dataclasses.replace(spec, sha256=index_lists._digest(index_lists.generate(spec)))
+    spec = dataclasses.replace(spec, sha256=index_lists.digest(index_lists.generate(spec)))
     monkeypatch.setitem(index_lists.SPECS, "sudoku_val", spec)
     return tmp_path, set(index_lists.generate(spec).tolist())
 

@@ -1,0 +1,23 @@
+{
+  "n": 10000,
+  "correct": 5541,
+  "wrong": 4459,
+  "exact_accuracy": 0.5541,
+  "model": "HRM",
+  "checkpoint": "hf://sapientinc/HRM-checkpoint-sudoku-extreme/checkpoint",
+  "hrm_commit": "ac15626f8db096a63c775b84c9dc868776a6feda",
+  "gpu": "B200",
+  "n_gpus": 1,
+  "global_batch_size": 768,
+  "index_aligned_with_ldt_cache": true,
+  "index_list": "sudoku_test_perm",
+  "eval_seconds": 141.6709861755371,
+  "gpu_seconds": 141.6709861755371,
+  "n_chunks": 10,
+  "exact_accuracy_ci": [
+    0.5442931371504792,
+    0.5638753382604726
+  ],
+  "ci_alpha": 0.05,
+  "ci_method": "clopper-pearson"
+}

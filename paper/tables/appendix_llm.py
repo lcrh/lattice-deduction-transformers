@@ -1,5 +1,4 @@
-"""Appendix I: fine-tuned Qwen3.5-0.8B, pass@k at each run's final evaluated
-epoch, from the result files of the appendix_i_llm manifest.
+"""Appendix I: fine-tuned Qwen3.5-0.8B, pass@k at each run's final evaluated epoch.
 
     uv run python -m paper.tables.appendix_llm [--copy-to DIR]
 """

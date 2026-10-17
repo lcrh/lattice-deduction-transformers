@@ -1,25 +1,32 @@
-"""Helpers shared by the benchmark adapters for lattice_diffusion.eval
-(experiments/<b>/eval_task.py)."""
+"""Helpers shared by the benchmark adapters (experiments/<benchmark>/eval_task.py)."""
 
 from __future__ import annotations
 
+import numpy as np
 import torch
 from torch import nn
 
+from lattice_diffusion import config as cfglib
+from lattice_diffusion.eval.tasks import TaskBlock
 from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig, PowersetModel
 from lattice_diffusion.training.utils.checkpoint import load_checkpoint
 
-from experiments.sudoku.dpll import StepConfig
 from experiments.sudoku.ema import swap_in_ema_if_present
-from experiments.sudoku.solve import SolveConfig
+from experiments.sudoku.solve import SolveConfig, SolveResult
+
+
+def eval_device() -> torch.device:
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def unwrap(model: nn.Module) -> nn.Module:
+    """The module inside a torch.compile wrapper."""
+    return getattr(model, "_orig_mod", model)
 
 
 def build_solve_config(solve_dict: dict) -> SolveConfig:
-    """SolveConfig from an EvalSpec's solve dict (task-specific keys removed
-    by the caller; `dropout_p` belongs to model loading)."""
-    d = dict(solve_dict)
-    d.pop("dropout_p", None)
-    return SolveConfig(step=StepConfig(**d.pop("step")), **d)
+    """SolveConfig from an EvalSpec's solve dict; `dropout_p` belongs to model loading."""
+    return cfglib.from_dict(SolveConfig, {k: v for k, v in solve_dict.items() if k != "dropout_p"})
 
 
 def load_eval_model(checkpoint: str, dropout_p: float, device: torch.device,
@@ -29,7 +36,9 @@ def load_eval_model(checkpoint: str, dropout_p: float, device: torch.device,
     EMA weights are swapped in when present. With dropout_p > 0 every
     nn.Dropout and MHA attention dropout is set to dropout_p and the model
     is left in train() mode: dropout acts as test-time noise for the search.
+    Float32 matmuls use TF32, as in training.
     """
+    torch.set_float32_matmul_precision("high")
     ckpt = load_checkpoint(checkpoint)
     model = PowersetModel(LoopedTransformerConfig(**ckpt["model_cfg"]))
     model.load_state_dict(ckpt["model_state_dict"])
@@ -47,35 +56,48 @@ def load_eval_model(checkpoint: str, dropout_p: float, device: torch.device,
     return model
 
 
-def result_rows(res, indices, cfg: SolveConfig, solutions: list[str],
-                verified: list[bool | None], extra: list[dict] | None = None) -> list[dict]:
-    """One eval row per puzzle (schema in lattice_diffusion/eval/records.py)."""
+def result_rows(res: SolveResult, indices: np.ndarray, cfg: SolveConfig, solutions: list[str],
+                verified: list[bool], given_mask: torch.Tensor,
+                extra: list[dict] | None = None) -> TaskBlock:
+    """One eval row per puzzle (see lattice_diffusion.eval.scheduler.Row)."""
     correct, wrong = res.correct.tolist(), res.wrong.tolist()
     rounds, calls = res.round_solved.tolist(), res.puzzle_calls.tolist()
+    # Forwards count deduction passes: rounds times the puzzle's mean passes per round.
+    multi_pass = cfg.step.max_passes > 1
+    held = res.puzzle_rounds.tolist() if multi_pass else None
     resets = res.n_resets.tolist()
-    forwards_seq = res.forwards_seq.tolist() if cfg.estimate_sequential else None
+    n_givens = given_mask.sum(dim=-1).tolist()
     diag = res.puzzle_diag.tolist()
     pass_diag = res.puzzle_pass_diag.tolist() if res.puzzle_pass_diag is not None else None
+    seq = None
+    if cfg.estimate_sequential:
+        seq = list(zip(res.forwards_seq.tolist(), res.seq_winning_idx.tolist(),
+                       res.seq_attempts_done.tolist()))
     rows = []
     for j, dataset_idx in enumerate(indices.tolist()):
         status = "correct" if correct[j] else ("wrong" if wrong[j] else "timeout")
-        rows.append({
+        passes = calls[j] / held[j] if multi_pass and held[j] > 0 else 1
+        row = {
             "idx": dataset_idx,
             "status": status,
             "rounds": rounds[j],
             "calls": calls[j],
-            "forwards": ((rounds[j] + 1) if correct[j] else cfg.max_rounds) * cfg.n_chains,
+            "forwards": round(((rounds[j] + 1) if correct[j] else cfg.max_rounds)
+                              * cfg.n_chains * passes),
             "n_resets": resets[j],
-            **({"forwards_seq": forwards_seq[j]} if forwards_seq is not None else {}),
+            "n_givens": int(n_givens[j]),
             "solution": solutions[j] if status != "timeout" else "",
             "verified": verified[j] if status != "timeout" else False,
-            # Soundness diagnostics over the puzzle's chain-rounds: candidates
-            # eliminated, of those the solution's own (unsound), and the
-            # conflict head's [tp, fp, fn, tn] against true conflicts.
             "deduced": diag[j][0],
             "unsound": diag[j][1],
             "cls": diag[j][2:],
-            **({"pass_deduced_unsound": pass_diag[j]} if pass_diag is not None else {}),
-            **(extra[j] if extra else {}),
-        })
-    return rows
+        }
+        if seq is not None:
+            fwd, win, done = seq[j]
+            fwd = round(fwd * passes)
+            row.update(forwards_seq=fwd, seq_winning_idx=win, seq_attempts_done=done,
+                       seq_avg_attempt_len=fwd / (win + 1) if win >= 0 else None)
+        if pass_diag is not None:
+            row["pass_deduced_unsound"] = pass_diag[j]
+        rows.append(row | (extra[j] if extra else {}))
+    return TaskBlock(rows, res.model_calls)

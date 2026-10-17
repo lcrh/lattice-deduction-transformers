@@ -12,11 +12,19 @@ from __future__ import annotations
 
 import importlib
 from abc import ABC, abstractmethod
+from typing import NamedTuple
 
 import numpy as np
 from torch import nn
 
 from lattice_diffusion.eval.scheduler import Row
+
+
+class TaskBlock(NamedTuple):
+    """Rows of one solved block and the batched forward passes it took."""
+
+    rows: list[Row]
+    model_calls: int
 
 
 class EvalTask(ABC):
@@ -37,18 +45,14 @@ class EvalTask(ABC):
         """Entries of `indices`, in order, that match `index_filter`."""
         raise NotImplementedError(f"{type(self).__name__} does not support index filters")
 
-    @abstractmethod
-    def warmup(self, model: nn.Module) -> None:
-        """Run a tiny solve so torch.compile happens before timed blocks."""
+    def warmup(self, model: nn.Module, split: str, indices: np.ndarray, solve: dict) -> None:
+        """Solve a few of a block's puzzles so torch.compile happens before timed blocks."""
+        self.solve_block(model, split, indices[:8], solve)
 
     @abstractmethod
     def solve_block(self, model: nn.Module, split: str, indices: np.ndarray,
-                    solve: dict) -> list[Row]:
-        """Rows for `indices`, in order.
-
-        Rows have every field in records.py except `pos` and `block`, which the
-        caller adds.
-        """
+                    solve: dict) -> TaskBlock:
+        """Rows for `indices` in order (the caller adds `pos` and `block`)."""
 
 
 TASKS: dict[str, str] = {

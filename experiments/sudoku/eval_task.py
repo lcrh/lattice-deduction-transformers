@@ -1,8 +1,7 @@
-"""Sudoku-Extreme adapter for the shared evaluator (lattice_diffusion.eval).
+"""Sudoku-Extreme adapter for the shared evaluator.
 
-Every Sudoku-Extreme puzzle is satisfiable and evaluation is zero-hint with
-no data augmentation, so an eval sample is exactly the cached (x, y) pair;
-we index the cache directly instead of going through the training sampler.
+Evaluation is zero-hint with no data augmentation, so a puzzle is exactly its
+cached (x, y) pair; indices are rows of the cached split.
 """
 
 from __future__ import annotations
@@ -11,9 +10,9 @@ import numpy as np
 import torch
 
 from lattice_diffusion.data.sudoku_extreme import _download_and_cache
-from lattice_diffusion.eval.tasks import EvalTask
+from lattice_diffusion.eval.tasks import EvalTask, TaskBlock
 
-from experiments.eval_common import build_solve_config, load_eval_model, result_rows
+from experiments.eval_common import build_solve_config, eval_device, load_eval_model, result_rows
 from experiments.sudoku.solve import solve
 
 
@@ -55,7 +54,7 @@ class SudokuTask(EvalTask):
     def __init__(self, data_dir: str) -> None:
         super().__init__(data_dir)
         self._pools: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = eval_device()
 
     def _pool(self, split: str) -> tuple[torch.Tensor, torch.Tensor]:
         # Memory-mapped: the train split (for sudoku_val) is 2.8 GB.
@@ -71,11 +70,11 @@ class SudokuTask(EvalTask):
     def load_model(self, checkpoint: str, dropout_p: float, compile: bool):
         return load_eval_model(checkpoint, dropout_p, self.device, compile)
 
-    def warmup(self, model) -> None:
+    def default_solve(self) -> dict:
         from experiments.sudoku.config import SudokuExperiment
-        self.solve_block(model, "test", np.arange(8), SudokuExperiment().solve_dict())
+        return SudokuExperiment().solve_dict()
 
-    def solve_block(self, model, split: str, indices: np.ndarray, solve_dict: dict) -> list[dict]:
+    def solve_block(self, model, split: str, indices: np.ndarray, solve_dict: dict) -> TaskBlock:
         x_all, y_all = self._pool(split)
         idx = torch.as_tensor(indices, dtype=torch.long)
         x = x_all.index_select(0, idx).to(self.device).float()
@@ -83,9 +82,9 @@ class SudokuTask(EvalTask):
         given_mask = x.sum(dim=-1) == 1
         cfg = build_solve_config(solve_dict)
         with torch.no_grad():
-            res = solve(model, x, y, given_mask, cfg, verbose=False)
+            res = solve(model, x, y, given_mask, cfg, verbose=True)
 
         solution, x = res.solution.cpu(), x.cpu()
         grids = [grid_string(solution[j]) for j in range(len(indices))]
         verified = [is_valid_solution(grids[j], x[j]) for j in range(len(indices))]
-        return result_rows(res, indices, cfg, grids, verified)
+        return result_rows(res, indices, cfg, grids, verified, given_mask)

@@ -11,7 +11,7 @@ entries:
               --out, baselines/qwen_sft/results/natural.json]
     result: baselines/qwen_sft/results/natural.json
   - name: qwen_blanks1
-    label: "Qwen3.5-0.8B SFT, 1 blanks"
+    label: "Qwen3.5-0.8B SFT, 1 blank"
     command: [baselines/qwen_sft/run.py::evaluate, --run-dir, /checkpoints/followups/llm_baseline/qwen3_5_0_8b_blanks1_ep16_seed0,
               --out, baselines/qwen_sft/results/blanks1.json]
     result: baselines/qwen_sft/results/blanks1.json

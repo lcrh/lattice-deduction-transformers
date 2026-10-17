@@ -1,9 +1,9 @@
-# Eval presets (plan §3.0). A manifest entry names one with `eval:`; its keys
+# Eval presets. A manifest entry names one with `eval:`; its keys
 # are config overrides applied after the entry's own `set`. Workers and the
 # in-flight window only change cost and wall-clock time, never results.
 presets:
   # Sudoku test split, walked in a fixed random order until the error rate
-  # is pinned down (K=100 failures, +-0.1pp, n >= 1000). Table 1 rows below
+  # is pinned down (K=100 failures, or +-0.1pp once n >= 1000). Table 1 rows below
   # 4K steps, Figure 2.
   sequential:
     eval.index_list: sudoku_test_perm
@@ -14,20 +14,24 @@ presets:
     eval.stop: full
     eval.workers: 100
     eval.max_in_flight: 200
-  # The first 1,000 puzzles of the same ordering, for every arm and seed.
-  # Appendix ablations.
+  # Appendix ablations: the same fixed ordering, sequential (100 failures, or
+  # +-0.1pp once n >= 1000), at most 4,096 puzzles (8 blocks). For more
+  # precision on an entry, set `eval: ablation_10k` on it and relaunch: it
+  # continues from the blocks already on disk, up to 10,240 (20 blocks).
   ablation:
     eval.index_list: sudoku_test_perm
     eval.stop: ablation
-  # Held-out train puzzles, sequential. Phase-1 default selection only;
+  ablation_10k:
+    eval.index_list: sudoku_test_perm
+    eval.stop: ablation_10k
+  # Held-out train puzzles, sequential, at most 4,000. Phase-1 default selection only;
   # never touches the test split.
   select:
     eval.index_list: sudoku_val
-    eval.stop: sequential
+    eval.stop: select
   # An explicit puzzle list (entry `indices_file`), every puzzle.
   explicit:
     eval.stop: full
-    eval.workers: 16
   # Snowflake / Maze: the config's own test list, every puzzle.
   whole:
     eval.stop: full

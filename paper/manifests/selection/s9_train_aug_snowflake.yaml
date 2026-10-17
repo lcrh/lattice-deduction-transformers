@@ -1,0 +1,12 @@
+# Phase 1, follow-up: per-step augmentation off in training (kept at
+# evaluation) on Snowflake, scored on the validation split.
+exp_id: P9
+benchmark: snowflake
+config: configs/snowflake/paper.yaml
+eval: whole
+seeds: [0, 1, 2]
+set: {eval.index_list: snowflake_val}
+entries:
+  - name: default
+  - name: train_noaug
+    set: {train.step.augment: false}

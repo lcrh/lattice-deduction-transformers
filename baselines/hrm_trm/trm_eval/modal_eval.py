@@ -1,32 +1,11 @@
-"""Evaluate TRM checkpoints: Maze-30x30-hard (with LENIENT scoring) and
-Sudoku-Extreme (exact match on the first N puzzles of LDT's
-`sudoku_test_perm` ordering; default N = 10,000).
+"""Evaluate TRM checkpoints on Maze-Hard (exact and lenient) and Sudoku-Extreme (exact).
 
-TRM ("Tiny Recursive Models", https://github.com/alphaXiv/TinyRecursiveModels,
-cloned at image-build time) reports `exact_accuracy`: the predicted grid must
-match the dataset's ONE labelled shortest path cell-for-cell. Mazes have many
-shortest paths, so that under-counts. We additionally compute a **lenient**
-score: a prediction is correct if its marked `o`-cells (plus S/G) form a valid
-simple path from start to goal whose length equals the maze's optimal (BFS)
-shortest-path length — i.e. *any* optimal path counts.
-
-The checkpoint `alphaXiv/trm-model-maze/maze_hard_step_32550` is an independent
-reproduction (the original TRM authors released code only, no weights); their
-report puts maze-hard exact_accuracy at 83.67% ± 2.28% (paper claim 85.3%).
-
-Unlike HRM, TRM uses native `scaled_dot_product_attention` (no flash-attn) and
-its adam-atan2 CUDA extension is only JIT-built when the optimizer is used —
-`run_eval_only.py --eval-only` skips that — so NOTHING compiles and no runtime
-stubs are needed. We drive their own `run_eval_only.py` and verify its saved
-predictions.
-
-Maze checkpoints (the release and our retrains) were trained with
-`arch.L_cycles=4`; `cfg_maze.yaml` sets that explicitly, since the fork's
-default config uses 6 and a loop-count mismatch loads without error.
-
-Sudoku checkpoints (`alphaXiv/trm-model-sudoku`, also an independent
-reproduction) need the matching architecture config: `cfg_sudoku_mlp.yaml`
-(TRM-MLP, the variant behind the paper's 87.4%) or `cfg_sudoku_att.yaml`.
+Drives TRM's own `run_eval_only.py` (alphaXiv/TinyRecursiveModels, pinned
+commit); nothing compiles and no stubs are needed. The checkpoints are
+alphaXiv's independent reproductions. Each model family needs its training
+architecture config (cfg_maze.yaml, cfg_sudoku_{mlp,att}.yaml), because a
+loop-count mismatch loads without error. Scoring is in ../maze_scoring.py;
+see baselines/README.md for the protocol.
 
 Usage:
     uv run modal run baselines/hrm_trm/trm_eval/modal_eval.py            # maze, released ckpt
@@ -35,8 +14,9 @@ Usage:
 
 import json
 import os
+import sys
+import tempfile
 import time
-from collections import deque
 from pathlib import Path
 
 import modal
@@ -70,6 +50,7 @@ image = (
     .add_local_file(Path(__file__).parent / "cfg_sudoku_att.yaml",
                     f"{TRM_REMOTE}/config/cfg_sudoku_att.yaml")
     .add_local_file(Path(__file__).parent.parent / "sudoku_rows.py", "/root/sudoku_rows.py")
+    .add_local_file(Path(__file__).parent.parent / "maze_scoring.py", "/root/maze_scoring.py")
 )
 
 app = modal.App("trm-eval")
@@ -79,84 +60,29 @@ app = modal.App("trm-eval")
 ldt_data = modal.Volume.from_name("lattice-diffusion-data", create_if_missing=True)
 ldt_ckpt = modal.Volume.from_name("lattice-diffusion-checkpoints", create_if_missing=True)
 
-# our own augmented-training checkpoints live here (mounted read-only at /vol);
-# pass --checkpoint /vol/<...>/step_N to eval one.
+# Our Maze retrains (mounted at /vol); pass --checkpoint /vol/<...>/step_N to evaluate one.
 ckpt_vol = modal.Volume.from_name("trm-maze-aug-ckpts", create_if_missing=True)
-
-# maze token ids (build_maze_dataset.py: CHARSET="# SGo" -> ids 1..5, PAD=0)
-WALL, EMPTY, START, GOAL, PATH = 1, 2, 3, 4, 5
-
-
-def _bfs_dist(passable, src, dst):
-    """Shortest 4-connected path length (steps) over passable cells."""
-    H, W = passable.shape
-    seen = {src}
-    dq = deque([(src, 0)])
-    while dq:
-        (r, c), d = dq.popleft()
-        if (r, c) == dst:
-            return d
-        for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < H and 0 <= nc < W and passable[nr, nc] and (nr, nc) not in seen:
-                seen.add((nr, nc))
-                dq.append(((nr, nc), d + 1))
-    return None
-
-
-def _lenient_ok(inp, pred):
-    """inp, pred: [H, W] int grids. True iff pred's path cells form a simple
-    S->G path of OPTIMAL length over the maze's passable cells."""
-    import numpy as np
-
-    passable = inp != WALL
-    s = np.argwhere(inp == START)
-    g = np.argwhere(inp == GOAL)
-    if len(s) != 1 or len(g) != 1:
-        return False
-    src, dst = tuple(s[0]), tuple(g[0])
-
-    P = set(map(tuple, np.argwhere((pred == START) | (pred == GOAL) | (pred == PATH))))
-    if src not in P or dst not in P:
-        return False
-    if any(not passable[r, c] for (r, c) in P):
-        return False
-
-    def nbrs(cell):
-        r, c = cell
-        for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            n = (r + dr, c + dc)
-            if n in P:
-                yield n
-
-    deg = {c: sum(1 for _ in nbrs(c)) for c in P}
-    if deg.get(src) != 1 or deg.get(dst) != 1:
-        return False
-    if any(deg[c] != 2 for c in P if c not in (src, dst)):
-        return False
-    seen = {src}
-    dq = deque([src])
-    while dq:
-        x = dq.popleft()
-        for n in nbrs(x):
-            if n not in seen:
-                seen.add(n)
-                dq.append(n)
-    if len(seen) != len(P):
-        return False
-    return (len(P) - 1) == _bfs_dist(passable, src, dst)
 
 
 @app.function(image=image, gpu="H100", timeout=3600,
               volumes={"/vol": ckpt_vol},
               secrets=[modal.Secret.from_name("huggingface-secret")])
-def run(checkpoint: str = CKPT):
+def run(checkpoint: str = CKPT) -> dict:
+    """Maze scores of one checkpoint (an HF path, or /vol/.../step_N)."""
     import glob
     import subprocess
-    import sys
 
-    import numpy as np
     import torch
+
+    sys.path.insert(0, "/root")
+    import maze_scoring
+
+    local = checkpoint.startswith("/vol/")
+    with open(f"{TRM_REMOTE}/config/cfg_maze.yaml") as f:
+        settings = {"model": "trm", "trm_commit": TRM_COMMIT, "config": f.read()}
+    if local and (cached := maze_scoring.cached_scores(checkpoint, settings)):
+        print(f"[trm] already scored: {checkpoint}", flush=True)
+        return cached
 
     # 1) build the maze test/train dataset at data/maze-30x30-hard-1k
     print("[trm] building maze dataset …", flush=True)
@@ -165,8 +91,7 @@ def run(checkpoint: str = CKPT):
 
     # 2) run TRM's own eval script (loads checkpoint from HF, EMA on by default,
     #    eval-only so no optimizer/adam-atan2 build). Saves preds to --outdir.
-    outdir = "/root/trm_out"
-    os.makedirs(outdir, exist_ok=True)
+    outdir = tempfile.mkdtemp(prefix="trm_out_")     # fresh per call on a reused container
     cmd = [
         sys.executable, "scripts/run_eval_only.py",
         "--config", "config/cfg_maze.yaml",
@@ -180,48 +105,24 @@ def run(checkpoint: str = CKPT):
     proc = subprocess.run(cmd, cwd=TRM_REMOTE, capture_output=True, text=True)
     print(proc.stdout[-6000:], flush=True)
     if proc.returncode != 0:
-        print("[trm] stderr tail:\n" + proc.stderr[-4000:], flush=True)
+        raise RuntimeError("run_eval_only.py failed:\n" + proc.stderr[-4000:])
 
-    # 3) load saved preds and score leniently
+    # 3) score the saved predictions
     files = sorted(glob.glob(os.path.join(outdir, "*_all_preds.0")))
     if not files:
         raise RuntimeError(f"no preds saved in {outdir}; see eval stdout above")
     preds = torch.load(files[-1], map_location="cpu")
-    print(f"[trm] preds keys: {list(preds.keys())}  shapes: "
-          f"{ {k: tuple(v.shape) for k, v in preds.items()} }", flush=True)
-
-    inputs = preds["inputs"].numpy()
-    labels = preds["labels"].numpy()
-    # predicted grid: prefer logits (argmax); else 'preds' (argmax if 3D else as-is)
-    if "logits" in preds:
-        pred_ids = preds["logits"].float().numpy().argmax(-1)
-    else:
-        pv = preds["preds"].numpy()
-        pred_ids = pv.argmax(-1) if pv.ndim == 3 else pv
-
-    side = int(round(inputs.shape[1] ** 0.5))
-    n_real = n_exact = n_lenient = 0
-    for i in range(inputs.shape[0]):
-        inp = inputs[i].reshape(side, side)
-        if not ((inp == START).any() and (inp == GOAL).any()):
-            continue
-        n_real += 1
-        if np.array_equal(pred_ids[i].reshape(side, side), labels[i].reshape(side, side)):
-            n_exact += 1
-        if _lenient_ok(inp, pred_ids[i].reshape(side, side)):
-            n_lenient += 1
-
-    print("\n" + "=" * 56, flush=True)
-    print(f"TRM maze-30x30-hard  ({n_real} test puzzles)", flush=True)
-    print("=" * 56, flush=True)
-    print(f"  exact   accuracy: {n_exact}/{n_real} = {100*n_exact/n_real:.2f}%", flush=True)
-    print(f"  lenient accuracy: {n_lenient}/{n_real} = {100*n_lenient/n_real:.2f}%", flush=True)
-    print("=" * 56, flush=True)
-    return {"n": n_real, "exact": n_exact, "lenient": n_lenient}
+    scores = maze_scoring.score_mazes(preds["inputs"].numpy(), preds["labels"].numpy(),
+                                      preds["logits"].float().numpy().argmax(-1))
+    maze_scoring.print_scores("TRM", scores)
+    if local:
+        maze_scoring.save_scores(checkpoint, settings, scores)
+        ckpt_vol.commit()
+    return scores
 
 
 @app.function(image=image, volumes={"/vol": ckpt_vol}, timeout=300)
-def _list_ckpts(run_dir: str):
+def _list_ckpts(run_dir: str) -> list[str]:
     import glob
     fs = [f for f in glob.glob(os.path.join("/vol", run_dir, "step_*"))
           if os.path.basename(f).removeprefix("step_").isdigit()]
@@ -234,40 +135,28 @@ def main(checkpoint: str = CKPT):
 
 
 @app.local_entrypoint()
-def sweep(run_dir: str = "Maze-30x30-hard-1k-ACT-torch/maze_aug_probe",
-          out: str = "baselines/hrm_trm/results/trm_aug_sweep.json"):
-    """Eval EVERY checkpoint in a run dir (exact+lenient) and save a JSON of
-    {step, exact, lenient} for plotting accuracy-over-training."""
+def sweep(run_dir: str, out: str = "baselines/hrm_trm/results/trm_sweep.json"):
+    """Score every checkpoint of a training run on the volume (exact and lenient)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import maze_scoring
+
     ckpts = _list_ckpts.remote(run_dir)
     print(f"[sweep] {len(ckpts)} checkpoints in {run_dir}", flush=True)
-    results = list(run.map(ckpts))  # one container per checkpoint
-    rows = sorted(
-        [{"step": int(os.path.basename(c).removeprefix("step_")), **r}
-         for c, r in zip(ckpts, results)],
-        key=lambda x: x["step"])
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    with open(out, "w") as f:
-        json.dump(rows, f, indent=2)
-    print(f"[sweep] wrote {out}", flush=True)
-    for r in rows:
-        print(f"  step {r['step']:>7}: exact={100*r['exact']/r['n']:.2f}%  "
-              f"lenient={100*r['lenient']/r['n']:.2f}%", flush=True)
+    maze_scoring.write_sweep(ckpts, list(run.map(ckpts)), out)
 
 
 @app.function(image=image, gpu="B200", timeout=6 * 3600, memory=32768,
               volumes={"/ldt_data": ldt_data, "/ldt_ckpt": ldt_ckpt},
               secrets=[modal.Secret.from_name("huggingface-secret")])
-def run_sudoku(indices: list[int], variant: str = "mlp", checkpoint: str = "",
-               batch_size: int = 1536, tag: str = "sudoku_test_perm") -> dict:
-    """Exact-match accuracy on the given Sudoku-Extreme test indices, in order,
-    via TRM's own run_eval_only.py (EMA weights, bf16 autocast).
+def run_sudoku(chunk: int, start: int, indices: list[int], out_dir: str, variant: str = "mlp",
+               checkpoint: str = "", batch_size: int = 1536) -> None:
+    """Exact-match results for one chunk of Sudoku-Extreme test indices, written to `out_dir`.
 
-    checkpoint="" -> the released alphaXiv checkpoint for `variant`. Writes
-    per-puzzle rows + summary to the LDT checkpoint volume under
-    eval/baselines/trm-<variant>/<tag>/."""
+    Uses TRM's run_eval_only.py (EMA weights, bf16). checkpoint="" is the
+    alphaXiv release for `variant`.
+    """
     import glob
     import subprocess
-    import sys
 
     sys.path.insert(0, "/root")
     import numpy as np
@@ -290,7 +179,7 @@ def run_sudoku(indices: list[int], variant: str = "mlp", checkpoint: str = "",
     if aligned is False:
         raise RuntimeError("TRM test split does not match the LDT cache index order")
 
-    outdir = "/root/trm_sudoku_out"
+    outdir = f"/root/trm_sudoku_out/chunk{chunk:04d}"     # fresh per chunk on a reused container
     os.makedirs(outdir, exist_ok=True)
     cmd = [
         sys.executable, "scripts/run_eval_only.py",
@@ -322,32 +211,53 @@ def run_sudoku(indices: list[int], variant: str = "mlp", checkpoint: str = "",
     if not np.array_equal(inputs, np.load(os.path.join(test_dir, "all__inputs.npy"))):
         raise RuntimeError("eval order does not match the subset test split order")
 
-    rows = sudoku_rows.build_rows(indices, labels, preds)
-    summary = sudoku_rows.summarize(
-        rows, model=f"TRM-{variant}", checkpoint=f"hf://{checkpoint}",
-        trm_commit=TRM_COMMIT, config=config_name, index_list="sudoku_test_perm",
-        gpu="B200", n_gpus=1, global_batch_size=batch_size,
-        eval_seconds=eval_seconds, gpu_seconds=eval_seconds,
-        index_aligned_with_ldt_cache=aligned,
-    )
-    sudoku_rows.write_outputs(f"/ldt_ckpt/eval/baselines/trm-{variant}/{tag}", rows, summary)
+    rows = sudoku_rows.build_rows(indices, labels, preds, start)
+    sudoku_rows.write_chunk(out_dir, chunk, rows, {
+        "model": f"TRM-{variant}", "checkpoint": f"hf://{checkpoint}",
+        "trm_commit": TRM_COMMIT, "config": config_name, "gpu": "B200", "n_gpus": 1,
+        "global_batch_size": batch_size, "eval_seconds": eval_seconds,
+        "index_aligned_with_ldt_cache": aligned,
+    })
     ldt_ckpt.commit()
-    print(json.dumps(summary, indent=2), flush=True)
+    print(f"[trm] chunk {chunk}: {sum(r['status'] == 'correct' for r in rows)}/{len(rows)}",
+          flush=True)
+
+
+@app.function(image=image, timeout=600, volumes={"/ldt_ckpt": ldt_ckpt})
+def done_chunks(out_dir: str) -> set[int]:
+    sys.path.insert(0, "/root")
+    import sudoku_rows
+
+    ldt_ckpt.reload()
+    return sudoku_rows.done_chunks(out_dir)
+
+
+@app.function(image=image, timeout=600, volumes={"/ldt_ckpt": ldt_ckpt})
+def merge_chunks(out_dir: str, n_chunks: int) -> dict:
+    sys.path.insert(0, "/root")
+    import sudoku_rows
+
+    ldt_ckpt.reload()
+    summary = sudoku_rows.merge_chunks(out_dir, n_chunks, index_list="sudoku_test_perm")
+    ldt_ckpt.commit()
     return summary
 
 
 @app.local_entrypoint()
 def sudoku(n: int = 10_000, variant: str = "mlp", checkpoint: str = "",
            batch_size: int = 1536, out: str = ""):
-    """Evaluate on the first n puzzles of sudoku_test_perm (LDT's ordering)."""
-    import sys
-
+    """Evaluate on the first n puzzles of sudoku_test_perm (LDT's ordering); resumes by chunk."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import sudoku_rows
 
-    indices = sudoku_rows.first_n_of_test_perm(n)
-    summary = sudoku_rows.add_interval(run_sudoku.remote(
-        indices, variant, checkpoint, batch_size, f"sudoku_test_perm_n{n}"))
+    out_dir = sudoku_rows.out_dir(f"trm-{variant}", n, checkpoint, batch_size)
+    parts = sudoku_rows.chunks(sudoku_rows.first_n_of_test_perm(n))
+    done = done_chunks.remote(out_dir)
+    todo = [(c, start, idx, out_dir, variant, checkpoint, batch_size)
+            for c, start, idx in parts if c not in done]
+    print(f"{len(parts) - len(todo)}/{len(parts)} chunks already done", flush=True)
+    list(run_sudoku.starmap(todo))
+    summary = sudoku_rows.add_interval(merge_chunks.remote(out_dir, len(parts)))
     out = out or f"baselines/hrm_trm/results/trm_{variant}_sudoku.json"
     with open(out, "w") as f:
         json.dump(summary, f, indent=2)

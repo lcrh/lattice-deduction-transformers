@@ -10,7 +10,7 @@ prefix of an i.i.d. stream (puzzles drawn in a fixed random order).
 - `binomial_upper`: exact one-sided Clopper-Pearson upper bound, used for the
   wrong-answer rate (a rare-event count reported alongside accuracy).
 - `inverse_binomial_rate`: unbiased failure-rate estimate when sampling was
-  stopped at the K-th failure.
+  stopped at the K-th failure (only valid for such runs).
 - `paired_difference`: accuracy difference between two runs on the puzzles
   both evaluated (their common prefix).
 """
@@ -38,7 +38,7 @@ def _log_mixture_ratio(p: float, successes: int, failures: int,
 
 
 def _bisect(f, lo: float, hi: float, iters: int = 60) -> float:
-    """Root of a function that is True at lo and False at hi."""
+    """Point where predicate `f` switches from True (at lo) to False (at hi)."""
     for _ in range(iters):
         mid = 0.5 * (lo + hi)
         if f(mid):
@@ -96,8 +96,10 @@ def binomial_upper(k: int, n: int, alpha: float = 0.05) -> float:
 
 
 def inverse_binomial_rate(failures: int, n: int) -> float:
-    """Unbiased failure-rate estimate (K - 1) / (n - 1) for sampling stopped at
-    the K-th failure. Falls back to failures / n when that does not apply."""
+    """(K - 1) / (n - 1), unbiased when sampling stopped at the K-th failure.
+
+    Only meaningful for runs stopped that way; falls back to failures / n when K < 2.
+    """
     if failures >= 2 and n >= 2:
         return (failures - 1) / (n - 1)
     return failures / n if n else 0.0
@@ -117,18 +119,18 @@ class PairedDifference:
 
 def paired_difference(correct_a: list[bool], correct_b: list[bool],
                       alpha: float = 0.05) -> PairedDifference:
-    """Compare two runs on the same puzzles, given per-position correctness of
-    each run's evaluated prefix. Uses the common prefix only.
+    """Paired accuracy difference of two runs over their common prefix of puzzles.
 
-    The interval is the usual paired (McNemar-style) normal approximation; it
-    is not anytime-valid and is meant for describing ablation tables.
+    The interval is a paired (McNemar-style) normal approximation; it is not
+    anytime-valid and is meant for ablation tables.
     """
     n = min(len(correct_a), len(correct_b))
     a, b = correct_a[:n], correct_b[:n]
     only_a = sum(1 for x, y in zip(a, b) if x and not y)
     only_b = sum(1 for x, y in zip(a, b) if y and not x)
     if n == 0:
-        return PairedDifference(0, 0.0, 0.0, 0.0, -1.0, 1.0, 0, 0)
+        return PairedDifference(n=0, acc_a=0.0, acc_b=0.0, delta=0.0, lo=-1.0, hi=1.0,
+                                only_a=0, only_b=0)
     delta = (only_a - only_b) / n
     var = max((only_a + only_b) - (only_a - only_b) ** 2 / n, 0.0) / n ** 2
     z = _normal_quantile(1.0 - alpha / 2)

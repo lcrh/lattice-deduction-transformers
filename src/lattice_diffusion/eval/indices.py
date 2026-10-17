@@ -1,25 +1,12 @@
 """Named index lists for evaluation.
 
-Each list is a deterministic function of (split size, seed) and is checked
-against a recorded SHA-256, so every run walks exactly the same puzzles in
-the same order and silent drift (e.g. a numpy change) fails loudly.
+Each list is a seeded permutation of a dataset split, checked against a
+recorded SHA-256, so every run walks the same puzzles in the same order.
 
-- `sudoku_test_perm`: random permutation of the full Sudoku-Extreme test
-  split. Sequential evals walk it prefix by prefix; the full split is this
-  list evaluated with `NoStop`.
-- `sudoku_val`: 10k puzzles from the train split, held out from every
-  training pool (`SudokuExtremeDataset` excludes them) and used for choosing
-  defaults, never for reported numbers.
-- `maze_test`: the 1,000-puzzle Maze-Hard test split.
-- `snowflake_varied_test` / `snowflake_varied_val`: the varied-topology
-  Snowflake test and validation splits (the paper's Snowflake dataset);
-  `snowflake_test` / `snowflake_val` are the canonical-topology ones.
-  Their sizes are only known once the data is generated, so they start
-  unpinned: the caller supplies the split size and each run directory
-  records the digest it used (runner.py), so a regenerated dataset is
-  caught on resume. `experiments/snowflake/gen_data.py` prints the values
-  to pin after generating.
-  TODO: pin snowflake_varied_{test,val} once the camera-ready data exists.
+Snowflake splits are only sized once the data is generated, so their lists
+start unpinned: the caller supplies the split size, and each run directory
+records the digest it used, so a regenerated dataset is caught on resume.
+`experiments/snowflake/gen_data.py` prints the values to pin.
 """
 
 from __future__ import annotations
@@ -34,18 +21,24 @@ import numpy as np
 class IndexListSpec:
     task: str
     split: str
-    split_size: int | None  # None = unpinned (see module docstring)
+    split_size: int | None  # None = unpinned
     seed: int
     length: int | None      # None = full permutation
     sha256: str | None      # None = unpinned
 
+    @property
+    def pinned(self) -> bool:
+        return self.split_size is not None
+
 
 SPECS: dict[str, IndexListSpec] = {
+    # Full Sudoku-Extreme test split; sequential evals walk it prefix by prefix.
     "sudoku_test_perm": IndexListSpec(
         task="sudoku", split="test", split_size=422_786, seed=20261015,
         length=None,
         sha256="f6c60663a53881e5627ee960e9b5f95514d84f22f71ac124b2e8a710ca4bdb50",
     ),
+    # Held out from every training pool; for choosing defaults, never for reported numbers.
     "sudoku_val": IndexListSpec(
         task="sudoku", split="train", split_size=3_831_994, seed=20261016,
         length=10_000,
@@ -56,21 +49,16 @@ SPECS: dict[str, IndexListSpec] = {
         length=None,
         sha256="31a7a6ad8ad29ea1c818d39ab870a4b562dc0d70ec8f9c9c963383d4272b0250",
     ),
+    # Snowflake splits.  TODO: pin once generated (gen_data.py prints the values).
     "snowflake_test": IndexListSpec(
-        task="snowflake", split="test", split_size=None, seed=20261018,
-        length=None, sha256=None,
+        task="snowflake", split="test", split_size=4292, seed=20261020,
+        length=None,
+        sha256="0fb2e04aa36086d9735d6a2e70dfebab1163fb05ca715cb8e33623ee736bc0cd",
     ),
     "snowflake_val": IndexListSpec(
-        task="snowflake", split="val", split_size=None, seed=20261019,
-        length=None, sha256=None,
-    ),
-    "snowflake_varied_test": IndexListSpec(
-        task="snowflake", split="varied_test", split_size=None, seed=20261020,
-        length=None, sha256=None,
-    ),
-    "snowflake_varied_val": IndexListSpec(
-        task="snowflake", split="varied_val", split_size=None, seed=20261021,
-        length=None, sha256=None,
+        task="snowflake", split="val", split_size=1761, seed=20261021,
+        length=None,
+        sha256="e4547df0f6af336ee555cc061019d386c16687b9c1eee79c1f47fc9e2ab2b591",
     ),
 }
 
@@ -86,27 +74,31 @@ class IndexList:
     def __len__(self) -> int:
         return len(self.indices)
 
+    @property
+    def digest(self) -> str:
+        return digest(self.indices)
 
-def _digest(indices: np.ndarray) -> str:
+
+def digest(indices: np.ndarray) -> str:
+    """SHA-256 of the indices as little-endian int64."""
     return hashlib.sha256(np.ascontiguousarray(indices, dtype="<i8").tobytes()).hexdigest()
 
 
 def generate(spec: IndexListSpec, split_size: int | None = None) -> np.ndarray:
-    n = spec.split_size if spec.split_size is not None else split_size
+    """Indices for `spec`; `split_size` is used only when the spec is unpinned."""
+    n = spec.split_size if spec.pinned else split_size
     perm = np.random.default_rng(spec.seed).permutation(n).astype(np.int64)
     return perm if spec.length is None else perm[:spec.length]
 
 
-def is_pinned(name: str) -> bool:
-    return SPECS[name].split_size is not None
-
-
 def load(name: str, split_size: int | None = None) -> IndexList:
-    """Build a named list. Pass the actual split size when available so a
-    dataset that changed size is caught here rather than mid-run; it is
-    required for unpinned lists."""
+    """Build named list `name`, checked against its recorded SHA-256.
+
+    `split_size` is required for unpinned lists; pass it otherwise to catch a
+    resized dataset early.
+    """
     spec = SPECS[name]
-    if spec.split_size is None:
+    if not spec.pinned:
         if split_size is None:
             raise ValueError(f"{name} is unpinned; pass the dataset's split size")
         return IndexList(name=name, task=spec.task, split=spec.split,
@@ -115,7 +107,7 @@ def load(name: str, split_size: int | None = None) -> IndexList:
         raise ValueError(f"{name}: dataset split has {split_size} items, "
                          f"index list expects {spec.split_size}")
     indices = generate(spec)
-    if _digest(indices) != spec.sha256:
+    if digest(indices) != spec.sha256:
         raise ValueError(f"{name}: generated indices do not match the recorded "
                          f"checksum; refusing to evaluate on a different list")
     return IndexList(name=name, task=spec.task, split=spec.split, indices=indices,
@@ -128,11 +120,7 @@ def filter_tag(index_filter: dict) -> str:
                     for k, v in sorted(index_filter.items()))
 
 
-def explicit(task: str, split: str, indices, name: str = "explicit") -> IndexList:
+def explicit(task: str, split: str, indices) -> IndexList:
     """An ad-hoc list (e.g. a portfolio failure set), evaluated in the given order."""
     arr = np.asarray(indices, dtype=np.int64)
-    return IndexList(name=f"{name}-{_digest(arr)[:12]}", task=task, split=split, indices=arr)
-
-
-def digest(index_list: IndexList) -> str:
-    return _digest(index_list.indices)
+    return IndexList(name=f"explicit-{digest(arr)[:12]}", task=task, split=split, indices=arr)
