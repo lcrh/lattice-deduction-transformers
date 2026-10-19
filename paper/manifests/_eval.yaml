@@ -12,8 +12,8 @@ presets:
   full:
     eval.index_list: sudoku_test_perm
     eval.stop: full
-    eval.workers: 100
-    eval.max_in_flight: 200
+    eval.workers: 20
+    eval.max_in_flight: 40
   # Appendix ablations: the same fixed ordering, sequential (100 failures, or
   # +-0.1pp once n >= 1000), at most 4,096 puzzles (8 blocks). For more
   # precision on an entry, set `eval: ablation_10k` on it and relaunch: it

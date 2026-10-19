@@ -30,7 +30,6 @@ entries:
     set: {train.step.augment: false}
   - name: noaug4k
     label: "LDT, 4K steps, no augmentation"
-    eval: full
     set:
       data.augment_digit_perm: false
       data.augment_dihedral: false
