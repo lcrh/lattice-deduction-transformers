@@ -5,7 +5,8 @@ benchmark: snowflake
 config: configs/snowflake/paper.yaml
 eval: whole
 seeds: [0, 1, 2]
-set: {eval.index_list: snowflake_val}
+# Pins the recipe these runs used (before P13 changed the Snowflake defaults).
+set: {eval.index_list: snowflake_val, data.n_puzzles: 500, train.steps: 1000, data.constraint_group_embed: false}
 entries:
   - name: default
   - name: train_noaug

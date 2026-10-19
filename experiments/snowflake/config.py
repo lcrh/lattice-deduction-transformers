@@ -30,8 +30,9 @@ class SnowflakeExperiment(Experiment):
     model: LoopedTransformerConfig = field(
         default_factory=lambda: LoopedTransformerConfig(cls_token=True))
     data: SnowflakeConfig = field(default_factory=lambda: SnowflakeConfig(
-        n_puzzles=500, train_orders=[4, 5, 6, 7, 8], translate_aug=True))
-    train: TrainConfig = field(default_factory=TrainConfig)
+        n_puzzles=2000, train_orders=[4, 5, 6, 7, 8], translate_aug=True,
+        constraint_group_embed=True))
+    train: TrainConfig = field(default_factory=lambda: TrainConfig(steps=8000))
     solve: SolveConfig = field(default_factory=lambda: SolveConfig(
         step=snowflake_step(cls_threshold=0.6, augment=True, digit_policy="argmax"),
         max_rounds=1000, n_chains=64, batch_size=512))

@@ -6,7 +6,8 @@ benchmark: snowflake
 config: configs/snowflake/paper.yaml
 eval: whole
 seeds: [0, 1, 2]
-set: {eval.index_list: snowflake_val, data.constraint_group_embed: true}
+# Pins the pre-P13 defaults that entries do not override.
+set: {eval.index_list: snowflake_val, data.constraint_group_embed: true, data.n_puzzles: 500, train.steps: 1000}
 entries:
   - name: group_4k
     set: {train.steps: 4000}
