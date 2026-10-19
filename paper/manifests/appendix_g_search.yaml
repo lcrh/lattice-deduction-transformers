@@ -16,6 +16,7 @@ table:
     s3: "Backtracking"
 entries:
   - name: default
+    eval: ablation_10k     # paired reference for the 10K rows
     exp_id: A0
     label: "2K model, uniform cell, argmax digit"
     group: s1_2k
@@ -49,6 +50,7 @@ entries:
     eval_of: default
     sweep: {solve.backtrack: [last, geometric, uniform_depth]}
   - name: s3_2k_negate
+    eval: ablation_10k     # same accuracy, fewer calls at 4K: check at 10K
     group: s3
     eval_of: default
     set: {solve.backtrack_negate: true}

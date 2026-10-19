@@ -19,6 +19,7 @@ entries:
     label: "Default operator"
     eval: ablation_10k     # paired reference for the 10K conflict-threshold rows
   - name: eval_loops
+    eval: ablation_10k     # same accuracy, fewer calls at 4K: check at 10K
     group: loops
     eval_of: default
     sweep: {solve.step.n_loops: [1, 2, 4, 8, 32]}

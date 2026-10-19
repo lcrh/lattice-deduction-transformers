@@ -8,7 +8,9 @@ table:
   reference: default
 entries:
   - name: default
+    eval: ablation_10k     # paired reference for the 10K rows
     exp_id: A0
     label: "lambda_CE = 0.2 (default)"
   - name: ce
+    eval: ablation_10k     # same accuracy, fewer calls at 4K: check at 10K
     sweep: {train.softmax_loss_weight: [0.0, 1.0]}

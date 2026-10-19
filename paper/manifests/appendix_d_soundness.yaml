@@ -22,6 +22,7 @@ entries:
     label: "2x"
     set: {train.bce_pos_mult: 1.0}
   - name: ratio32
+    eval: ablation_10k     # same accuracy, fewer calls at 4K: check at 10K
     label: "32x"
     set: {train.bce_pos_mult: 16.0}
   - name: nocls
