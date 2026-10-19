@@ -14,6 +14,7 @@ entries:
   - name: default
     exp_id: A0
     label: "8x asymmetry, conflict head (default)"
+    eval: ablation_10k     # soundness comparison: 5 vs 0 wrong at 4K puzzles was inconclusive
   - name: sym
     label: "1x (symmetric)"
     set: {train.bce_pos_mult: 0.5}
@@ -36,5 +37,6 @@ entries:
     set: {solve.step.threshold: 0.33}
   - name: ratio32_matched
     label: "32x, theta_elim = 0.03"
+    eval: ablation_10k
     eval_of: ratio32
     set: {solve.step.threshold: 0.03}

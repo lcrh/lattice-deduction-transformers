@@ -17,6 +17,7 @@ entries:
   - name: default
     exp_id: A0
     label: "Default operator"
+    eval: ablation_10k     # paired reference for the 10K conflict-threshold rows
   - name: eval_loops
     group: loops
     eval_of: default
@@ -32,4 +33,5 @@ entries:
   - name: cls
     group: cls
     eval_of: default
+    eval: ablation_10k     # cls 0.7: 5 vs 0 wrong at 4K puzzles was inconclusive
     sweep: {solve.step.cls_threshold: [0.5, 0.7, 0.8]}
