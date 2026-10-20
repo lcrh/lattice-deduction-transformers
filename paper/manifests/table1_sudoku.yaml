@@ -35,3 +35,9 @@ entries:
       data.augment_dihedral: false
       train.step.augment: false
       solve.step.augment: false
+  # Without per-step augmentation, argmax digits leave eval dropout as the only
+  # source of chain diversity; sampled digits restore it.
+  - name: noaug4k_sample
+    label: "LDT, 4K steps, no augmentation, sampled digits"
+    eval_of: noaug4k
+    set: {solve.step.digit_policy: sample}
