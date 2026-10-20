@@ -36,7 +36,7 @@ def maze_step(**kw) -> StepConfig:
 class TrainConfig(PoolTrainConfig):
     steps: int = 20000
     batch_size: int = 192
-    step: StepConfig = field(default_factory=lambda: maze_step(threshold=0.5, augment=True))
+    step: StepConfig = field(default_factory=lambda: maze_step(threshold=0.1, augment=True))
     # Pool size over batch_size; a larger pool keeps older, harder entries around longer.
     pool_size_mult: float = 2.0
     checkpoint_every: int = 1000        # steps between `<ckpt>.resume.pt` snapshots; 0 = none

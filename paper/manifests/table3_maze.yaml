@@ -10,3 +10,13 @@ entries:
   - name: k512
     label: "LDT, K=512"
     config: configs/maze/paper_k512.yaml
+  # The paper's runs evaluated at theta_elim = 0.5 (the default above); its text
+  # implies 0.1, so the same checkpoints are also evaluated at 0.1.
+  - name: k1_elim0p1
+    label: "LDT, K=1, theta_elim 0.1 at eval"
+    eval_of: k1
+    set: {solve.step.threshold: 0.1}
+  - name: k512_elim0p1
+    label: "LDT, K=512, theta_elim 0.1 at eval"
+    eval_of: k512
+    set: {solve.step.threshold: 0.1}
