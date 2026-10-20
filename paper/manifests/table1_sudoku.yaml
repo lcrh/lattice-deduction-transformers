@@ -68,3 +68,26 @@ entries:
     eval_of: steps4k_train_noaug
     eval: full
     set: {solve.step.digit_policy: sample}
+  # Full train split (all of Sudoku-Extreme train, sudoku_val held out), no
+  # augmentation in training (neither data nor per-step), per-step augmentation
+  # at evaluation. 4K/8K are evaluated on the full test split, queued one at a time.
+  - name: fullsplit_noaug_1k
+    label: "LDT, full train split, no train aug., 1K steps"
+    set: {data.n_puzzles: null, data.augment_digit_perm: false, data.augment_dihedral: false, train.step.augment: false, train.steps: 1000}
+  - name: fullsplit_noaug_2k
+    label: "LDT, full train split, no train aug., 2K steps"
+    set: {data.n_puzzles: null, data.augment_digit_perm: false, data.augment_dihedral: false, train.step.augment: false, train.steps: 2000}
+  - name: fullsplit_noaug_4k_ckpt
+    train_only: true
+    set: {data.n_puzzles: null, data.augment_digit_perm: false, data.augment_dihedral: false, train.step.augment: false, train.steps: 4000}
+  - name: fullsplit_noaug_4k
+    label: "LDT, full train split, no train aug., 4K steps"
+    eval_of: fullsplit_noaug_4k_ckpt
+    eval: full
+  - name: fullsplit_noaug_8k_ckpt
+    train_only: true
+    set: {data.n_puzzles: null, data.augment_digit_perm: false, data.augment_dihedral: false, train.step.augment: false, train.steps: 8000}
+  - name: fullsplit_noaug_8k
+    label: "LDT, full train split, no train aug., 8K steps"
+    eval_of: fullsplit_noaug_8k_ckpt
+    eval: full
