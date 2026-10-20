@@ -46,3 +46,4 @@ def test_maze_resumes_from_a_snapshot(tmp_path):
     ckpt = torch.load(second / "maze.pt", weights_only=False)
     snap = torch.load(first / "maze.step0000002.pt", weights_only=False)
     assert ckpt["train_wallclock"]["total_secs"] >= snap["train_wallclock"]["total_secs"]
+    assert snap["benchmark"] == "maze" and snap["train_hash"] == ckpt["train_hash"]  # evaluable directly

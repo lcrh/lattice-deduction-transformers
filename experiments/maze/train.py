@@ -230,6 +230,7 @@ def train(exp: MazeExperiment, ckpt_path: str | Path,
                 "cuda_rng": (torch.cuda.get_rng_state()
                               if torch.cuda.is_available() else None),
                 "train_wallclock": clock.finish(),
+                **exp.checkpoint_meta(),        # so step snapshots can be evaluated directly
             }
             torch.save(ckpt_payload, resume_path)
             if cfg.keep_step_snapshots:

@@ -3,6 +3,8 @@ exp_id: M4
 benchmark: maze
 eval: whole
 seeds: [0, 1, 2]
+# Keep a checkpoint every 1,000 steps: training is unstable, and the best one is reported.
+set: {train.keep_step_snapshots: true}
 entries:
   - name: k1
     label: "LDT, K=1"
