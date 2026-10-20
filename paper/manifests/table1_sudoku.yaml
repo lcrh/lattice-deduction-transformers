@@ -41,3 +41,15 @@ entries:
     label: "LDT, 4K steps, no augmentation, sampled digits"
     eval_of: noaug4k
     set: {solve.step.digit_policy: sample}
+  # The original paper's eval recipe (sampled digits) on the full split, for
+  # models trained with and without per-step augmentation.
+  - name: steps4k_sample
+    label: "LDT, 4K steps, sampled digits"
+    eval_of: steps4k
+    eval: full
+    set: {solve.step.digit_policy: sample}
+  - name: steps4k_train_noaug_sample
+    label: "LDT, 4K steps, no per-step aug. in training, sampled digits"
+    eval_of: steps4k_train_noaug
+    eval: full
+    set: {solve.step.digit_policy: sample}
