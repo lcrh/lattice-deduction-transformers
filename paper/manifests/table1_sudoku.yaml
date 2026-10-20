@@ -16,6 +16,14 @@ entries:
   - name: steps4k
     label: "LDT, 4K steps"
     eval: full
+  # 8K rows: trained separately so their full-split evals can be queued one at a time.
+  - name: steps8k_ckpt
+    train_only: true
+    set: {train.steps: 8000}
+  - name: steps8k
+    label: "LDT, 8K steps"
+    eval_of: steps8k_ckpt
+    eval: full
   # The same rows without per-step augmentation in training (kept at
   # evaluation): reported alongside, as phase 1 left it undecided for Sudoku.
   - name: steps1k_train_noaug
@@ -28,6 +36,13 @@ entries:
     label: "LDT, 4K steps, no per-step aug. in training"
     eval: full
     set: {train.step.augment: false}
+  - name: steps8k_train_noaug_ckpt
+    train_only: true
+    set: {train.steps: 8000, train.step.augment: false}
+  - name: steps8k_train_noaug
+    label: "LDT, 8K steps, no per-step aug. in training"
+    eval_of: steps8k_train_noaug_ckpt
+    eval: full
   - name: noaug4k
     label: "LDT, 4K steps, no augmentation"
     set:
