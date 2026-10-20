@@ -91,3 +91,9 @@ entries:
     label: "LDT, full train split, no train aug., 8K steps"
     eval_of: fullsplit_noaug_8k_ckpt
     eval: full
+  # 1,000 puzzles with no data or per-step augmentation in training, but
+  # per-step augmentation at evaluation.
+  - name: noaug4k_evalaug
+    label: "LDT, 4K steps, no train aug., per-step aug. at eval"
+    eval_of: noaug4k
+    set: {solve.step.augment: true}
