@@ -10,8 +10,8 @@ entries:
   - name: k512
     label: "LDT, K=512"
     config: configs/maze/paper_k512.yaml
-  # The paper's runs evaluated at theta_elim = 0.5 (the default above); its text
-  # implies 0.1, so the same checkpoints are also evaluated at 0.1.
+  # The original evals appear to have used theta_elim = 0.5 (the default above),
+  # while the paper text implies 0.1; evaluate the same checkpoints at both.
   - name: k1_elim0p1
     label: "LDT, K=1, theta_elim 0.1 at eval"
     eval_of: k1
