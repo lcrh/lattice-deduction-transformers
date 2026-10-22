@@ -437,9 +437,10 @@ def train_run(train_cfg: dict, resume: bool = False) -> dict[str, Any]:
 @app.local_entrypoint()
 def evaluate(run_dir: str = DEFAULT_RUN, checkpoint: str = "", every_epochs: int = 2,
              n_eval: int = 200, samples_per_puzzle: int = 32, seed: int = 0,
-             out: str = ""):
+             batch_puzzles: int = 4, out: str = ""):
     """Evaluate an existing run's checkpoints (all even epochs, or one)."""
-    cfg = EvalConfig(n_eval=n_eval, samples_per_puzzle=samples_per_puzzle, seed=seed)
+    cfg = EvalConfig(n_eval=n_eval, samples_per_puzzle=samples_per_puzzle, seed=seed,
+                     batch_puzzles=batch_puzzles)
     summaries = evaluate_run.remote(run_dir, asdict(cfg),
                                     [checkpoint] if checkpoint else None, every_epochs)
     _print_summaries(summaries, samples_per_puzzle)
