@@ -3,7 +3,9 @@
 # train set (`holdout` preset) to choose a portfolio recipe offline
 # (`python -m paper.portfolio simulate`).
 #   same_data  the same 1,000 training puzzles (data seed 42), training seeds
-#              0-12; seeds 0-2 are Table 1's steps4k_train_noaug checkpoints
+#              0-14; seeds 0-2 are Table 1's steps4k_train_noaug checkpoints
+#   same_data_test  the same models on every test puzzle (1,000 rounds), for
+#              three non-overlapping 5-model portfolios (seeds 0-4, 5-9, 10-14)
 #   diff_data  a different 1,000-puzzle training set per model (data seeds
 #              43-52; random 1,000-puzzle draws from 3.8M barely overlap)
 exp_id: X1
@@ -13,7 +15,10 @@ eval: holdout
 set: {train.step.augment: false}
 entries:
   - name: same_data
-    seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+  - name: same_data_test
+    eval_of: same_data
+    eval: full
   - name: diff_data
     seeds: [0]
     sweep: {data.seed: [43, 44, 45, 46, 47, 48, 49, 50, 51, 52]}
