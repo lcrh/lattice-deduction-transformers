@@ -14,7 +14,7 @@ from an existing checkpoint, evaluated with the scripts here.
   ordering (`lattice_diffusion.eval.indices`), so baselines and LDT see the
   same puzzles in the same order.
   - HRM/TRM: N = 10,000 by default; exact match; Clopper–Pearson 95% interval.
-  - Qwen: N = 200 × 32 samples by default; unbiased pass@k.
+  - Qwen: N = 256 × 32 samples by default; unbiased pass@k.
   - Their accuracy is far from 100%, so there is no sequential stopping.
 - **Maze-Hard:** the whole 1,000-puzzle test set, exact and lenient
   (any optimal path).

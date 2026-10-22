@@ -1,6 +1,6 @@
 # Appendix I: Qwen3.5-0.8B fine-tuned on the same task (existing runs, eval
 # only; baselines/qwen_sft). Each run is evaluated at every second epoch on
-# the first 200 puzzles of sudoku_test_perm (natural) or their K-blank
+# the first 256 puzzles of sudoku_test_perm (natural) or their K-blank
 # versions, 32 samples per puzzle, pass@k.
 exp_id: B4
 benchmark: baselines
