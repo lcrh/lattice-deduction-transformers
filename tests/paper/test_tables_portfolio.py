@@ -1,7 +1,6 @@
-"""Tables (paired deltas), portfolio math and compute formulas on synthetic rows."""
+"""Tables (paired deltas), portfolio strategies and compute formulas on synthetic rows."""
 
 import json
-import random
 
 import pytest
 
@@ -59,63 +58,65 @@ def test_eval_rule_caption():
         [{"stop_reason": "failures", "n": 1000}, {"stop_reason": "failures", "n": 5000}])
 
 
-def _attempt(model, statuses, eval_seed=0, full=False, idx=None, solutions=None):
-    idx = idx or list(range(len(statuses)))
-    solutions = solutions or [f"ok{i}" if s == "correct" else (f"bad{i}{model}" if s == "wrong"
-                              else "") for i, s in zip(idx, statuses)]
-    rows = {i: {"idx": i, "status": s, "solution": sol}
-            for i, s, sol in zip(idx, statuses, solutions)}
-    return portfolio.Attempt(model=model, eval_seed=eval_seed, full=full, rows=rows)
+def _rows(spec):
+    """Rows from (status, rounds, solution) per puzzle; calls = rounds + 1."""
+    return [{"idx": i, "status": st, "rounds": rd, "calls": rd + 1, "solution": sol}
+            for i, (st, rd, sol) in enumerate(spec)]
 
 
-def test_portfolio_residue_and_selection():
-    # 10 puzzles; anchor 0 fails {2, 5, 7}; anchor 1 fails {5}.
-    a0 = _attempt(0, ["correct"] * 2 + ["timeout"] + ["correct"] * 2 + ["timeout", "correct",
-                                                                         "wrong", "correct",
-                                                                         "correct"], full=True)
-    a1 = _attempt(1, ["correct"] * 5 + ["timeout"] + ["correct"] * 4, full=True)
-    h = portfolio.failure_set([a0, a1])
-    assert h == [2, 5, 7]
-    # Non-anchor model 2 is only run on H: solves 5, wrong on 2, times out on 7.
-    m2 = _attempt(2, ["wrong", "correct", "timeout"], idx=h)
-    assert portfolio.residue_curve([a0, a1, m2]) == [3, 1, 0]
-    assert portfolio.residue_curve([a1, m2]) == [1, 0]
-    with pytest.raises(ValueError):
-        portfolio.residue_curve([m2, a0])
-    first = portfolio.select([a0, a1, m2], h, "first")
-    # 2: a0 timeout, a1 correct -> correct; 5: a0, a1 timeout, m2 correct;
-    # 7: a0 wrong first -> wrong.
-    assert first == {"correct": 2, "wrong": 1}
-    major = portfolio.select([a0, a1, m2], h, "majority")
-    # 2: a1 correct vs m2 wrong -> tie -> abstain; 7: a0 wrong vs a1 correct -> tie.
-    assert major == {"unsolved": 2, "correct": 1}
-    probs = portfolio.solve_probability([a0, a1, m2], h)
-    assert probs[5] == (1, 3)
+def _evals():
+    # 4 puzzles, 3 models. Puzzle 3 is hard: model a times out, b answers wrong
+    # (round 30), c solves it late (round 40).
+    ok = lambda r: ("correct", r, "good")  # noqa: E731
+    return portfolio.build_evals({
+        "same_data/seed0": _rows([ok(0), ok(3), ok(12), ("timeout", 1000, "")]),
+        "same_data/seed1": _rows([ok(0), ok(8), ok(2), ("wrong", 30, "bad")]),
+        "diff_data_43/seed0": _rows([ok(1), ok(2), ok(4), ok(40)]),
+    })
 
 
-def test_portfolio_attempts_curve_and_analyze():
-    full = ["correct"] * 8 + ["timeout", "timeout"]
-    a0 = _attempt(0, full, full=True)
-    a0_e1 = _attempt(0, ["correct", "timeout"], eval_seed=1, idx=[8, 9])
-    a0_e2 = _attempt(0, ["timeout", "correct"], eval_seed=2, idx=[8, 9])
-    m1 = _attempt(1, ["timeout", "timeout"], idx=[8, 9])
-    m2 = _attempt(2, ["correct", "correct"], idx=[8, 9])
-    assert portfolio.attempts_curve([a0, a0_e1, a0_e2]) == [2, 1, 0]
-    result = portfolio.analyze([a0, a0_e1, a0_e2, m1, m2], n_total=10, n_orders=50, n_boot=20)
-    assert result["failure_set_size"] == 2
-    assert result["residue_natural_order"] == [2, 2, 0]
-    assert result["smallest_k"] == 3
-    assert result["residue_mean"][0] == 2 and result["residue_mean"][-1] == 0
-    assert result["attempts_curve"] == [2, 1, 0]
-    lo, hi = result["residue_ci95"]
-    assert all(l <= h for l, h in zip(lo, hi))
+def test_portfolio_prefilter_and_resolution_rules():
+    ev = _evals()
+    a, b, c = 1, 2, 0       # build_evals sorts names: diff_data_43, same_data/seed0, seed1
+    assert ev.names[c] == "diff_data_43/seed0"
+    S = portfolio.Strategy
+    # One model, full budget: b answers every puzzle, one of them wrong.
+    one = portfolio.run_strategy(ev, [b], S(m=1, p=0, budget=1000, rule="first"))
+    assert (one.correct, one.wrong, one.unresolved) == (3, 1, 0)
+    assert one.calls == 1 + 9 + 3 + 31
+    # Prefilter a at R=5 accepts puzzles 0 and 1; b then answers 2 right, 3 wrong.
+    out = portfolio.run_strategy(ev, [a, b], S(m=2, p=1, budget=5, rule="first"))
+    assert (out.correct, out.wrong, out.unresolved) == (3, 1, 0)
+    assert out.calls == (1 + 4 + 6 + 6) + (3 + 31)     # prefilter min(calls, R+1), then b
+    # Two prefilter models must agree: a and c agree on 0 and 1 within R=5;
+    # puzzle 2 (a needs 12 rounds) and 3 fall to b.
+    out = portfolio.run_strategy(ev, [a, c, b], S(m=3, p=2, budget=5, rule="first"))
+    assert (out.correct, out.wrong) == (3, 1)
+    # Majority over b and c on puzzle 3 is a 1-1 tie -> unresolved, no wrong answer.
+    out = portfolio.run_strategy(ev, [a, b, c], S(m=3, p=1, budget=5, rule="majority"))
+    assert (out.correct, out.wrong, out.unresolved) == (3, 0, 1)
+    # Two agreeing answers needed: puzzle 3 never gets them.
+    out = portfolio.run_strategy(ev, [a, b, c], S(m=3, p=0, budget=1000, rule="agree2"))
+    assert (out.correct, out.wrong, out.unresolved) == (3, 0, 1)
 
 
-def test_random_orders_start_with_an_anchor():
-    firsts = {0: _attempt(0, ["correct"], full=True), 1: _attempt(1, ["correct"]),
-              2: _attempt(2, ["correct"])}
-    for order in portfolio.random_orders(firsts, 20, random.Random(0)):
-        assert order[0].full and sorted(a.model for a in order) == [0, 1, 2]
+def test_resolve_handles_colliding_wrong_answers():
+    import numpy as np
+    ans = np.array([[5, 0], [5, 0], [0, 5]])     # puzzle 0: two identical wrong votes
+    calls = np.ones_like(ans)
+    chosen, spent = portfolio._resolve(ans, calls, "majority")
+    assert chosen.tolist() == [5, 0]
+    chosen, spent = portfolio._resolve(ans, calls, "agree2")
+    assert chosen.tolist() == [5, 0] and spent.tolist() == [2, 2]
+
+
+def test_simulate_reports_every_strategy():
+    ev = _evals()
+    rows = portfolio.simulate(ev, {"all": [0, 1, 2]}, draws=5, max_m=3)
+    assert {r["m"] for r in rows} == {1, 2, 3}
+    best = [r for r in rows if r["m"] == 3 and r["p"] == 0 and r["rule"] == "agree2"][0]
+    assert best["wrong_max"] == 0 and best["unresolved_mean"] == 1
+    assert "0 wrong in every draw" in portfolio.summary_text(rows)
 
 
 def test_baseline_flops_follow_the_upstream_layers():
@@ -149,17 +150,10 @@ def test_figures_and_main_tables_render(tmp_path):
     baseline = {"label": "TRM", "result": {"n": 10000, "exact_accuracy": 0.79, "wrong": 2100,
                                            "exact_accuracy_ci": [0.78, 0.80],
                                            "gpu_seconds": 50.0}}
-    portfolio_json = {"smallest_k": 2, "n_models": 3, "n_total": 1000,
-                      "residue_natural_order": [5, 0, 0],
-                      "selection": {"first": [{}, {"correct": 4, "wrong": 1}, {}],
-                                    "majority": [{}, {"correct": 3, "unsolved": 2}, {}]}}
     missing = dict(records[0], key="A1/steps_500/seed2", seed=2, status="not started", n=None)
-    tex = table1_sudoku.build(records + [missing], [baseline], portfolio_json).to_latex()
+    tex = table1_sudoku.build(records + [missing], [baseline]).to_latex()
     assert "TRM & -- & 10,000 & 79.0 [78.0, 80.0] & 2,100/10,000" in tex
     assert "steps\\_500 & 2/3 &" in tex                        # a seed is missing
-    assert "LDT portfolio, 2 models, oracle & -- & 1,000 & 100.000 & -- & 0" in tex
-    assert "first answer & -- & 1,000 & 99.900 & 1/1,000" in tex
-    assert "majority vote & -- & 1,000 & 99.800 & 0/1,000" in tex
 
     maze = [dict(r, label="LDT, K=1") for r in records if r["entry"] == "steps_500"]
     sweep = [{"step": 10, "n": 1000, "exact": 700, "lenient": 800},

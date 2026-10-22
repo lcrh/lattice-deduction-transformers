@@ -7,11 +7,16 @@ Snowflake splits are only sized once the data is generated, so their lists
 start unpinned: the caller supplies the split size, and each run directory
 records the digest it used, so a regenerated dataset is caught on resume.
 `experiments/snowflake/gen_data.py` prints the values to pin.
+
+A list can exclude indices before permuting (`exclude`): `sudoku_holdout`
+draws from train-split puzzles that no portfolio model trained on (the
+1,000-puzzle pools for data seeds 42-52) and that are not in `sudoku_val`.
 """
 
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -25,10 +30,24 @@ class IndexListSpec:
     seed: int
     length: int | None      # None = full permutation
     sha256: str | None      # None = unpinned
+    exclude: Callable[[int], np.ndarray] | None = None   # split size -> indices to leave out
 
     @property
     def pinned(self) -> bool:
         return self.split_size is not None
+
+
+PORTFOLIO_DATA_SEEDS = tuple(range(42, 53))
+
+
+def sudoku_training_puzzles(n_total: int) -> np.ndarray:
+    """sudoku_val plus the 1,000-puzzle training pools for the portfolio's data seeds."""
+    from lattice_diffusion.data.sudoku_extreme import SudokuExtremeConfig, select_pool
+
+    val = load("sudoku_val", split_size=n_total).indices
+    pools = [select_pool(n_total, SudokuExtremeConfig(n_puzzles=1000, seed=seed))[0]
+             for seed in PORTFOLIO_DATA_SEEDS]
+    return np.unique(np.concatenate([val, *pools]))
 
 
 SPECS: dict[str, IndexListSpec] = {
@@ -43,6 +62,12 @@ SPECS: dict[str, IndexListSpec] = {
         task="sudoku", split="train", split_size=3_831_994, seed=20261016,
         length=10_000,
         sha256="c46dc1bb61b30cfdaf0df93da5ba75b388741f8968647a498bb8ad0f2ede32ad",
+    ),
+    # Train-split puzzles no portfolio model saw; for choosing the portfolio recipe.
+    "sudoku_holdout": IndexListSpec(
+        task="sudoku", split="train", split_size=3_831_994, seed=20261022,
+        length=100_000, exclude=sudoku_training_puzzles,
+        sha256="4b557d8529f206d9d2cd731e3a8424ffdbba79f6f5ff15eadd357b3278fdd3e9",
     ),
     "maze_test": IndexListSpec(
         task="maze", split="test", split_size=1_000, seed=20261017,
@@ -87,7 +112,10 @@ def digest(indices: np.ndarray) -> str:
 def generate(spec: IndexListSpec, split_size: int | None = None) -> np.ndarray:
     """Indices for `spec`; `split_size` is used only when the spec is unpinned."""
     n = spec.split_size if spec.pinned else split_size
-    perm = np.random.default_rng(spec.seed).permutation(n).astype(np.int64)
+    pool = np.arange(n, dtype=np.int64)
+    if spec.exclude is not None:
+        pool = np.setdiff1d(pool, spec.exclude(n), assume_unique=True)
+    perm = pool[np.random.default_rng(spec.seed).permutation(len(pool))]
     return perm if spec.length is None else perm[:spec.length]
 
 

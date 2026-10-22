@@ -36,10 +36,11 @@ def test_shared_configs_share_checkpoints():
     fig2 = _by_key(_runs("fig2_sudoku_compute"))
     for s in (0, 1, 2):
         ckpt = t1[f"M1/steps4k/seed{s}"].checkpoint
-        assert port[f"X1/anchor/seed{s}"].checkpoint == ckpt
         assert fig2[f"M2/steps_4000/seed{s}"].checkpoint == ckpt
-        # Same eval spec too, so the full-split blocks are shared.
-        assert port[f"X1/anchor/seed{s}"].run_dir == t1[f"M1/steps4k/seed{s}"].run_dir
+        noaug = t1[f"M1/steps4k_train_noaug/seed{s}"]
+        assert port[f"X1/same_data/seed{s}"].checkpoint == noaug.checkpoint
+        assert port[f"X1/same_data/seed{s}"].spec.index_list == "sudoku_holdout"
+    assert port["X1/diff_data_43/seed0"].checkpoint != port["X1/same_data/seed0"].checkpoint
     assert t1["M1/steps1k/seed0"].checkpoint != t1["M1/steps1k/seed1"].checkpoint
 
 
@@ -214,15 +215,14 @@ def test_status_of_each_run_state():
 
 
 def test_plan_trains_missing_runs_and_evaluates_existing_checkpoints():
-    runs = _runs("portfolio")
+    runs = _runs("table1_sudoku")
     states = {r.key: "not started" for r in runs}
     plan = {p.run.key: (p.cmd, p.reason) for p in launch.plan_launches(runs, states)}
-    cmd, _ = plan["X1/anchor/seed0"]
+    cmd, _ = plan["M1/steps4k/seed0"]
     assert cmd[:6] == ["uv", "run", "modal", "run", "--detach", "-n"]
     assert "experiments/sudoku/run.py" in cmd and "--no-wait" in cmd
     assert "--no-evaluate" not in cmd
-    assert "--no-evaluate" in plan["X1/models/seed7"][0]
-    assert plan["X1/rerun_models/seed7"][0] is None          # no failure set yet
+    assert "--no-evaluate" in plan["M1/steps8k_ckpt/seed1"][0]     # train-only entry
     # A checkpoint that exists is only evaluated.
     t1 = _runs("table1_sudoku")
     states = {r.key: "trained" for r in t1}
@@ -230,16 +230,6 @@ def test_plan_trains_missing_runs_and_evaluates_existing_checkpoints():
     cmd, why = planned.cmd, planned.reason
     assert "experiments/evaluate.py" in cmd and why == "evaluate existing checkpoint"
     assert cmd[cmd.index("--checkpoint") + 1].startswith("/checkpoints/sudoku/")
-
-
-def test_rerun_entries_resolve_once_the_failure_set_exists(monkeypatch):
-    monkeypatch.setattr(manifest, "_read_indices", lambda path: [5, 17])
-    runs = _by_key(_runs("portfolio"))
-    rerun = runs["X1/rerun_models/seed5/eval2"]
-    assert rerun.spec.explicit_indices == [5, 17] and rerun.spec.eval_seed == 2
-    assert rerun.checkpoint == runs["X1/models/seed5"].checkpoint
-    cmd = launch.eval_command(rerun)
-    assert cmd[cmd.index("--indices-file") + 1] == "paper/results/portfolio_failures.txt"
 
 
 # --- collect -----------------------------------------------------------------

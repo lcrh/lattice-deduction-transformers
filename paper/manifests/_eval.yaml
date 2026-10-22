@@ -29,6 +29,11 @@ presets:
   select:
     eval.index_list: sudoku_val
     eval.stop: select
+  # 100,000 held-out train puzzles that no portfolio model trained on, every
+  # puzzle at the full round budget. Choosing the portfolio recipe only.
+  holdout:
+    eval.index_list: sudoku_holdout
+    eval.stop: full
   # An explicit puzzle list (entry `indices_file`), every puzzle.
   explicit:
     eval.stop: full

@@ -78,8 +78,6 @@ class TableHints(TypedDict, total=False):
     caption: str
     maze_step: int | Literal["best", "last"]    # which baseline checkpoint to report
     histogram_x: int            # Figure 2: training steps of the histogram panel
-    anchors: str                # portfolio: entry holding the full-split anchors
-    reruns: list[str]           # portfolio: failure-set rerun entries
 
 
 def volume_path(path: str | Path) -> str:

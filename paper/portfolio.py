@@ -1,260 +1,258 @@
-"""Portfolio analysis: how many independently trained models it takes to solve every test puzzle.
+"""Portfolio strategies, simulated from per-model evals on the held-out set.
 
-Inputs (paper/results/portfolio.csv with --rows, from `paper.launch collect`):
-anchor models evaluated on the whole test split, and reruns of every model
-(independent eval seeds = extra attempts) on the anchors' failure set H.
+Every portfolio model is evaluated once on `sudoku_holdout` at the full
+round budget (manifest `portfolio`). A row records whether the model solved
+the puzzle, in which round, its answer and its model calls, so any shorter
+budget R can be read off the same eval: a model "answers within R" if it did
+not time out and solved by round R. Cost under a budget R is approximated as
+min(calls, R + 1) model calls (one call per round plus the initial deduction).
 
-A puzzle's outcome depends only on its own chains, so for any portfolio that
-starts with an anchor, the portfolio's unsolved set is the intersection of
-its members' failure sets, all of which lie inside the first anchor's
-failure set (a subset of H). Everything below is exact under that rule.
+A strategy runs a random order of m distinct models from a pool:
+  1. Prefilter: the first p models at budget R. If all p answer and agree,
+     that answer is accepted. p = 0 skips the prefilter.
+  2. Otherwise ("don't know"), the remaining m - p models resolve the puzzle
+     at the full budget with a rule: `first` (first answer in order),
+     `majority` (most frequent answer among all remaining models; ties stay
+     unresolved), or `agree<k>` (run models in order until one answer has k
+     votes).
+Bootstrap: B random orders per (pool, m), the same orders for every strategy.
 
-    uv run python -m paper.portfolio extract-failures   # writes H for the rerun entries
-    uv run python -m paper.portfolio analyze   # paper/out/portfolio.json, portfolio_residue.pdf
+    uv run python -m paper.launch collect portfolio --rows
+    uv run python -m paper.portfolio simulate [--draws 100] [--out paper/out/portfolio_sim.csv]
 """
 
 from __future__ import annotations
 
 import argparse
-import json
-import random
-from collections import Counter
-from dataclasses import dataclass
+import csv
+import itertools
+import zlib
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
 
-from paper.manifest import REPO, table_hints
-from paper.tables.common import OUT, RESULTS, done, load_rows, pdf_bytes, read_results, write_output
+import numpy as np
 
-FAILURES_FILE = RESULTS / "portfolio_failures.txt"
+from lattice_diffusion.eval.stats import binomial_upper
+
+from paper.manifest import REPO
+from paper.tables.common import OUT, RESULTS, done, load_rows, read_results
+
+TIMEOUT = -1        # answer id of a timeout; 0 = the correct answer; > 0 = a wrong answer
+ROUND_BUDGETS = (1, 2, 5, 10, 20, 50, 100, 1000)
+RULES = ("first", "majority", "agree2", "agree3")
 
 
 @dataclass
-class Attempt:
-    """One eval of one model: its rows by dataset index."""
+class Evals:
+    """Per-model outcomes on a common set of puzzles, as [model, puzzle] arrays."""
 
-    model: int                  # training seed
-    eval_seed: int
-    full: bool                  # covers the whole split (anchor eval)
-    rows: dict[int, dict]       # idx -> row
+    names: list[str]          # one per model, e.g. "same_data/seed3"
+    answer: np.ndarray        # answer id (see TIMEOUT)
+    rounds: np.ndarray        # round solved in (timeouts: the budget)
+    calls: np.ndarray         # model calls spent on the puzzle
 
-    def failures(self) -> set[int]:
-        return {i for i, r in self.rows.items() if r["status"] != "correct"}
-
-    def status(self, idx: int) -> str:
-        if idx not in self.rows:
-            raise KeyError(f"model {self.model} eval_seed {self.eval_seed} has no row for {idx}; "
-                           f"reruns must cover the failure set")
-        return self.rows[idx]["status"]
+    def pool(self, prefix: str) -> list[int]:
+        return [i for i, n in enumerate(self.names) if n.startswith(prefix)]
 
 
-def failure_set(anchors: list[Attempt]) -> list[int]:
-    """H: puzzles any anchor failed (wrong or timeout)."""
-    return sorted(set().union(*(a.failures() for a in anchors)))
+def answer_id(row: dict) -> int:
+    """0 for a correct answer, a positive id per distinct wrong answer, TIMEOUT otherwise."""
+    if row["status"] == "correct":
+        return 0
+    if row["status"] == "timeout":
+        return TIMEOUT
+    return 1 + zlib.crc32(row["solution"].encode()) % (2**30)
 
 
-def _attempt_order(a: Attempt) -> tuple[bool, int]:
-    """Full (anchor) evals first, then by eval seed."""
-    return not a.full, a.eval_seed
+def build_evals(models: dict[str, list[dict]]) -> Evals:
+    """Stack each model's rows on the puzzles every model evaluated."""
+    common = sorted(set.intersection(*(set(r["idx"] for r in rows) for rows in models.values())))
+    names = sorted(models)
+    answer = np.empty((len(names), len(common)), dtype=np.int64)
+    rounds = np.empty_like(answer)
+    calls = np.empty_like(answer)
+    for m, name in enumerate(names):
+        by_idx = {r["idx"]: r for r in models[name]}
+        for j, idx in enumerate(common):
+            r = by_idx[idx]
+            answer[m, j], rounds[m, j], calls[m, j] = answer_id(r), r["rounds"], r["calls"]
+    return Evals(names, answer, rounds, calls)
 
 
-def first_attempts(attempts: list[Attempt]) -> dict[int, Attempt]:
-    """Each model's first attempt: the full eval for anchors, else eval seed 0."""
-    out: dict[int, Attempt] = {}
-    for a in sorted(attempts, key=_attempt_order):
-        out.setdefault(a.model, a)
-    return out
+@dataclass(frozen=True)
+class Strategy:
+    m: int              # models in the portfolio
+    p: int              # prefilter models (0 = no prefilter)
+    budget: int         # prefilter round budget R
+    rule: str           # resolution rule for don't-know puzzles
 
 
-def residue_curve(order: list[Attempt]) -> list[int]:
-    """Unsolved puzzles after each prefix of `order` (order[0] must be full)."""
-    if not order[0].full:
-        raise ValueError("a portfolio must start with an anchor (full-split) attempt")
-    unsolved = order[0].failures()
-    sizes = [len(unsolved)]
-    for a in order[1:]:
-        unsolved = {i for i in unsolved if a.status(i) != "correct"}
-        sizes.append(len(unsolved))
-    return sizes
+@dataclass
+class Outcome:
+    correct: int
+    wrong: int
+    unresolved: int
+    calls: float        # total model calls
 
 
-def random_orders(firsts: dict[int, Attempt], n_orders: int, rng: random.Random
-                  ) -> list[list[Attempt]]:
-    anchors = [a for a in firsts.values() if a.full]
-    out = []
-    for _ in range(n_orders):
-        head = rng.choice(anchors)
-        rest = [a for m, a in firsts.items() if m != head.model]
-        rng.shuffle(rest)
-        out.append([head, *rest])
-    return out
+def _resolve_one(ans: np.ndarray, calls: np.ndarray, rule: str) -> tuple[int, float]:
+    """`_resolve` for one puzzle column, exactly (used where wrong answers can collide)."""
+    if rule == "majority":
+        votes = ans[ans != TIMEOUT]
+        vals, counts = np.unique(votes, return_counts=True)
+        if votes.size and (counts == counts.max()).sum() == 1:
+            return int(vals[counts.argmax()]), float(calls.sum())
+        return TIMEOUT, float(calls.sum())
+    k = int(rule.removeprefix("agree"))
+    seen: dict[int, int] = {}
+    for i, a in enumerate(ans.tolist()):
+        if a != TIMEOUT:
+            seen[a] = seen.get(a, 0) + 1
+            if seen[a] == k:
+                return a, float(calls[: i + 1].sum())
+    return TIMEOUT, float(calls.sum())
 
 
-def mean_curve(curves: list[list[int]]) -> list[float]:
-    return [sum(c[k] for c in curves) / len(curves) for k in range(len(curves[0]))]
+def _resolve(ans: np.ndarray, calls: np.ndarray, rule: str) -> tuple[np.ndarray, np.ndarray]:
+    """Chosen answer (TIMEOUT = unresolved) and calls spent, per puzzle column.
 
-
-def bootstrap_curve(firsts: dict[int, Attempt], n_boot: int, n_orders: int,
-                    rng: random.Random) -> tuple[list[float], list[float]]:
-    """95% bootstrap band of the mean residue curve (models resampled; first member an anchor)."""
-    models = list(firsts.values())
-    anchors = [a for a in models if a.full]
-    n = len(models)
-    boots = []
-    for _ in range(n_boot):
-        curves = []
-        for _ in range(n_orders):
-            order = [rng.choice(anchors)] + [rng.choice(models) for _ in range(n - 1)]
-            curves.append(residue_curve(order))
-        boots.append(mean_curve(curves))
-    lo, hi = [], []
-    for k in range(n):
-        vals = sorted(b[k] for b in boots)
-        lo.append(vals[int(0.025 * (len(vals) - 1))])
-        hi.append(vals[int(0.975 * (len(vals) - 1))])
-    return lo, hi
-
-
-def attempts_curve(attempts: list[Attempt]) -> list[float]:
-    """Residue after k eval seeds of one anchor model, averaged over anchors (vs. k models)."""
-    curves = []
-    for model in sorted({a.model for a in attempts if a.full}):
-        own = sorted((a for a in attempts if a.model == model), key=_attempt_order)
-        curves.append(residue_curve(own))
-    k = min(len(c) for c in curves)
-    return mean_curve([c[:k] for c in curves])
-
-
-def select(order: list[Attempt], h: list[int], rule: Literal["first", "majority"]) -> Counter:
-    """Outcomes over H of a selection rule that needs no ground truth.
-
-    `first` takes the first non-timeout answer in portfolio order; `majority`
-    the most frequent one, abstaining on ties. Puzzles outside H count as
-    correct (the anchor solved them; other members were not run there).
+    Vectorized for the common case of at most one wrong vote per puzzle;
+    puzzles with two or more wrong votes are resolved exactly one by one.
     """
-    counts: Counter = Counter()
-    for i in h:
-        answers = [(a.rows[i]["solution"], a.rows[i]["status"]) for a in order
-                   if a.status(i) != "timeout"]
-        if not answers:
-            counts["unsolved"] += 1
-            continue
-        if rule == "first":
-            counts[answers[0][1]] += 1
-            continue
-        votes = Counter(sol for sol, _ in answers).most_common()
-        if len(votes) > 1 and votes[0][1] == votes[1][1]:
-            counts["unsolved"] += 1
-        else:
-            counts[next(st for sol, st in answers if sol == votes[0][0])] += 1
-    return counts
+    n_models, n = ans.shape
+    cols = np.arange(n)
+    cum_calls = np.cumsum(calls, axis=0)
+    if rule == "first":
+        answered = ans != TIMEOUT
+        has = answered.any(axis=0)
+        pos = np.where(has, answered.argmax(axis=0), n_models - 1)
+        return np.where(has, ans[pos, cols], TIMEOUT), cum_calls[pos, cols].astype(float)
+    right = (ans == 0).sum(axis=0)
+    wrong_votes = ans > 0
+    n_wrong = wrong_votes.sum(axis=0)
+    some_wrong = ans[wrong_votes.argmax(axis=0), cols]      # the wrong answer, if exactly one
+    spent = cum_calls[-1].astype(float)
+    if rule == "majority":
+        chosen = np.where(right > n_wrong, 0, np.where(n_wrong > right, some_wrong, TIMEOUT))
+    else:
+        k = int(rule.removeprefix("agree"))
+        reached = right >= k
+        pos = np.argmax(np.cumsum(ans == 0, axis=0) >= k, axis=0)
+        chosen = np.where(reached, 0, TIMEOUT)
+        spent = np.where(reached, cum_calls[pos, cols], spent).astype(float)
+    for j in np.flatnonzero(n_wrong >= 2):
+        chosen[j], spent[j] = _resolve_one(ans[:, j], calls[:, j], rule)
+    return chosen, spent
 
 
-def solve_probability(attempts: list[Attempt], h: list[int]) -> dict[int, tuple[int, int]]:
-    """idx -> (attempts that solved it, attempts that ran it)."""
-    out = {}
-    for i in h:
-        ran = [a for a in attempts if i in a.rows]
-        out[i] = (sum(a.rows[i]["status"] == "correct" for a in ran), len(ran))
-    return out
+def run_strategy(ev: Evals, order: list[int], s: Strategy) -> Outcome:
+    """Outcome of strategy `s` with models in `order` (len(order) == s.m)."""
+    n = ev.answer.shape[1]
+    final = np.full(n, TIMEOUT)
+    total_calls = 0.0
+    unknown = np.ones(n, dtype=bool)
+    if s.p:
+        pre = order[: s.p]
+        ans = np.where(ev.rounds[pre] <= s.budget, ev.answer[pre], TIMEOUT)
+        total_calls += np.minimum(ev.calls[pre], s.budget + 1).sum()
+        agree = (ans[0] != TIMEOUT) & (ans == ans[0]).all(axis=0)
+        final[agree] = ans[0, agree]
+        unknown = ~agree
+    rest = order[s.p:]
+    if rest and unknown.any():
+        cols = np.flatnonzero(unknown)
+        chosen, spent = _resolve(ev.answer[np.ix_(rest, cols)], ev.calls[np.ix_(rest, cols)],
+                                 s.rule)
+        final[cols] = chosen
+        total_calls += spent.sum()
+    return Outcome(correct=int((final == 0).sum()), wrong=int((final > 0).sum()),
+                   unresolved=int((final == TIMEOUT).sum()), calls=float(total_calls))
 
 
-def analyze(attempts: list[Attempt], n_total: int, n_orders: int = 200, n_boot: int = 200,
-            seed: int = 0) -> dict:
-    rng = random.Random(seed)
-    anchors = [a for a in attempts if a.full]
-    h = failure_set(anchors)
-    firsts = first_attempts(attempts)
-    orders = random_orders(firsts, n_orders, rng)
-    curves = [residue_curve(o) for o in orders]
-    natural = sorted(firsts.values(), key=lambda a: (not a.full, a.model))
-    natural_curve = residue_curve(natural)
-    zero_frac = [sum(c[k] == 0 for c in curves) / len(curves) for k in range(len(natural))]
-    lo, hi = bootstrap_curve(firsts, n_boot, max(1, n_orders // 10), rng)
-    probs = solve_probability(attempts, h)
-    hardest = sorted(probs.items(), key=lambda kv: kv[1][0] / max(kv[1][1], 1))[:20]
-    return {
-        "n_total": n_total,
-        "n_models": len(firsts),
-        "n_anchors": len(anchors),
-        "failure_set_size": len(h),
-        "residue_mean": mean_curve(curves),
-        "residue_ci95": [lo, hi],
-        "residue_natural_order": natural_curve,
-        "fraction_of_orders_at_zero": zero_frac,
-        "smallest_k": next((k + 1 for k, r in enumerate(natural_curve) if r == 0), None),
-        "attempts_curve": attempts_curve(attempts),
-        "selection": {rule: [dict(select(natural[:k], h, rule)) for k in range(1, len(natural) + 1)]
-                      for rule in ("first", "majority")},
-        "hardest": [{"idx": i, "solved": s, "attempts": n} for i, (s, n) in hardest],
-    }
-
-
-def plot(result: dict) -> bytes:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt     # noqa: E402
-
-    k = list(range(1, len(result["residue_mean"]) + 1))
-    fig, ax = plt.subplots(figsize=(4.2, 3))
-    ax.plot(k, result["residue_mean"], marker="o", ms=3, color="0.2", label="k models x 1 attempt")
-    ax.fill_between(k, *result["residue_ci95"], alpha=0.2, color="0.2")
-    att = result["attempts_curve"]
-    ax.plot(range(1, len(att) + 1), att, marker="s", ms=3, ls="--", label="1 model x k attempts")
-    ax.set_yscale("symlog", linthresh=1)
-    ax.set_xlabel("Portfolio size k")
-    ax.set_ylabel("Unsolved test puzzles")
-    ax.legend(frameon=False, fontsize=8)
-    fig.tight_layout()
-    return pdf_bytes(fig)
-
-
-def load_attempts(records: list[dict], anchors_entry: str, rerun_entries: list[str],
-                  root: Path = REPO) -> list[Attempt]:
+def strategies(max_m: int) -> list[Strategy]:
     out = []
-    for rec in done(records):
-        if rec["entry"] not in (anchors_entry, *rerun_entries):
+    for m, p in itertools.product(range(1, max_m + 1), range(0, 4)):
+        if p > m:
             continue
-        rows = {r["idx"]: r for r in load_rows(rec, root)}
-        out.append(Attempt(model=rec["seed"], eval_seed=rec["eval_seed"] or 0,
-                           full=rec["entry"] == anchors_entry, rows=rows))
+        budgets = ROUND_BUDGETS if p else (1000,)
+        rules = RULES if p < m else ("first",)
+        out += [Strategy(m, p, b, r) for b in budgets for r in rules]
     return out
+
+
+def simulate(ev: Evals, pools: dict[str, list[int]], draws: int, max_m: int,
+             seed: int = 0) -> list[dict]:
+    """Bootstrap every strategy on every pool; one summary row per (pool, strategy)."""
+    rng = np.random.default_rng(seed)
+    n = ev.answer.shape[1]
+    out = []
+    for pool_name, pool in pools.items():
+        orders = [list(rng.permutation(pool)) for _ in range(draws)]
+        for s in strategies(min(max_m, len(pool))):
+            res = [run_strategy(ev, o[: s.m], s) for o in orders]
+            wrong = np.array([r.wrong for r in res])
+            answered = sum(r.correct + r.wrong for r in res)
+            out.append({
+                "pool": pool_name, **asdict(s), "n": n, "draws": draws,
+                "coverage": float(np.mean([(r.correct + r.wrong) / n for r in res])),
+                "wrong_mean": float(wrong.mean()), "wrong_max": int(wrong.max()),
+                # Pooled over draws: draws reuse models, so this is optimistic.
+                "wrong_rate_upper": binomial_upper(int(wrong.sum()), answered) if answered else 1.0,
+                "unresolved_mean": float(np.mean([r.unresolved for r in res])),
+                "calls_per_puzzle": float(np.mean([r.calls / n for r in res])),
+            })
+    return out
+
+
+def load_evals(records: list[dict], root: Path = REPO) -> Evals:
+    models = {f"{r['entry']}/seed{r['seed']}": load_rows(r, root) for r in done(records)}
+    if not models:
+        raise SystemExit("no finished portfolio evals with rows; run "
+                         "`paper.launch collect portfolio --rows` first")
+    return build_evals(models)
+
+
+def summary_text(rows: list[dict], top: int = 12) -> str:
+    """Per pool: strategies with no wrong answer in any draw, by unresolved then calls."""
+    lines = []
+    for pool in sorted({r["pool"] for r in rows}):
+        safe = sorted((r for r in rows if r["pool"] == pool and r["wrong_max"] == 0),
+                      key=lambda r: (r["unresolved_mean"], r["calls_per_puzzle"]))
+        lines.append(f"== {pool}: {len(safe)} strategies with 0 wrong in every draw")
+        lines.append(f"{'m':>3} {'p':>2} {'R':>5} {'rule':>8} {'coverage':>9} "
+                     f"{'unresolved':>10} {'calls/puzzle':>12}")
+        for r in safe[:top]:
+            lines.append(f"{r['m']:>3} {r['p']:>2} {r['budget']:>5} {r['rule']:>8} "
+                         f"{r['coverage']:>9.6f} {r['unresolved_mean']:>10.2f} "
+                         f"{r['calls_per_puzzle']:>12.2f}")
+    return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="paper.portfolio")
-    ap.add_argument("cmd", choices=("extract-failures", "analyze"))
+    ap.add_argument("cmd", choices=("simulate",))
     ap.add_argument("--manifest", default="portfolio")
     ap.add_argument("--results", type=Path, default=RESULTS)
-    ap.add_argument("--out", type=Path, default=FAILURES_FILE)
-    ap.add_argument("--copy-to", type=Path, default=None)
+    ap.add_argument("--draws", type=int, default=100)
+    ap.add_argument("--max-models", type=int, default=13)
+    ap.add_argument("--out", type=Path, default=OUT / "portfolio_sim.csv")
     args = ap.parse_args(argv)
 
-    hints = table_hints(args.manifest)
-    records = read_results(args.manifest, args.results)
-    if args.cmd == "extract-failures":
-        # H must cover every anchor: reruns are only evaluated on it.
-        unfinished = [r["key"] for r in records
-                      if r["entry"] == hints["anchors"] and r not in done(records)]
-        if unfinished:
-            raise SystemExit(f"anchor evals not finished: {', '.join(unfinished)}")
-    attempts = load_attempts(records, hints["anchors"], hints["reruns"])
-    anchors = [a for a in attempts if a.full]
-    if not anchors:
-        raise SystemExit("no finished anchor evals with rows; run `paper.launch collect "
-                         f"{args.manifest} --rows` first")
-    if args.cmd == "extract-failures":
-        h = failure_set(anchors)
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text("".join(f"{i}\n" for i in h))
-        print(f"wrote {len(h)} indices from {len(anchors)} anchors to {args.out}")
-        return
-    result = analyze(attempts, n_total=max(len(a.rows) for a in anchors))
-    write_output("portfolio.json", json.dumps(result, indent=2), OUT, None)
-    path = write_output("portfolio_residue.pdf", plot(result), OUT, args.copy_to)
-    print(f"failure set {result['failure_set_size']}, residue by k (natural order): "
-          f"{result['residue_natural_order']}\nwrote {path}")
+    ev = load_evals(read_results(args.manifest, args.results))
+    # diff_data: one model per training set, including data seed 42 (same_data seed 0).
+    pools = {"same_data": ev.pool("same_data/"),
+             "diff_data": ev.pool("diff_data_") + ev.pool("same_data/seed0"),
+             "mixed": list(range(len(ev.names)))}
+    pools = {k: v for k, v in pools.items() if v}
+    rows = simulate(ev, pools, args.draws, args.max_models)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    with args.out.open("w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    print(summary_text(rows))
+    print(f"wrote {args.out} ({len(rows)} strategies, {ev.answer.shape[1]:,} puzzles, "
+          f"{len(ev.names)} models)")
 
 
 if __name__ == "__main__":
