@@ -47,7 +47,7 @@ land in `baselines/hrm_trm/results/`.
 
 No Sudoku training is done here. The released checkpoints are evaluated on the
 first N puzzles (default 10,000) of LDT's `sudoku_test_perm` ordering
-(`lattice_diffusion.eval.indices`), so baselines and LDT see the same puzzles
+(`ldt.eval.indices`), so baselines and LDT see the same puzzles
 in the same order. Their accuracy is far from 100%, so a fixed subset with a
 binomial interval is enough; no sequential stopping.
 
@@ -65,10 +65,10 @@ Each run:
 - runs upstream inference on one B200 (HRM: its ACT loop; TRM:
   `scripts/run_eval_only.py` with EMA weights and bf16);
 - writes per-puzzle rows (`idx`, `pos`, `status`, `solution`, the
-  `lattice_diffusion/eval/records.py` field names) and a summary to
+  `ldt/eval/records.py` field names) and a summary to
   `eval/baselines/<model>/sudoku_test_perm_n<N>-<hash>/` (hash of the
   checkpoint and batch size) on the
-  `lattice-diffusion-checkpoints` volume;
+  `ldt-checkpoints` volume;
 - writes the summary with a Clopper–Pearson interval and the eval time
   (`gpu_seconds`, single B200) to `baselines/hrm_trm/results/`.
 

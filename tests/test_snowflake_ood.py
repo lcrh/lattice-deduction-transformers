@@ -7,10 +7,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lattice_diffusion import config as cfglib
-from lattice_diffusion.eval import indices as index_lists
-from lattice_diffusion.eval.runner import block_args, resolve_index_list, solve_block
-from lattice_diffusion.eval.tasks import get_task
+from ldt import config as cfglib
+from ldt.eval import indices as index_lists
+from ldt.eval.runner import block_args, resolve_index_list, solve_block
+from ldt.eval.tasks import get_task
 from experiments.registry import experiment_class
 from experiments.snowflake import gen_data
 from experiments.snowflake.data import (

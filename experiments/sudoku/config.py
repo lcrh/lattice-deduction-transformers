@@ -7,9 +7,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from lattice_diffusion.data.sudoku_extreme import SudokuExtremeConfig
-from lattice_diffusion.eval.config import EvalConfig
-from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig
+from ldt.data.sudoku_extreme import SudokuExtremeConfig
+from ldt.eval.config import EvalConfig
+from ldt.models.looped_transformer import LoopedTransformerConfig
 
 from experiments.common import Experiment, check_options
 from experiments.sudoku.dpll import StepConfig

@@ -1,7 +1,7 @@
 import math
 import random
 
-from lattice_diffusion.eval.stats import (
+from ldt.eval.stats import (
     _binomial_cdf, binomial_upper, confidence_sequence, inverse_binomial_rate,
     paired_difference,
 )

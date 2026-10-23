@@ -14,16 +14,16 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, TypedDict
 
-from lattice_diffusion import config as cfglib
-from lattice_diffusion.eval.config import EvalConfig, build_spec
-from lattice_diffusion.eval.records import EvalSpec
-from lattice_diffusion.provenance import LedgerRecord, Provenance, header
-from lattice_diffusion.training.utils.checkpoint import load_checkpoint
+from ldt import config as cfglib
+from ldt.eval.config import EvalConfig, build_spec
+from ldt.eval.records import EvalSpec
+from ldt.provenance import LedgerRecord, Provenance, header
+from ldt.training.utils.checkpoint import load_checkpoint
 
 if TYPE_CHECKING:
     import modal
 
-    from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig
+    from ldt.models.looped_transformer import LoopedTransformerConfig
     from experiments.sudoku.solve import SolveConfig
     from experiments.sudoku.train import TrainConfig
 
@@ -170,7 +170,7 @@ def run_experiment(exp: Experiment, train_fn: Callable, checkpoint_root: str, da
         commit: Persists the volume (trainers that snapshot for resume call it).
         evaluate: False only trains.
     """
-    from lattice_diffusion.eval.modal_app import EVAL_ROOT, coordinate
+    from ldt.eval.modal_app import EVAL_ROOT, coordinate
 
     ckpt = exp.checkpoint_path(checkpoint_root)
     spec = exp.eval_spec(str(ckpt)) if evaluate else None
@@ -201,7 +201,7 @@ def run_experiment(exp: Experiment, train_fn: Callable, checkpoint_root: str, da
 
 def with_code_sha(exp: Experiment) -> Experiment:
     """`exp` with the launching commit recorded (refuses a dirty tree)."""
-    from lattice_diffusion.provenance import require_clean_sha
+    from ldt.provenance import require_clean_sha
     return dataclasses.replace(exp, provenance=dataclasses.replace(
         exp.provenance, code_sha=require_clean_sha()))
 
@@ -209,9 +209,9 @@ def with_code_sha(exp: Experiment) -> Experiment:
 def record_launch(app: modal.App, call: modal.FunctionCall, kind: str, exp: Experiment,
                   checkpoint: str, spec: EvalSpec | None) -> None:
     """Write and print the ledger record of a launch."""
-    from lattice_diffusion.eval.modal_app import EVAL_ROOT
-    from lattice_diffusion.modal.image import checkpoint_volume
-    from lattice_diffusion.provenance import announce, app_run_name, app_url, write_ledger
+    from ldt.eval.modal_app import EVAL_ROOT
+    from ldt.modal.image import checkpoint_volume
+    from ldt.provenance import announce, app_run_name, app_url, write_ledger
 
     prov = exp.provenance
     record = LedgerRecord(
@@ -236,7 +236,7 @@ def launch(exp_cls: type[Experiment], app: modal.App, run_fn: modal.Function, co
     """
     import modal
 
-    from lattice_diffusion.modal.image import CHECKPOINT_MOUNT
+    from ldt.modal.image import CHECKPOINT_MOUNT
 
     exp = with_code_sha(cfglib.load(exp_cls, config or None, overrides))
     print(f"{exp_cls.BENCHMARK} config {config or '(defaults)'}  overrides: {overrides or '-'}",

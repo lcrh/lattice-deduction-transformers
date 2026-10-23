@@ -11,7 +11,7 @@ from an existing checkpoint, evaluated with the scripts here.
 ## Evaluation protocol
 
 - **Sudoku-Extreme:** the first N puzzles of LDT's `sudoku_test_perm`
-  ordering (`lattice_diffusion.eval.indices`), so baselines and LDT see the
+  ordering (`ldt.eval.indices`), so baselines and LDT see the
   same puzzles in the same order.
   - HRM/TRM: N = 10,000 by default; exact match; Clopper–Pearson 95% interval.
   - Qwen: N = 256 × 32 samples by default; unbiased pass@k.
@@ -19,8 +19,8 @@ from an existing checkpoint, evaluated with the scripts here.
 - **Maze-Hard:** the whole 1,000-puzzle test set, exact and lenient
   (any optimal path).
 - **Per-puzzle rows** go to `eval/baselines/<model>/...` on the
-  `lattice-diffusion-checkpoints` volume. They use the
-  `lattice_diffusion/eval/records.py` field names (`idx`, `pos`, `status`,
+  `ldt-checkpoints` volume. They use the
+  `ldt/eval/records.py` field names (`idx`, `pos`, `status`,
   `solution`).
 - **Resuming:** every eval saves its work in units and skips finished units
   when rerun: HRM/TRM Sudoku in chunks of 1,024 puzzles, Maze sweeps per
@@ -74,7 +74,7 @@ inference cost can be measured: the eval summaries record B200 seconds.
 
 ### Fine-tuned LLM (appendix)
 
-Existing runs are on the `lattice-diffusion-checkpoints` volume under
+Existing runs are on the `ldt-checkpoints` volume under
 `/checkpoints/followups/llm_baseline/`. Each was trained by the earlier
 version of this script, Qwen3.5-0.8B full BF16 SFT for 16 epochs, with seed 0
 and one checkpoint per epoch (`checkpoint-<32 × epoch>`).

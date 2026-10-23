@@ -39,7 +39,7 @@ from pathlib import Path
 from collections.abc import Container
 from typing import Literal, get_args
 
-from lattice_diffusion.provenance import (
+from ldt.provenance import (
     LedgerRecord, announce, app_run_name, read_ledger, require_clean_sha, write_ledger,
 )
 

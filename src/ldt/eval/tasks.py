@@ -17,7 +17,7 @@ from typing import NamedTuple
 import numpy as np
 from torch import nn
 
-from lattice_diffusion.eval.scheduler import Row
+from ldt.eval.scheduler import Row
 
 
 class TaskBlock(NamedTuple):

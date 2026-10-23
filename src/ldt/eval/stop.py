@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from typing import ClassVar, Literal
 
-from lattice_diffusion.eval.stats import confidence_sequence
+from ldt.eval.stats import confidence_sequence
 
 Status = Literal["correct", "wrong", "timeout"]
 StopReason = Literal["failures", "half_width", "n_max", "fixed_n", "exhausted"]

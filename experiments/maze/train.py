@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Callable
 
 import torch
 
-from lattice_diffusion.models.looped_transformer import PowersetModel
-from lattice_diffusion.training.utils.checkpoint import save_checkpoint
-from lattice_diffusion.training.utils.clock import TrainClock
-from lattice_diffusion.training.utils.scheduler import make_cosine_scheduler
+from ldt.models.looped_transformer import PowersetModel
+from ldt.training.utils.checkpoint import save_checkpoint
+from ldt.training.utils.clock import TrainClock
+from ldt.training.utils.scheduler import make_cosine_scheduler
 
 from experiments.maze.data import MazeDataset, grid_dims, rescore
 from experiments.sudoku.aug import aug_forward

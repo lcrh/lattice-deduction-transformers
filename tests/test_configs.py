@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 import torch
 
-from lattice_diffusion import config as cfglib
-from lattice_diffusion.eval.stop import SequentialStop, stop_from_dict
+from ldt import config as cfglib
+from ldt.eval.stop import SequentialStop, stop_from_dict
 from experiments.registry import experiment_class
 from tests.equivalence import fakes, train_runs
 

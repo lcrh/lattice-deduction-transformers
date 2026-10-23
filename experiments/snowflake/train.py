@@ -16,11 +16,11 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from lattice_diffusion.models.looped_transformer import PowersetModel
-from lattice_diffusion.models.weighted_bce import weighted_bce_with_logits
-from lattice_diffusion.training.utils.checkpoint import save_checkpoint
-from lattice_diffusion.training.utils.clock import TrainClock
-from lattice_diffusion.training.utils.scheduler import make_cosine_scheduler
+from ldt.models.looped_transformer import PowersetModel
+from ldt.models.weighted_bce import weighted_bce_with_logits
+from ldt.training.utils.checkpoint import save_checkpoint
+from ldt.training.utils.clock import TrainClock
+from ldt.training.utils.scheduler import make_cosine_scheduler
 
 from experiments.sudoku.aug import aug_forward
 from experiments.sudoku.dpll import StepConfig, dpll_step

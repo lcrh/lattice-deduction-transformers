@@ -7,7 +7,7 @@ LDT rows from table1_sudoku and baseline rows from the baselines manifest.
 
 from __future__ import annotations
 
-from lattice_diffusion.eval.stats import binomial_upper
+from ldt.eval.stats import binomial_upper
 
 from paper.tables.common import (
     Table, baseline_rows, by_entry, cli, done, escape, eval_rule, mean, mean_std, n_range,

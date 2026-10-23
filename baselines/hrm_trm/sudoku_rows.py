@@ -1,7 +1,7 @@
 """Per-puzzle Sudoku-Extreme results for the HRM/TRM baselines.
 
 The baselines are evaluated on the first N puzzles of `sudoku_test_perm`
-(lattice_diffusion.eval.indices), the same ordering LDT's sequential evals
+(ldt.eval.indices), the same ordering LDT's sequential evals
 walk. Both upstream repos build the full test split with
 `build_sudoku_dataset.py`, which reads `test.csv` in file order with no
 filtering or augmentation, so row i of their test set is dataset index i in
@@ -9,7 +9,7 @@ our `sudoku_extreme_test.pt` cache (verified by `check_alignment` when the
 cache is mounted). `subset_test_split` then rewrites their test split to the
 requested indices, in order.
 
-Rows use the field names of `lattice_diffusion/eval/records.py`
+Rows use the field names of `ldt/eval/records.py`
 (`idx`, `pos`, `status`, `solution`). HRM/TRM always emit a full grid, so
 `status` is "correct" (exact match) or "wrong"; there are no timeouts.
 Search-specific fields (rounds, calls, forwards, n_resets) and `verified` are
@@ -181,7 +181,7 @@ def summarize(rows: list[dict], **extra) -> dict:
 
 def add_interval(summary: dict, alpha: float = 0.05) -> dict:
     """Add a two-sided Clopper-Pearson interval on exact accuracy (runs locally)."""
-    from lattice_diffusion.eval.stats import binomial_upper
+    from ldt.eval.stats import binomial_upper
 
     n, k = summary["n"], summary["correct"]
     lo = 1.0 - binomial_upper(n - k, n, alpha / 2) if k > 0 else 0.0
@@ -192,7 +192,7 @@ def add_interval(summary: dict, alpha: float = 0.05) -> dict:
 
 def first_n_of_test_perm(n: int) -> list[int]:
     """First n indices of `sudoku_test_perm` (checksum-verified). Local only."""
-    from lattice_diffusion.eval import indices
+    from ldt.eval import indices
 
     lst = indices.load("sudoku_test_perm")
     if not 0 < n <= len(lst):

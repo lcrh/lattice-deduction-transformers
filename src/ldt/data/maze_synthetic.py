@@ -32,7 +32,7 @@ import numpy as np
 import torch
 
 # Re-export channel constants so callers don't have to import from maze_hard.
-from lattice_diffusion.data.maze_hard import (
+from ldt.data.maze_hard import (
     CH_WALL, CH_FREE, CH_START, CH_GOAL, CH_PATH, N_CHANNELS,
 )
 

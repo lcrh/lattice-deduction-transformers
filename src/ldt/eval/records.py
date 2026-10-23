@@ -23,9 +23,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import ClassVar, Literal
 
-from lattice_diffusion.config import stable_hash
-from lattice_diffusion.eval.scheduler import Row, ScheduleResult
-from lattice_diffusion.eval.stats import (
+from ldt.config import stable_hash
+from ldt.eval.scheduler import Row, ScheduleResult
+from ldt.eval.stats import (
     binomial_upper, confidence_sequence, inverse_binomial_rate,
 )
 
@@ -55,7 +55,7 @@ class EvalSpec:
     n_workers: int = 1
     max_in_flight: int | None = None    # None = n_workers
     keep_warm_s: int = 10               # idle seconds before a worker scales down
-    # Provenance (lattice_diffusion.provenance): recorded, never hashed.
+    # Provenance (ldt.provenance): recorded, never hashed.
     exp_id: str = ""
     entry: str = ""
     code_sha: str = ""

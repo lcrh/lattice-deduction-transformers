@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from lattice_diffusion.eval.tasks import EvalTask, TaskBlock
+from ldt.eval.tasks import EvalTask, TaskBlock
 
 from experiments.eval_common import (
     build_solve_config, eval_device, load_eval_model, result_rows, unwrap,

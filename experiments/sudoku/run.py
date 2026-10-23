@@ -13,8 +13,8 @@ Usage:
 
 import modal
 
-from lattice_diffusion.eval.modal_app import eval_app
-from lattice_diffusion.modal.image import (
+from ldt.eval.modal_app import eval_app
+from ldt.modal.image import (
     CHECKPOINT_MOUNT, DATA_MOUNT,
     checkpoint_volume, data_volume, hf_secret, image,
 )

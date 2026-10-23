@@ -16,14 +16,14 @@ from typing import TypedDict
 import modal
 import numpy as np
 
-from lattice_diffusion.eval.records import EvalSpec, format_summary
-from lattice_diffusion.eval.runner import BlockArgs, run_eval, solve_block
-from lattice_diffusion.eval.scheduler import Row, ThreadExecutor
-from lattice_diffusion.eval.tasks import get_task
-from lattice_diffusion.modal.image import (
+from ldt.eval.records import EvalSpec, format_summary
+from ldt.eval.runner import BlockArgs, run_eval, solve_block
+from ldt.eval.scheduler import Row, ThreadExecutor
+from ldt.eval.tasks import get_task
+from ldt.modal.image import (
     CHECKPOINT_MOUNT, DATA_MOUNT, checkpoint_volume, data_volume, hf_secret, image,
 )
-from lattice_diffusion.provenance import header
+from ldt.provenance import header
 
 EVAL_ROOT = f"{CHECKPOINT_MOUNT}/eval"
 

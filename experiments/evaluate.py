@@ -26,9 +26,9 @@ from pathlib import Path
 
 import modal
 
-from lattice_diffusion import config as cfglib
-from lattice_diffusion.eval.modal_app import coordinate, eval_app
-from lattice_diffusion.modal.image import CHECKPOINT_MOUNT, checkpoint_volume, image
+from ldt import config as cfglib
+from ldt.eval.modal_app import coordinate, eval_app
+from ldt.modal.image import CHECKPOINT_MOUNT, checkpoint_volume, image
 
 from experiments.common import record_launch, with_code_sha
 from experiments.registry import experiment_class

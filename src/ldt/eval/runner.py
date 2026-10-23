@@ -15,14 +15,14 @@ from typing import Callable, TypedDict
 import numpy as np
 import torch
 
-from lattice_diffusion.eval import indices as index_lists
-from lattice_diffusion.eval.records import (
+from ldt.eval import indices as index_lists
+from ldt.eval.records import (
     EvalSpec, Summary, check_or_write_digest, check_or_write_spec, read_blocks, summarize,
     write_block, write_summary,
 )
-from lattice_diffusion.eval.scheduler import Executor, Row, block_bounds, run_blocks
-from lattice_diffusion.eval.stop import PrefixCounts, stop_from_dict
-from lattice_diffusion.eval.tasks import EvalTask, TaskBlock
+from ldt.eval.scheduler import Executor, Row, block_bounds, run_blocks
+from ldt.eval.stop import PrefixCounts, stop_from_dict
+from ldt.eval.tasks import EvalTask, TaskBlock
 
 PERSIST_EVERY_S = 30    # seconds between volume commits while blocks finish
 
@@ -131,7 +131,7 @@ def run_eval(
     check_or_write_digest(run_dir, lst.digest, lst.name)
     if lst.name in index_lists.SPECS and not index_lists.SPECS[lst.name].pinned:
         log(f"  note: {lst.name} is unpinned ({len(lst)} items, sha256 {lst.digest}); "
-            f"pin it in lattice_diffusion/eval/indices.py")
+            f"pin it in ldt/eval/indices.py")
     completed = read_blocks(run_dir)
     stop = stop_from_dict(spec.stop)
     log(f"eval {run_dir}: {len(lst)} indices ({lst.name}), block_size={spec.block_size}, "

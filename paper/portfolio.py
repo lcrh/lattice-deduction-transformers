@@ -40,7 +40,7 @@ from pathlib import Path
 
 import numpy as np
 
-from lattice_diffusion.eval.stats import binomial_upper
+from ldt.eval.stats import binomial_upper
 
 from paper.manifest import REPO
 from paper.tables.common import OUT, RESULTS, done, load_rows, read_results

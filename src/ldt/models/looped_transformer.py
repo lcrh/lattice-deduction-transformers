@@ -13,7 +13,7 @@ from typing import Literal, get_args
 import torch
 import torch.nn as nn
 
-from lattice_diffusion.models.transformer2d import Transformer2D, Transformer2DConfig
+from ldt.models.transformer2d import Transformer2D, Transformer2DConfig
 
 # Latent state carried from one solve step to the next (TRM-style):
 #   off    - none; each step sees only the lattice state

@@ -1,6 +1,6 @@
 import time
 
-from lattice_diffusion.training.utils.clock import TrainClock
+from ldt.training.utils.clock import TrainClock
 
 
 def test_clock_splits_compile_step_and_monitoring():

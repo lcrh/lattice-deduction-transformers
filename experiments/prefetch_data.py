@@ -6,7 +6,7 @@ Usage:
 
 import modal
 
-from lattice_diffusion.modal.image import DATA_MOUNT, data_volume, hf_secret, image
+from ldt.modal.image import DATA_MOUNT, data_volume, hf_secret, image
 
 app = modal.App("ldt-prefetch-data")
 
@@ -14,7 +14,7 @@ app = modal.App("ldt-prefetch-data")
 @app.function(image=image, cpu=4, memory=32768, timeout=3600, secrets=[hf_secret],
               volumes={DATA_MOUNT: data_volume})
 def prefetch() -> None:
-    from lattice_diffusion.data import maze_hard, sudoku_extreme
+    from ldt.data import maze_hard, sudoku_extreme
 
     for split in ("train", "test"):
         print(sudoku_extreme._download_and_cache(DATA_MOUNT, split), flush=True)

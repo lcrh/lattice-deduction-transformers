@@ -7,12 +7,12 @@ import time
 import numpy as np
 import torch
 
-from lattice_diffusion.eval import indices as index_lists
-from lattice_diffusion.eval.records import EvalSpec
-from lattice_diffusion.eval.runner import block_args, solve_block
-from lattice_diffusion.eval.scheduler import Executor
-from lattice_diffusion.eval.stop import SequentialStop
-from lattice_diffusion.eval.tasks import EvalTask, TaskBlock
+from ldt.eval import indices as index_lists
+from ldt.eval.records import EvalSpec
+from ldt.eval.runner import block_args, solve_block
+from ldt.eval.scheduler import Executor
+from ldt.eval.stop import SequentialStop
+from ldt.eval.tasks import EvalTask, TaskBlock
 
 _TORCH_LOCK = threading.Lock()
 

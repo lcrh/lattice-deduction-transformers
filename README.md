@@ -14,7 +14,7 @@ self-contained subdirectories under `experiments/`:
 | Snowflake Sudoku | `experiments/snowflake/` | Table 2 |
 | Maze-Hard (30×30) | `experiments/maze/` | Table 3 + Figure 3 (K-sweep) |
 
-The shared package `src/lattice_diffusion/` holds the looped-transformer model,
+The shared package `src/ldt/` holds the looped-transformer model,
 the dataset loaders, and the Modal image / checkpoint utilities used by all
 three.
 
@@ -61,9 +61,9 @@ uv run modal run --detach experiments/<benchmark>/run.py \
 
 `--detach` lets the run survive your laptop sleeping. The run trains a
 checkpoint, then evaluates it with the shared evaluator
-(`src/lattice_diffusion/eval/`). The checkpoint path is derived from the
+(`src/ldt/eval/`). The checkpoint path is derived from the
 training settings (`/checkpoints/<benchmark>/<train hash>-seed<seed>.pt` on
-the `lattice-diffusion-checkpoints` volume), so relaunching a finished
+the `ldt-checkpoints` volume), so relaunching a finished
 config, or any config that trains the same way, skips training and only
 (re)evaluates; the resolved config is stored in the checkpoint.
 
@@ -108,7 +108,7 @@ uv run python -m paper.launch status table1_sudoku         # per run: done / run
 uv run python -m paper.launch launch table1_sudoku --dry-run
 uv run python -m paper.launch launch table1_sudoku         # submits only what is missing
 uv run python -m paper.launch collect table1_sudoku --rows # -> paper/results/table1_sudoku.csv
-uv run python -m paper.tables.table1_sudoku --copy-to ../latticeDiffusion/figs
+uv run python -m paper.tables.table1_sudoku --copy-to path/to/paper/figs
 uv run python -m paper.launch ledger --exp M1              # launch history
 ```
 
@@ -236,7 +236,7 @@ uv run python -m paper.launch launch fig3_maze_ksweep   # K in {1, 8, ..., 512} 
 ## Directory layout
 
 ```
-src/lattice_diffusion/
+src/ldt/
   data/               Streaming datasets (sudoku_extreme, maze_hard, maze_synthetic)
   models/             Looped transformer + 2D transformer backbone + weighted-BCE loss
   modal/              Shared Modal image / volume / secret definitions

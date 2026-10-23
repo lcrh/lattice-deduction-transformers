@@ -57,8 +57,8 @@ app = modal.App("trm-eval")
 
 # LDT volumes: the Sudoku cache (index-alignment check) and the eval root
 # where per-puzzle rows are written.
-ldt_data = modal.Volume.from_name("lattice-diffusion-data", create_if_missing=True)
-ldt_ckpt = modal.Volume.from_name("lattice-diffusion-checkpoints", create_if_missing=True)
+ldt_data = modal.Volume.from_name("ldt-data", create_if_missing=True)
+ldt_ckpt = modal.Volume.from_name("ldt-checkpoints", create_if_missing=True)
 
 # Our Maze retrains (mounted at /vol); pass --checkpoint /vol/<...>/step_N to evaluate one.
 ckpt_vol = modal.Volume.from_name("trm-maze-aug-ckpts", create_if_missing=True)

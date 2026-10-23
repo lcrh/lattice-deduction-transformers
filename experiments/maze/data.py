@@ -31,7 +31,7 @@ import torch
 
 import numpy as np
 
-from lattice_diffusion.data.maze_hard import (
+from ldt.data.maze_hard import (
     CH_FREE, CH_GOAL, CH_PATH, CH_START, CH_WALL,
     GRID_H as MAZE_HARD_H,
     GRID_W as MAZE_HARD_W,
@@ -40,7 +40,7 @@ from lattice_diffusion.data.maze_hard import (
     MazeHardDataset,
     _download_and_cache as _maze_hard_download_and_cache,
 )
-from lattice_diffusion.data.maze_synthetic import (
+from ldt.data.maze_synthetic import (
     SyntheticMazeConfig,
     SyntheticMazeDataset,
     _augment_d4_with_swap,

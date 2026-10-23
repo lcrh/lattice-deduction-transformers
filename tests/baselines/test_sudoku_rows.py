@@ -74,7 +74,7 @@ def test_interval_at_the_boundaries():
 
 
 def test_first_n_of_test_perm_is_ldt_prefix():
-    from lattice_diffusion.eval import indices
+    from ldt.eval import indices
 
     assert sudoku_rows.first_n_of_test_perm(5) == indices.load("sudoku_test_perm").indices[:5].tolist()
 

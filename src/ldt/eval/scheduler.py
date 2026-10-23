@@ -20,7 +20,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from typing import Callable, TypedDict
 
-from lattice_diffusion.eval.stop import PrefixCounts, Status, StopReason, StopRule
+from ldt.eval.stop import PrefixCounts, Status, StopReason, StopRule
 
 
 class Row(TypedDict, total=False):

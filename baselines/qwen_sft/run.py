@@ -40,7 +40,7 @@ from typing import Any
 
 import modal
 
-from lattice_diffusion.modal.image import (
+from ldt.modal.image import (
     CHECKPOINT_MOUNT, DATA_MOUNT, HF_HOME, checkpoint_volume, data_volume, hf_secret,
 )
 
@@ -209,7 +209,7 @@ llm_image = (
         "/.uv/.venv/bin/python -m pip install --no-build-isolation causal-conv1d==1.7.0",
     )
     .env({"HF_HOME": HF_HOME})
-    .add_local_python_source("lattice_diffusion")
+    .add_local_python_source("ldt")
 )
 
 app = modal.App("qwen-sudoku-sft")
@@ -243,7 +243,7 @@ def _load_dataset(split: str):
 
 
 def _eval_rows(n_eval: int, n_blanks: int | None) -> list[dict[str, Any]]:
-    from lattice_diffusion.eval import indices
+    from ldt.eval import indices
 
     test_idx = indices.load("sudoku_test_perm").indices[:n_eval].tolist()
     return make_rows(_load_dataset("test"), test_idx, n_blanks)
@@ -381,7 +381,7 @@ def train_run(train_cfg: dict, resume: bool = False) -> dict[str, Any]:
         AutoModelForImageTextToText, Trainer, TrainingArguments, set_seed,
     )
 
-    from lattice_diffusion.data.sudoku_extreme import SudokuExtremeConfig, select_pool
+    from ldt.data.sudoku_extreme import SudokuExtremeConfig, select_pool
 
     cfg = TrainConfig(**train_cfg)
     set_seed(cfg.seed)

@@ -4,22 +4,22 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
-from lattice_diffusion.eval.indices import filter_tag
-from lattice_diffusion.eval.records import EvalSpec
-from lattice_diffusion.eval.stop import PRESETS
-from lattice_diffusion.provenance import Provenance
+from ldt.eval.indices import filter_tag
+from ldt.eval.records import EvalSpec
+from ldt.eval.stop import PRESETS
+from ldt.provenance import Provenance
 
 
 @dataclass
 class EvalConfig:
     """How a trained checkpoint is evaluated."""
 
-    # Named list (lattice_diffusion.eval.indices), or "range" for the first `n` items of `split`.
+    # Named list (ldt.eval.indices), or "range" for the first `n` items of `split`.
     index_list: str = "sudoku_test_perm"
     split: str | None = None
     n: int | None = None
     index_filter: dict | None = None    # see EvalSpec.index_filter
-    stop: str = "sequential"            # stop-rule preset (lattice_diffusion.eval.stop)
+    stop: str = "sequential"            # stop-rule preset (ldt.eval.stop)
     dropout_p: float = 0.05             # eval-time dropout, used as search noise
     eval_seed: int = 0
     block_size: int = 512

@@ -47,9 +47,9 @@ from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import yaml
 
-from lattice_diffusion import config as cfglib
-from lattice_diffusion.eval.records import EvalSpec, summary_path
-from lattice_diffusion.provenance import app_run_name, entry_key
+from ldt import config as cfglib
+from ldt.eval.records import EvalSpec, summary_path
+from ldt.provenance import app_run_name, entry_key
 
 from experiments.registry import experiment_class
 
@@ -58,8 +58,8 @@ if TYPE_CHECKING:
 
 REPO = Path(__file__).resolve().parent.parent
 MANIFEST_DIR = REPO / "paper" / "manifests"
-CHECKPOINT_MOUNT = "/checkpoints"           # lattice_diffusion.modal.image.CHECKPOINT_MOUNT
-EVAL_ROOT = f"{CHECKPOINT_MOUNT}/eval"      # lattice_diffusion.eval.modal_app.EVAL_ROOT
+CHECKPOINT_MOUNT = "/checkpoints"           # ldt.modal.image.CHECKPOINT_MOUNT
+EVAL_ROOT = f"{CHECKPOINT_MOUNT}/eval"      # ldt.eval.modal_app.EVAL_ROOT
 
 _ENTRY_KEYS = {"name", "exp_id", "config", "eval", "seeds", "set", "sweep", "grid", "eval_of",
                "eval_seeds", "indices_file", "split", "train_only", "command", "result",

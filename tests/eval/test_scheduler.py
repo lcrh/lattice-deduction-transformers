@@ -2,8 +2,8 @@ import random
 
 import pytest
 
-from lattice_diffusion.eval.scheduler import ThreadExecutor, n_blocks, run_blocks
-from lattice_diffusion.eval.stop import PRESETS, FixedN, NoStop, SequentialStop, stop_from_dict
+from ldt.eval.scheduler import ThreadExecutor, n_blocks, run_blocks
+from ldt.eval.stop import PRESETS, FixedN, NoStop, SequentialStop, stop_from_dict
 
 from tests.eval.fakes import ReorderExecutor, block_solver, make_spec
 
@@ -137,7 +137,7 @@ def test_failed_block_drains_in_flight_blocks_then_raises():
 
 
 def test_sequential_stop_caps_at_n_max():
-    from lattice_diffusion.eval.stop import PRESETS, PrefixCounts, SequentialStop, stop_from_dict
+    from ldt.eval.stop import PRESETS, PrefixCounts, SequentialStop, stop_from_dict
 
     rule = SequentialStop(n_max=4000)
     assert rule.limit == 4000 and stop_from_dict(rule.to_dict()) == rule
@@ -148,7 +148,7 @@ def test_sequential_stop_caps_at_n_max():
 
 
 def test_failure_rule_fires_before_n_min():
-    from lattice_diffusion.eval.stop import PrefixCounts, SequentialStop
+    from ldt.eval.stop import PrefixCounts, SequentialStop
 
     rule = SequentialStop()
     assert rule.should_stop(PrefixCounts(n=300, correct=200, timeout=100)) == "failures"

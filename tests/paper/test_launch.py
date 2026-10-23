@@ -8,8 +8,8 @@ import textwrap
 
 import pytest
 
-from lattice_diffusion import config as cfglib
-from lattice_diffusion.provenance import (
+from ldt import config as cfglib
+from ldt.provenance import (
     LedgerRecord, app_run_name, entry_key, read_ledger, require_clean_sha,
 )
 from paper import launch

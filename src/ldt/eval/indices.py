@@ -42,7 +42,7 @@ PORTFOLIO_DATA_SEEDS = tuple(range(42, 53))
 
 def sudoku_training_puzzles(n_total: int) -> np.ndarray:
     """sudoku_val plus the 1,000-puzzle training pools for the portfolio's data seeds."""
-    from lattice_diffusion.data.sudoku_extreme import SudokuExtremeConfig, select_pool
+    from ldt.data.sudoku_extreme import SudokuExtremeConfig, select_pool
 
     val = load("sudoku_val", split_size=n_total).indices
     pools = [select_pool(n_total, SudokuExtremeConfig(n_puzzles=1000, seed=seed))[0]

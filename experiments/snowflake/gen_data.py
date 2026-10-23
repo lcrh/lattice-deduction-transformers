@@ -9,7 +9,7 @@ out the larger orders.
 
 100 CPU workers each generate a parquet shard (orders × count_per_shard base
 puzzles × up to `variants` given-count variants) on the
-`lattice-diffusion-data` volume. A consolidation function reads all shards,
+`ldt-data` volume. A consolidation function reads all shards,
 deterministically reorders by (n, code), assigns final ids, and hash-splits
 rows into test / val / train (10% / 5% / rest). Files are
 `/data/snowflake_<split>.parquet`; each file's parquet metadata records the
@@ -28,7 +28,7 @@ Usage:
     uv run modal run --detach experiments/snowflake/gen_data.py      # orders 4-10
 
 After generation, the entrypoint prints the index-list entries to pin in
-src/lattice_diffusion/eval/indices.py.
+src/ldt/eval/indices.py.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ COVER_Q_MIN, COVER_Q_MAX = -2, 2
 COVER_R_MIN, COVER_R_MAX = -2, 2
 SHARDS_DIR = "snowflake_shards"
 
-data_volume = modal.Volume.from_name("lattice-diffusion-data", create_if_missing=True)
+data_volume = modal.Volume.from_name("ldt-data", create_if_missing=True)
 DATA_MOUNT = "/data"
 
 app = modal.App("snowflake-data-gen")
@@ -407,10 +407,10 @@ def main(
 
 
 def print_index_pins(sizes: dict[str, int]) -> None:
-    """Print the split sizes and checksums to pin in src/lattice_diffusion/eval/indices.py."""
-    from lattice_diffusion.eval import indices as index_lists
+    """Print the split sizes and checksums to pin in src/ldt/eval/indices.py."""
+    from ldt.eval import indices as index_lists
 
-    print("\nPin these in src/lattice_diffusion/eval/indices.py:", flush=True)
+    print("\nPin these in src/ldt/eval/indices.py:", flush=True)
     for split in ("test", "val"):
         name = f"snowflake_{split}"
         spec = index_lists.SPECS.get(name)

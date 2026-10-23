@@ -9,8 +9,8 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from lattice_diffusion.data.sudoku_extreme import _download_and_cache
-from lattice_diffusion.eval.tasks import EvalTask, TaskBlock
+from ldt.data.sudoku_extreme import _download_and_cache
+from ldt.eval.tasks import EvalTask, TaskBlock
 
 from experiments.eval_common import build_solve_config, eval_device, load_eval_model, result_rows
 from experiments.sudoku.solve import solve

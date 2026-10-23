@@ -4,10 +4,10 @@
 import numpy as np
 import pytest
 
-from lattice_diffusion.eval import indices as index_lists
-from lattice_diffusion.eval.config import build_spec
-from lattice_diffusion.eval.runner import block_args, solve_block
-from lattice_diffusion.eval.tasks import get_task
+from ldt.eval import indices as index_lists
+from ldt.eval.config import build_spec
+from ldt.eval.runner import block_args, solve_block
+from ldt.eval.tasks import get_task
 from experiments.registry import experiment_class
 from tests.equivalence import train_runs
 from tests.eval.fakes import FakeTask

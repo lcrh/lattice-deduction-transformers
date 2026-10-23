@@ -17,7 +17,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Callable, TypeVar
 
-VOLUME_NAME = "lattice-diffusion-checkpoints"   # lattice_diffusion.modal.image
+VOLUME_NAME = "ldt-checkpoints"   # ldt.modal.image
 CACHE = Path(__file__).resolve().parent / ".cache"
 SNAPSHOT = CACHE / "volume_listing.json"
 FILE_CACHE = CACHE / "files"

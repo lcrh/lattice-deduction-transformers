@@ -10,9 +10,9 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass, field
 
-from lattice_diffusion.data.maze_hard import N_CHANNELS
-from lattice_diffusion.eval.config import EvalConfig
-from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig
+from ldt.data.maze_hard import N_CHANNELS
+from ldt.eval.config import EvalConfig
+from ldt.models.looped_transformer import LoopedTransformerConfig
 
 from experiments.common import Experiment, check_options, with_step
 from experiments.maze.data import MazeConfig, grid_dims

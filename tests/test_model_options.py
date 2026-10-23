@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 import torch
 
-from lattice_diffusion import config as cfglib
-from lattice_diffusion.models.looped_transformer import PowersetModel
+from ldt import config as cfglib
+from ldt.models.looped_transformer import PowersetModel
 from experiments.registry import experiment_class
 from experiments.sudoku.dpll import StepConfig
 from experiments.sudoku.solve import SolveConfig, solve
@@ -56,7 +56,7 @@ def test_carry_trains_and_solves(mode, tmp_path):
 
 
 def _train_with_carry(tmp: Path, mode: str) -> dict:
-    from lattice_diffusion.data.sudoku_extreme import SudokuExtremeConfig
+    from ldt.data.sudoku_extreme import SudokuExtremeConfig
     from experiments.sudoku.config import SudokuExperiment
     from experiments.sudoku.train import TrainConfig, train
 

@@ -14,8 +14,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from lattice_diffusion.eval import indices as index_lists
-from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig, PowersetModel
+from ldt.eval import indices as index_lists
+from ldt.models.looped_transformer import LoopedTransformerConfig, PowersetModel
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

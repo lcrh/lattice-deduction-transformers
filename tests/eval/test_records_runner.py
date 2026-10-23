@@ -3,12 +3,12 @@ import json
 
 import pytest
 
-from lattice_diffusion.eval.records import (
+from ldt.eval.records import (
     check_or_write_spec, format_summary, read_blocks, summary_path,
 )
-from lattice_diffusion.eval.runner import run_eval
-from lattice_diffusion.eval.scheduler import ThreadExecutor
-from lattice_diffusion.eval.stop import NoStop
+from ldt.eval.runner import run_eval
+from ldt.eval.scheduler import ThreadExecutor
+from ldt.eval.stop import NoStop
 
 from tests.eval.fakes import block_solver, make_spec
 
@@ -100,7 +100,7 @@ def test_inverse_binomial_rate_only_for_runs_stopped_on_failures(tmp_path):
 
 
 def test_raising_the_cap_continues_from_existing_blocks(tmp_path):
-    from lattice_diffusion.eval.stop import SequentialStop
+    from ldt.eval.stop import SequentialStop
 
     small = make_spec(stop=SequentialStop(n_max=1024, max_failures=10**6), n_workers=4)
     first = run_eval(small, tmp_path, _threads(small), log=lambda _: None)

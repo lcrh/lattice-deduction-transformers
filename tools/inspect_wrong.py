@@ -14,7 +14,7 @@ from pathlib import Path
 
 import torch
 
-from lattice_diffusion.eval.records import read_blocks
+from ldt.eval.records import read_blocks
 
 
 def load_rows(path: Path) -> list[dict]:

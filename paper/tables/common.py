@@ -10,7 +10,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from lattice_diffusion.eval.stats import PairedDifference, paired_difference
+from ldt.eval.stats import PairedDifference, paired_difference
 
 from paper.manifest import REPO
 from paper.results import RESULTS, read_results
@@ -224,5 +224,5 @@ def cli(description: str, default_manifest: str | None = None) -> argparse.Names
     ap.add_argument("--results", type=Path, default=RESULTS)
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--copy-to", type=Path, default=None,
-                    help="also copy outputs here (e.g. ../latticeDiffusion/figs)")
+                    help="also copy outputs here (e.g. path/to/paper/figs)")
     return ap.parse_args()

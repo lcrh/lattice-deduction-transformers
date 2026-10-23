@@ -6,10 +6,10 @@ import numpy as np
 import torch
 from torch import nn
 
-from lattice_diffusion import config as cfglib
-from lattice_diffusion.eval.tasks import TaskBlock
-from lattice_diffusion.models.looped_transformer import LoopedTransformerConfig, PowersetModel
-from lattice_diffusion.training.utils.checkpoint import load_checkpoint
+from ldt import config as cfglib
+from ldt.eval.tasks import TaskBlock
+from ldt.models.looped_transformer import LoopedTransformerConfig, PowersetModel
+from ldt.training.utils.checkpoint import load_checkpoint
 
 from experiments.sudoku.ema import swap_in_ema_if_present
 from experiments.sudoku.solve import SolveConfig, SolveResult
@@ -59,7 +59,7 @@ def load_eval_model(checkpoint: str, dropout_p: float, device: torch.device,
 def result_rows(res: SolveResult, indices: np.ndarray, cfg: SolveConfig, solutions: list[str],
                 verified: list[bool], given_mask: torch.Tensor,
                 extra: list[dict] | None = None) -> TaskBlock:
-    """One eval row per puzzle (see lattice_diffusion.eval.scheduler.Row)."""
+    """One eval row per puzzle (see ldt.eval.scheduler.Row)."""
     correct, wrong = res.correct.tolist(), res.wrong.tolist()
     rounds, calls = res.round_solved.tolist(), res.puzzle_calls.tolist()
     # Forwards count deduction passes: rounds times the puzzle's mean passes per round.

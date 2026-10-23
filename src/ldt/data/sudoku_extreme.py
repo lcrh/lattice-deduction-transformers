@@ -15,7 +15,7 @@ from queue import Queue
 import numpy as np
 import torch
 
-from lattice_diffusion.eval import indices as index_lists
+from ldt.eval import indices as index_lists
 
 
 @dataclass
@@ -23,7 +23,7 @@ class SudokuExtremeConfig:
     cache_dir: str = "data"  # where to cache the HF download (.pt file)
     split: str = "train"  # "train" or "test"
     n_puzzles: int | None = None  # subset size (None = all puzzles in split)
-    # Drop the held-out `sudoku_val` puzzles (lattice_diffusion.eval.indices)
+    # Drop the held-out `sudoku_val` puzzles (ldt.eval.indices)
     # from the train split before subset selection, so no training pool ever
     # contains a validation puzzle. Ignored for other splits.
     exclude_val: bool = True

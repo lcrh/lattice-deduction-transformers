@@ -37,7 +37,7 @@ from experiments.maze.data import (
     _build_synthetic_canonical_pool, _load_maze_hard_canonical_pool,
     _pregen_cache_key, _pregen_cache_spec,
 )
-from lattice_diffusion.modal.image import (
+from ldt.modal.image import (
     DATA_MOUNT, data_volume, hf_secret, image,
 )
 
