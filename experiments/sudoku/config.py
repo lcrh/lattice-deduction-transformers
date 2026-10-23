@@ -26,7 +26,9 @@ class SudokuExperiment(Experiment):
         default_factory=lambda: LoopedTransformerConfig(cls_token=True))
     data: SudokuExtremeConfig = field(
         default_factory=lambda: SudokuExtremeConfig(n_puzzles=1000, seed=42))
-    train: TrainConfig = field(default_factory=TrainConfig)
+    # No per-step augmentation in training: dataset-level augmentation is enough.
+    train: TrainConfig = field(
+        default_factory=lambda: TrainConfig(step=StepConfig(augment=False)))
     solve: SolveConfig = field(default_factory=lambda: SolveConfig(
         step=StepConfig(cls_threshold=0.6, augment=True, digit_policy="argmax"),
         max_rounds=1000, n_chains=64, batch_size=512))

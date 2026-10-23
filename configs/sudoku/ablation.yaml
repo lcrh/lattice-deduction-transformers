@@ -3,6 +3,8 @@
 # An arm is this file plus one --set override, e.g. --set "model.n_loops=4".
 train:
   steps: 2000
+  step:
+    augment: true          # ablations train with per-step augmentation
 
 eval:
   index_list: sudoku_test_perm

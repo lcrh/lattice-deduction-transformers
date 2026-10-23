@@ -39,7 +39,7 @@ train:
     threshold: 0.10
     cls_threshold: 0.5
     temp_decide: 1.5
-    augment: true
+    augment: false         # per-step augmentation at evaluation only
     cell_policy: uniform
     digit_policy: sample
 

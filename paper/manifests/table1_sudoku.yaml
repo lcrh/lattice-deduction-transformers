@@ -5,6 +5,7 @@ exp_id: M1
 benchmark: sudoku
 config: configs/sudoku/paper.yaml
 eval: sequential
+set: {train.step.augment: true}
 seeds: [0, 1, 2]
 entries:
   - name: steps1k
