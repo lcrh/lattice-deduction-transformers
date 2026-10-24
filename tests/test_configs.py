@@ -98,3 +98,13 @@ def test_monitoring_does_not_change_trained_weights(benchmark, monkeypatch, tmp_
     assert len(calls) == 3
     ref = torch.load(fakes.FIXTURES / "train.pt", weights_only=False)[benchmark]
     assert fakes.state_dict_equal(state, ref)
+
+
+def test_one_shot_is_hashed_only_when_set():
+    from experiments.snowflake.config import SnowflakeExperiment
+
+    exp = SnowflakeExperiment()
+    assert "one_shot" not in exp.solve_dict()
+    one_shot = cfglib.load(SnowflakeExperiment, None, ["solve.one_shot=true"])
+    assert one_shot.solve_dict()["one_shot"] is True
+    assert one_shot.eval_spec("x.pt").spec_hash() != exp.eval_spec("x.pt").spec_hash()

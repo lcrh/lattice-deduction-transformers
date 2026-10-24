@@ -10,3 +10,22 @@ table:
 entries:
   - name: paper
     label: "LDT"
+  # Baseline: the same architecture and data, trained only with cross-entropy
+  # against the solution from the puzzle as given (no candidate elimination,
+  # conflict head, on-policy pool or corrupted hints), and evaluated in one
+  # shot: one model call, the highest-scoring digit in every cell.
+  - name: direct
+    label: "Same model, direct prediction"
+    set:
+      model.cls_token: false
+      train.bce_pos_mult: 0.0
+      train.bce_neg_mult: 0.0
+      train.conflict_loss_weight: 0.0
+      train.softmax_loss_weight: 1.0
+      train.max_age: 0
+      train.monitor_every: 0
+      data.zero_hint_weight: 1.0
+      data.correct_hint_weight: 0.0
+      data.error_hint_weight: 0.0
+      solve.one_shot: true
+      eval.dropout_p: 0.0

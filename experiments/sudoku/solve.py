@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Literal, get_args
 
 import torch
+import torch.nn.functional as F
 
 from experiments.sudoku.dpll import StepConfig, dpll_step
 
@@ -140,6 +141,9 @@ class SolveConfig:
     # eliminated. Only the last `max_decision_depth` decisions are kept.
     backtrack: Backtrack = "root"
     geometric_p: float = 0.5
+    # One model call per puzzle and the highest-scoring digit in every cell: no
+    # elimination, branching or search, and never an abstention (a baseline).
+    one_shot: bool = False
     backtrack_negate: bool = False
     max_decision_depth: int = 64
 
@@ -208,7 +212,7 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
           in_puzzle_mask: torch.Tensor | None = None,
           is_correct: Callable[[torch.Tensor, torch.Tensor], bool] | None = None,
           verbose: bool = False) -> SolveResult:
-    """Solve every puzzle, streaming them through the batch.
+    """Solve every puzzle, streaming them through the batch (or in one shot, see `one_shot`).
 
     Args:
         puzzle, ground_truth: [P, S, C].
@@ -218,6 +222,9 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
             chain; default is exact equality (Maze accepts any shortest path).
         verbose: Print one line per finished puzzle.
     """
+    if cfg.one_shot:
+        return solve_one_shot(model, puzzle, ground_truth, given_mask, cfg,
+                              in_puzzle_mask=in_puzzle_mask, is_correct=is_correct)
     P, S, C = puzzle.shape
     K = cfg.n_chains
     M = max(1, cfg.batch_size // K)
@@ -553,4 +560,40 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
         seq_attempts_done=seq_attempts_done_out,
         puzzle_pass_diag=puzzle_pass_diag_out,
         search=None if stack is None else stack.stats,
+    )
+
+
+def solve_one_shot(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
+                   in_puzzle_mask: torch.Tensor | None = None,
+                   is_correct: Callable[[torch.Tensor, torch.Tensor], bool] | None = None,
+                   ) -> SolveResult:
+    """One model call per puzzle; every free cell takes its highest-scoring digit."""
+    P, S, C = puzzle.shape
+    V = ground_truth.shape[-1]
+    device = puzzle.device
+    solution = puzzle.clone()
+    fixed = given_mask if in_puzzle_mask is None else given_mask | ~in_puzzle_mask
+    n_batches = 0
+    for lo in range(0, P, cfg.batch_size):
+        hi = min(lo + cfg.batch_size, P)
+        logits = model(puzzle[lo:hi], return_all=True)["softmax"][-1][..., :V]
+        guess = F.one_hot(logits.argmax(dim=-1), V).to(puzzle.dtype)
+        solution[lo:hi, :, :V] = torch.where(fixed[lo:hi].unsqueeze(-1),
+                                             puzzle[lo:hi, :, :V], guess)
+        n_batches += 1
+    if is_correct is not None:
+        correct = torch.tensor([is_correct(solution[p], ground_truth[p]) for p in range(P)],
+                               device=device)
+    else:
+        same = solution[..., :V].argmax(dim=-1) == ground_truth.argmax(dim=-1)
+        correct = (same | (~in_puzzle_mask if in_puzzle_mask is not None else False)).all(dim=-1)
+    ones = torch.ones(P, dtype=torch.long, device=device)
+    return SolveResult(
+        solved=torch.ones(P, dtype=torch.bool, device=device), correct=correct, wrong=~correct,
+        timeouts=torch.zeros(P, dtype=torch.bool, device=device), n_resets=0 * ones,
+        round_solved=0 * ones, model_calls=n_batches, solution=solution, n_chains=1,
+        puzzle_calls=ones, puzzle_rounds=0 * ones,
+        puzzle_diag=torch.zeros(P, 6, dtype=torch.long, device=device),
+        diag_active_chain_rounds=0, forwards_seq=-ones, seq_winning_idx=-ones,
+        seq_attempts_done=0 * ones,
     )

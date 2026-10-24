@@ -120,7 +120,12 @@ class Experiment:
         return exp
 
     def solve_dict(self) -> dict:
-        return cfglib.to_dict(self.solve)
+        d = cfglib.to_dict(self.solve)
+        # `one_shot` is hashed only when set, so evaluations from before the
+        # option existed keep their spec hashes.
+        if not d.get("one_shot"):
+            d.pop("one_shot", None)
+        return d
 
     def eval_spec(self, checkpoint: str, **kw) -> EvalSpec:
         return build_spec(self.BENCHMARK, checkpoint, self.eval, self.solve_dict(),

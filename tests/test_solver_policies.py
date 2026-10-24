@@ -246,3 +246,29 @@ def test_forwards_count_deduction_passes():
         base = (row["rounds"] + 1 if row["status"] == "correct" else 25) * 4
         assert row["forwards"] == round(base * passes)
     assert (res.puzzle_calls > res.puzzle_rounds).any()      # some rounds took several passes
+
+
+class _FixedLogits(torch.nn.Module):
+    """Returns the same digit logits for every state, for the one-shot path."""
+
+    def __init__(self, logits):
+        super().__init__()
+        self.logits = logits
+
+    def forward(self, state, return_all=False):
+        return {"softmax": [self.logits[: state.shape[0]]]}
+
+
+def test_one_shot_takes_the_argmax_in_free_cells_and_never_abstains():
+    V = 3
+    solution = torch.nn.functional.one_hot(torch.tensor([[0, 1, 2], [2, 1, 0]]), V).float()
+    puzzle = torch.ones(2, 3, V + 1)                    # one extra (in-puzzle) channel
+    puzzle[:, 0, :V] = solution[:, 0]                   # cell 0 is given
+    given = torch.tensor([[True, False, False], [True, False, False]])
+    logits = solution.clone()
+    logits[1, 2] = torch.tensor([0.0, 5.0, 0.0])        # puzzle 1: cell 2 guessed wrong
+    res = solve(_FixedLogits(logits), puzzle, solution, given, SolveConfig(one_shot=True))
+    assert res.correct.tolist() == [True, False] and res.wrong.tolist() == [False, True]
+    assert not res.timeouts.any() and res.puzzle_calls.tolist() == [1, 1]
+    assert torch.equal(res.solution[0, :, :V], solution[0])
+    assert torch.equal(res.solution[:, :, V], puzzle[:, :, V])   # extra channels untouched
