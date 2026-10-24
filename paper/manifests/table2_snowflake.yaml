@@ -29,3 +29,9 @@ entries:
       data.error_hint_weight: 0.0
       solve.one_shot: true
       eval.dropout_p: 0.0
+  # The LDT checkpoints evaluated like the baseline: one model call, the
+  # highest-scoring digit in every cell, no search.
+  - name: paper_one_shot
+    label: "LDT, one shot"
+    eval_of: paper
+    set: {solve.one_shot: true, eval.dropout_p: 0.0}
