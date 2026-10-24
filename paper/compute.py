@@ -3,8 +3,12 @@
 FLOPs count multiply-adds as 2 FLOPs and include the attention projections,
 attention scores/values and the feed-forward block of every layer
 application; embeddings, norms and output heads are omitted (under 2% at
-these sizes). Training is costed as 3x the forward FLOPs (forward plus
-backward) per sample per step. These are estimates for a compute table, not
+these sizes). An LDT training step costs 4x the forward FLOPs per sample:
+forward and backward through every loop (3x) and the no-grad forward that
+advances the on-policy pool (1x); periodic monitoring solves change no
+weights and are not counted. HRM/TRM/EqR train one ACT segment per sample
+and step, backpropagating through the last recursion cycle only (see
+`RecursiveArch.train_factor`). These are estimates for a compute table, not
 measurements. Measured training hours are the post-compile training loop
 (`post_compile_secs`), excluding the compile step and monitoring solves.
 
@@ -54,8 +58,15 @@ class RecursiveArch:
     tokens: int                 # cells plus puzzle-embedding positions
     expansion: float
     applications: int
-    act_steps: int              # maximum ACT steps (halting can stop earlier)
+    act_steps: int              # ACT steps at evaluation (run to the maximum)
     mixer: Mixer = "attention"
+    breadth: int = 1            # independent restarts at evaluation (EqR)
+    # Forward-equivalents per sample and training step: one forward through all
+    # cycles plus a backward (2x) through the last one; HRM also runs one more
+    # no-grad forward for its halting target.
+    train_factor: float = 1 + 2 / 3
+    train_steps: int = 0        # steps to the evaluated checkpoint
+    train_batch: int = 0
 
     def forward_flops(self) -> float:
         t, d = self.tokens, self.dim
@@ -67,16 +78,27 @@ class RecursiveArch:
         return self.applications * 2 * (mix + ffn)
 
     def max_inference_flops(self) -> float:
-        return self.act_steps * self.forward_flops()
+        return self.act_steps * self.breadth * self.forward_flops()
+
+    def training_flops(self) -> float:
+        return self.train_factor * self.forward_flops() * self.train_batch * self.train_steps
 
 
 # Upstream defaults (HRM arch/hrm_v1.yaml; TRM arch/trm.yaml plus the variant
 # overrides in baselines/hrm_trm/trm_eval/cfg_*.yaml): hidden 512, expansion 4,
 # 16 ACT steps. HRM puts one puzzle-embedding position in front of the cells,
-# TRM 16 (puzzle_emb_len).
+# TRM 16 (puzzle_emb_len). EqR (config/arch/eqr.yaml, eqr_sudoku.yaml) is TRM's
+# MLP variant, evaluated at depth 64 and breadth 128.
+# Training: HRM's release trains 40,000 epochs at global batch 768 (52,083
+# steps); the alphaXiv TRM Sudoku checkpoints stop at step 32,550 of a
+# batch-1,536 run; EqR trains 50,000 steps at 768; the Maze rows are our
+# retrains at 768, counted to the reported checkpoint.
 # HRM: per ACT step, H_cycles x (L_cycles x L_layers + H_layers) = 2 x (2x4 + 4).
 # TRM: per ACT step, H_cycles x (L_cycles + 1) x L_layers.
 _HRM_APPLICATIONS = 2 * (2 * 4 + 4)
+# One forward with gradient through the last L and H module calls (8 of 24
+# layer applications), plus the no-grad forward for the halting target.
+_HRM_TRAIN_FACTOR = 1 + 2 * 8 / 24 + 1
 
 
 def _trm_applications(l_cycles: int) -> int:
@@ -85,16 +107,40 @@ def _trm_applications(l_cycles: int) -> int:
 
 BASELINES = {
     "hrm_sudoku": RecursiveArch("HRM", dim=512, tokens=81 + 1, expansion=4,
-                                applications=_HRM_APPLICATIONS, act_steps=16),
+                                applications=_HRM_APPLICATIONS, act_steps=16,
+                                train_factor=_HRM_TRAIN_FACTOR, train_steps=52_083,
+                                train_batch=768),
     "trm_mlp_sudoku": RecursiveArch("TRM-MLP", dim=512, tokens=81 + 16, expansion=4,
-                                    applications=_trm_applications(6), act_steps=16, mixer="mlp"),
+                                    applications=_trm_applications(6), act_steps=16, mixer="mlp",
+                                    train_steps=32_550, train_batch=1536),
     "trm_att_sudoku": RecursiveArch("TRM-attention", dim=512, tokens=81 + 16, expansion=4,
-                                    applications=_trm_applications(6), act_steps=16),
+                                    applications=_trm_applications(6), act_steps=16,
+                                    train_steps=32_550, train_batch=1536),
+    "eqr_sudoku": RecursiveArch("EqR", dim=512, tokens=81 + 16, expansion=4,
+                                applications=_trm_applications(6), act_steps=64, breadth=128,
+                                mixer="mlp", train_steps=50_000, train_batch=768),
     "trm_maze": RecursiveArch("TRM (maze)", dim=512, tokens=900 + 16, expansion=4,
-                              applications=_trm_applications(4), act_steps=16),
+                              applications=_trm_applications(4), act_steps=16,
+                              train_steps=19_530, train_batch=768),
     "hrm_maze": RecursiveArch("HRM (maze)", dim=512, tokens=900 + 1, expansion=4,
-                              applications=_HRM_APPLICATIONS, act_steps=16),
+                              applications=_HRM_APPLICATIONS, act_steps=16,
+                              train_factor=_HRM_TRAIN_FACTOR, train_steps=39_060,
+                              train_batch=768),
 }
+
+
+def sotaku_flops(iterations: int = 1024, steps: int = 50_000, batch: int = 2048,
+                 late_fraction: float = 0.2, late_horizons=(32, 64, 128, 256, 512)) -> dict:
+    """Sotaku v2: 4 layers at d=128, feed-forward 512, over 81 cells.
+
+    Training runs 16 iterations with gradients (3x each); on `late_fraction` of
+    batches it first runs a no-grad burn-in to a random horizon and supervises
+    only the window after it.
+    """
+    per_iteration = 4 * layer_flops(81, 128, 512)
+    per_sample = 3 * 16 + late_fraction * sum(late_horizons) / len(late_horizons)
+    return {"inference": iterations * per_iteration,
+            "training": per_sample * per_iteration * batch * steps}
 
 
 def run_compute(rec: dict) -> dict:
@@ -106,7 +152,7 @@ def run_compute(rec: dict) -> dict:
     eval_s = rec.get("gpu_seconds")
     out = {
         "forward_gflops": fwd / 1e9,
-        "train_pflops": 3 * fwd * rec["train_batch"] * rec["train_steps"] / 1e15,
+        "train_pflops": 4 * fwd * rec["train_batch"] * rec["train_steps"] / 1e15,
         # Training loop after the compile step, excluding monitoring solves; None
         # until the run has trained (or been evaluated), so means skip it.
         "train_b200_h": train_s / 3600 if train_s is not None else None,
@@ -139,11 +185,15 @@ def compute_table(manifests: list[str], results_dir: Path = RESULTS) -> str:
                 f"{avg['train_pflops']:.2f} | {_cell(avg['train_b200_h'])} | "
                 f"{_cell(avg['eval_b200_h'])} | "
                 f"{_cell(avg.get('inference_gflops_per_puzzle'), 1)} |")
-    lines += ["", "| Baseline | Fwd GFLOPs (one ACT step) | Max inference GFLOPs / puzzle |",
-              "|---|---:|---:|"]
+    lines += ["", "| Baseline | Fwd GFLOPs (one ACT step) | Inference GFLOPs / puzzle | "
+              "Train PFLOPs |", "|---|---:|---:|---:|"]
     for arch in BASELINES.values():
         lines.append(f"| {arch.name} | {arch.forward_flops() / 1e9:.2f} | "
-                     f"{arch.max_inference_flops() / 1e9:.1f} |")
+                     f"{arch.max_inference_flops() / 1e9:.1f} | "
+                     f"{arch.training_flops() / 1e15:.0f} |")
+    sotaku = sotaku_flops()
+    lines.append(f"| Sotaku v2 | -- | {sotaku['inference'] / 1e9:.1f} | "
+                 f"{sotaku['training'] / 1e15:.0f} |")
     return "\n".join(lines) + "\n"
 
 
