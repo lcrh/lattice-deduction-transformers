@@ -93,13 +93,13 @@ def throughput(short_steps: int = 200, long_steps: int = 900) -> dict:
 
     script = ("import sys; from looping.exp_health_methods import FULL_50K_SCHEDULE, "
               "get_health_method_config; from stabilize.exp_testbed_20k import train; "
-              "train(output_dir=sys.argv[1], experiment_name='throughput', run_name=sys.argv[1], "
+              "train(output_dir=sys.argv[1], experiment_name='throughput', run_name=sys.argv[3], "
               "random_seed=20260730, schedule=FULL_50K_SCHEDULE, "
               "stop_after_step=int(sys.argv[2]), **get_health_method_config('late_state_ce'))")
     seconds = {}
     for steps in (short_steps, long_steps):
         t0 = time.perf_counter()
-        subprocess.run([sys.executable, "-c", script, f"/tmp/tp{steps}", str(steps)],
+        subprocess.run([sys.executable, "-c", script, f"/tmp/tp{steps}", str(steps), f"tp{steps}"],
                        cwd=SOTAKU_REMOTE, check=True)
         seconds[steps] = time.perf_counter() - t0
     return {"model": "Sotaku v2", "seconds": seconds,
