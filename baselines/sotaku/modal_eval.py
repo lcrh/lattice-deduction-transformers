@@ -1,11 +1,15 @@
-"""Sotaku v2 on Sudoku-Extreme test puzzles in LDT's ordering, on one B200.
+"""Sotaku v2 on Sudoku-Extreme, on one B200: evaluation and training throughput.
 
-Runs the released v2.0.0 weights (commit below) with the release's inference
-settings (FP32, batch 256, 1,024 iterations) on the first `n` puzzles of
-`sudoku_test_perm`, and records exact-match accuracy and GPU seconds.
+`evaluate` runs the released v2.0.0 weights (commit below) with the release's
+inference settings (FP32, batch 256, 1,024 iterations) on the first `n`
+puzzles of `sudoku_test_perm`, and records exact-match accuracy and GPU
+seconds. `throughput` times the released training recipe (the 50K reference
+preset) as the difference between runs stopped at two early steps, so data
+preparation and startup cancel out.
 
 Usage:
     uv run modal run baselines/sotaku/modal_eval.py [--n 10000]
+    uv run modal run baselines/sotaku/modal_eval.py::run_throughput
 """
 
 import json
@@ -77,6 +81,34 @@ def evaluate(indices: list[int], iterations: int = 1024, batch_size: int = 256) 
             "wrong": n - correct, "exact_accuracy": correct / n, "iterations": iterations,
             "batch_size": batch_size, "gpu": "B200", "gpu_seconds": seconds,
             "index_list": "sudoku_test_perm"}
+
+
+@app.function(image=image, gpu="B200", timeout=3 * 3600,
+              secrets=[modal.Secret.from_name("huggingface-secret")])
+def throughput(short_steps: int = 200, long_steps: int = 900) -> dict:
+    """Steady-state s/step of the 50K reference recipe (both runs stop before the first probe)."""
+    import subprocess
+    import sys
+    import time
+
+    script = ("import sys; from looping.exp_health_methods import FULL_50K_SCHEDULE, "
+              "get_health_method_config; from stabilize.exp_testbed_20k import train; "
+              "train(output_dir=sys.argv[1], experiment_name='throughput', run_name=sys.argv[1], "
+              "random_seed=20260730, schedule=FULL_50K_SCHEDULE, "
+              "stop_after_step=int(sys.argv[2]), **get_health_method_config('late_state_ce'))")
+    seconds = {}
+    for steps in (short_steps, long_steps):
+        t0 = time.perf_counter()
+        subprocess.run([sys.executable, "-c", script, f"/tmp/tp{steps}", str(steps)],
+                       cwd=SOTAKU_REMOTE, check=True)
+        seconds[steps] = time.perf_counter() - t0
+    return {"model": "Sotaku v2", "seconds": seconds,
+            "s_per_step": (seconds[long_steps] - seconds[short_steps]) / (long_steps - short_steps)}
+
+
+@app.local_entrypoint()
+def run_throughput():
+    print(throughput.remote())
 
 
 @app.local_entrypoint()
