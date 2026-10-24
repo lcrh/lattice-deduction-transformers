@@ -54,7 +54,9 @@ def entrypoint(checkpoint: str, set: str = "", indices_file: str = "", split: st
                wait: bool = True):
     stored = checkpoint_experiment.remote(checkpoint)
     cls = experiment_class(stored["benchmark"])
-    data = stored["experiment"]
+    # Current defaults under the stored config, so options added since the
+    # checkpoint was trained exist (at their defaults) and can be overridden.
+    data = cfglib.merge(cfglib.to_dict(cls()), stored["experiment"])
     if set:
         overrides = cfglib.parse_overrides(set)
         if overrides.keys() - {"eval", "solve", "provenance"}:
