@@ -1,6 +1,9 @@
-"""Figure 3: Maze accuracy against the number K of supervised shortest paths.
+"""Figure 3: Maze accuracy and search cost against the number K of supervised shortest paths.
 
-15x15 synthetic mazes; mean over seeds with the seed range.
+15x15 synthetic mazes; mean over seeds with the seed range. Solve rate for
+argmax digits at evaluation (the default) and for sampled digits (the
+`k_<K>_sample` entries, the same checkpoints), and model calls per solved
+maze for argmax digits.
 
     uv run python -m paper.figures.fig3_maze_ksweep [--copy-to DIR]
 """
@@ -20,28 +23,48 @@ from paper.tables.common import (  # noqa: E402
 
 
 def k_curve(records: list[dict]) -> dict:
-    """{K: (mean, min, max)} of accuracy over seeds."""
-    out = {}
+    """{policy: {K: {"acc": (mean, min, max), "calls": mean calls per solved maze}}}."""
+    out: dict = {"argmax": {}, "sample": {}}
     for all_recs in by_entry(records).values():
         recs = done(all_recs)
-        print(f"{all_recs[0]['entry']}: seeds {seeds_cell(all_recs)}")
+        entry = all_recs[0]["entry"]
+        print(f"{entry}: seeds {seeds_cell(all_recs)}")
         if not recs:
             continue
+        policy = "sample" if entry.endswith("_sample") else "argmax"
+        k = int(entry.split("_")[1])
         acc = np.array([r["accuracy"] for r in recs])
-        out[int(recs[0]["x"])] = (acc.mean(), acc.min(), acc.max())
-    return dict(sorted(out.items()))
+        out[policy][k] = {"acc": (acc.mean(), acc.min(), acc.max()),
+                          "calls": np.mean([r["calls_correct_mean"] for r in recs])}
+    return {p: dict(sorted(c.items())) for p, c in out.items() if c}
 
 
-def plot(curve: dict) -> bytes:
-    fig, ax = plt.subplots(figsize=(4, 3))
-    ks = list(curve)
-    mean = [100 * curve[k][0] for k in ks]
-    ax.errorbar(ks, mean, yerr=[[100 * (curve[k][0] - curve[k][1]) for k in ks],
-                                [100 * (curve[k][2] - curve[k][0]) for k in ks]],
-                marker="o", ms=3, capsize=2, color="0.2")
+def plot(curves: dict) -> bytes:
+    fig, ax = plt.subplots(figsize=(4.2, 3))
+    for policy, style in (("argmax", "-"), ("sample", "--")):
+        if policy not in curves:
+            continue
+        c = curves[policy]
+        ks = list(c)
+        mean, lo, hi = (np.array([100 * c[k]["acc"][i] for k in ks]) for i in range(3))
+        ax.plot(ks, mean, style, marker="o", ms=3, color="C0",
+                label=f"solve rate, {policy} digits")
+        if policy == "argmax":               # seed range; the sampled range is much wider
+            ax.fill_between(ks, lo, hi, color="C0", alpha=0.12)
     ax.set_xscale("log", base=2)
-    ax.set_xlabel("Supervised shortest paths K")
-    ax.set_ylabel("Test accuracy (%)")
+    ax.set_xticks(list(curves["argmax"]), [str(k) for k in curves["argmax"]])
+    ax.set_xlabel("Supervised shortest paths $K$")
+    ax.set_ylabel("Solve rate (%)", color="C0")
+    calls_ax = ax.twinx()
+    c = curves["argmax"]
+    calls_ax.plot(list(c), [c[k]["calls"] for k in c], "-s", ms=3, color="C2",
+                  label="model calls / solved maze")
+    calls_ax.set_ylabel("Model calls per solved maze", color="C2")
+    calls_ax.set_ylim(0, None)
+    lines = ax.get_legend_handles_labels()
+    more = calls_ax.get_legend_handles_labels()
+    ax.legend(lines[0] + more[0], lines[1] + more[1], frameon=False, fontsize=7,
+              loc="lower right", handlelength=2.6)
     fig.tight_layout()
     return pdf_bytes(fig)
 
