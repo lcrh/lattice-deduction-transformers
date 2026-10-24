@@ -1,0 +1,24 @@
+{
+  "n": 10000,
+  "correct": 7040,
+  "wrong": 2960,
+  "exact_accuracy": 0.704,
+  "model": "TRM-att",
+  "checkpoint": "hf://alphaXiv/trm-model-sudoku/step_32550_sudoku_50k_epoch_attn_type",
+  "trm_commit": "413f2f5c290e4091fda8efd73c7a2b3e329e1527",
+  "config": "cfg_sudoku_att",
+  "gpu": "B200",
+  "n_gpus": 1,
+  "global_batch_size": 1536,
+  "index_aligned_with_ldt_cache": true,
+  "index_list": "sudoku_test_perm",
+  "eval_seconds": 102.05887746810913,
+  "gpu_seconds": 102.05887746810913,
+  "n_chunks": 10,
+  "exact_accuracy_ci": [
+    0.6949444509775908,
+    0.7129366052161552
+  ],
+  "ci_alpha": 0.05,
+  "ci_method": "clopper-pearson"
+}

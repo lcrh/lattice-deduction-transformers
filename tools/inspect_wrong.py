@@ -1,10 +1,7 @@
-"""Print the givens, the prediction and the solution of Sudoku puzzles a run
-got wrong or timed out on.
+"""Print the givens, prediction and solution of Sudoku puzzles a run got wrong or timed out on.
 
 Rows come from a collected rows file (`paper.launch collect --rows`) or a
-downloaded eval run directory (blocks/*.jsonl). The puzzles come from the
-local Sudoku-Extreme cache (`sudoku_extreme_<split>.pt`, as written by
-lattice_diffusion.data.sudoku_extreme).
+downloaded eval run directory; puzzles from the local Sudoku-Extreme cache.
 
     uv run python tools/inspect_wrong.py ROWS --cache data/sudoku_extreme_test.pt [--status wrong]
 """
@@ -17,12 +14,15 @@ from pathlib import Path
 
 import torch
 
+from ldt.eval.records import read_blocks
+
 
 def load_rows(path: Path) -> list[dict]:
-    files = sorted((path / "blocks").glob("*.jsonl")) if path.is_dir() else [path]
-    rows = []
-    for f in files:
-        rows += [json.loads(line) for line in f.read_text().splitlines() if line.strip()]
+    """Rows of a rows file or an eval run directory, in index-list order."""
+    if path.is_dir():
+        rows = [row for block in read_blocks(path).values() for row in block]
+    else:
+        rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     return sorted(rows, key=lambda r: r["pos"])
 
 

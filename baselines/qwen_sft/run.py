@@ -12,7 +12,7 @@ Evaluation (the primary path; no training needed):
     uv run modal run baselines/qwen_sft/run.py::evaluate \
         --run-dir /checkpoints/followups/llm_baseline/qwen3_5_0_8b_natural_ep16_seed0
 
-evaluates saved checkpoints on the first `n_eval` puzzles (default 200) of
+evaluates saved checkpoints on the first `n_eval` puzzles (default 256) of
 LDT's `sudoku_test_perm` ordering, with `samples_per_puzzle` (default 32)
 samples each, and reports unbiased pass@k. The puzzle setup (natural / K
 blanks) is read from the run's `run_config.json`.
@@ -40,8 +40,8 @@ from typing import Any
 
 import modal
 
-from lattice_diffusion.modal.image import (
-    CHECKPOINT_MOUNT, DATA_MOUNT, checkpoint_volume, data_volume, hf_secret,
+from ldt.modal.image import (
+    CHECKPOINT_MOUNT, DATA_MOUNT, HF_HOME, checkpoint_volume, data_volume, hf_secret,
 )
 
 MODEL_ID = "Qwen/Qwen3.5-0.8B"
@@ -75,9 +75,9 @@ class TrainConfig:
 
 @dataclass
 class EvalConfig:
-    n_eval: int = 200               # first n of sudoku_test_perm
+    n_eval: int = 256               # first n of sudoku_test_perm
     samples_per_puzzle: int = 32
-    batch_puzzles: int = 4
+    batch_puzzles: int = 32         # x samples_per_puzzle sequences per generate call
     max_new_tokens: int = 128
     temperature: float = 0.8
     top_p: float = 0.95
@@ -194,30 +194,56 @@ def summarize_records(records: list[dict[str, Any]], samples_per_puzzle: int) ->
 # Modal
 # --------------------------------------------------------------------------
 
+# Qwen3.5's linear-attention layers need flash-linear-attention and causal-conv1d
+# for fast kernels (transformers otherwise falls back to slow reference code).
+# causal-conv1d is compiled against the locked torch (CUDA 13), hence the CUDA
+# devel base image; only the B200 architecture is built.
 llm_image = (
-    modal.Image.debian_slim(python_version="3.10")
-    .apt_install("git")
+    modal.Image.from_registry("nvidia/cuda:13.0.1-devel-ubuntu22.04", add_python="3.10")
+    .apt_install("git", "build-essential")
     .uv_sync(extras=["llm"])
-    .add_local_python_source("lattice_diffusion")
+    .run_commands(
+        "/.uv/.venv/bin/python -m ensurepip",
+        "/.uv/.venv/bin/python -m pip install ninja packaging flash-linear-attention==0.5.2",
+        "CC=gcc CXX=g++ TORCH_CUDA_ARCH_LIST=10.0 CAUSAL_CONV1D_FORCE_BUILD=TRUE MAX_JOBS=16 "
+        "/.uv/.venv/bin/python -m pip install --no-build-isolation causal-conv1d==1.7.0",
+    )
+    .env({"HF_HOME": HF_HOME})
+    .add_local_python_source("ldt")
 )
 
 app = modal.App("qwen-sudoku-sft")
 
 RUNS_ROOT = f"{CHECKPOINT_MOUNT}/baselines/qwen_sft"
 EVAL_ROOT = f"{CHECKPOINT_MOUNT}/eval/baselines/qwen_sft"
+DEFAULT_RUN = f"{CHECKPOINT_MOUNT}/followups/llm_baseline/qwen3_5_0_8b_natural_ep16_seed0"
+
+
+def _tokenizer(padding_side: str):
+    """The base model's tokenizer (SFT does not change it), with a pad token."""
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = padding_side
+    return tokenizer
+
+
+def _print_summaries(summaries: list[dict], samples_per_puzzle: int) -> None:
+    for s in summaries:
+        print(f"{Path(s['checkpoint']).name} epoch {s['epoch']:g}: " + "  ".join(
+            f"pass@{k}={s[f'pass_at_{k}']:.3f}" for k in PASS_KS if k <= samples_per_puzzle))
 
 
 def _load_dataset(split: str):
-    import os
-
     from datasets import load_dataset
 
-    os.environ.setdefault("HF_HOME", f"{DATA_MOUNT}/huggingface")
     return load_dataset("sapientinc/sudoku-extreme", split=split)
 
 
 def _eval_rows(n_eval: int, n_blanks: int | None) -> list[dict[str, Any]]:
-    from lattice_diffusion.eval import indices
+    from ldt.eval import indices
 
     test_idx = indices.load("sudoku_test_perm").indices[:n_eval].tolist()
     return make_rows(_load_dataset("test"), test_idx, n_blanks)
@@ -226,12 +252,9 @@ def _eval_rows(n_eval: int, n_blanks: int | None) -> list[dict[str, Any]]:
 def _evaluate_checkpoint(checkpoint: Path, rows: list[dict[str, Any]], cfg: EvalConfig,
                          out_dir: Path) -> dict[str, Any]:
     import torch
-    from transformers import AutoModelForImageTextToText, AutoTokenizer
+    from transformers import AutoModelForImageTextToText
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)  # SFT does not change it
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "left"
+    tokenizer = _tokenizer("left")
     model = AutoModelForImageTextToText.from_pretrained(
         checkpoint, dtype=torch.bfloat16, attn_implementation="sdpa").to("cuda")
     model.config.use_cache = True
@@ -240,8 +263,10 @@ def _evaluate_checkpoint(checkpoint: Path, rows: list[dict[str, Any]], cfg: Eval
 
     records = []
     t0 = time.time()
+    n_batches = math.ceil(len(rows) / cfg.batch_puzzles)
     with torch.inference_mode():
         for start in range(0, len(rows), cfg.batch_puzzles):
+            t_batch = time.time()
             batch = rows[start:start + cfg.batch_puzzles]
             prompts = [
                 tokenizer.apply_chat_template(make_messages(r["question"]), tokenize=False,
@@ -274,6 +299,12 @@ def _evaluate_checkpoint(checkpoint: Path, rows: list[dict[str, Any]], cfg: Eval
                     **pass_at_k_curve(cfg.samples_per_puzzle, n_correct),
                     "completions": texts,
                 })
+            n_samples = len(records) * cfg.samples_per_puzzle
+            correct = sum(r["n_correct"] for r in records)
+            print(f"  batch {start // cfg.batch_puzzles + 1}/{n_batches}: {len(records)} puzzles, "
+                  f"pass@1 {correct / n_samples:.3f} ({correct}/{n_samples} samples), "
+                  f"malformed {sum(r['n_malformed'] for r in records)}, "
+                  f"{time.time() - t_batch:.1f}s", flush=True)
     summary = {
         "checkpoint": str(checkpoint),
         "epoch": checkpoint_epoch(checkpoint),
@@ -285,21 +316,33 @@ def _evaluate_checkpoint(checkpoint: Path, rows: list[dict[str, Any]], cfg: Eval
         **summarize_records(records, cfg.samples_per_puzzle),
     }
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     with (out_dir / "rows.jsonl").open("w") as fh:
         for r in records:
             fh.write(json.dumps(r) + "\n")
+    # Written last: a summary marks the checkpoint's eval as complete.
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     del model
     torch.cuda.empty_cache()
     return summary
+
+
+def _finished_summary(out_dir: Path, cfg: EvalConfig,
+                      rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The saved summary of an identical, finished eval of this checkpoint, if any."""
+    path = out_dir / "summary.json"
+    if not path.exists():
+        return None
+    summary = json.loads(path.read_text())
+    same = (summary.get("eval_config") == asdict(cfg)
+            and summary.get("eval_digest_sha256") == rows_digest(rows))
+    return summary if same else None
 
 
 @app.function(image=llm_image, gpu="B200", timeout=12 * 3600, secrets=[hf_secret],
               volumes={DATA_MOUNT: data_volume, CHECKPOINT_MOUNT: checkpoint_volume})
 def evaluate_run(run_dir: str, eval_cfg: dict, checkpoints: list[str] | None = None,
                  every_epochs: int = 2) -> list[dict[str, Any]]:
-    """Evaluate saved checkpoints of one run. `checkpoints` names specific
-    checkpoint-* dirs; otherwise every `every_epochs`-th epoch."""
+    """Evaluate the named checkpoint-* dirs of a run, or else every `every_epochs`-th epoch."""
     cfg = EvalConfig(**eval_cfg)
     run = Path(run_dir)
     run_config = json.loads((run / "run_config.json").read_text())
@@ -314,9 +357,14 @@ def evaluate_run(run_dir: str, eval_cfg: dict, checkpoints: list[str] | None = N
     tag = f"sudoku_test_perm_n{cfg.n_eval}_s{cfg.samples_per_puzzle}_seed{cfg.seed}"
     summaries = []
     for checkpoint in selected:
+        out_dir = Path(EVAL_ROOT) / run.name / checkpoint.name / tag
+        done = _finished_summary(out_dir, cfg, rows)
+        if done is not None:
+            print(f"already evaluated: {checkpoint}", flush=True)
+            summaries.append({**done, "n_blanks": n_blanks})
+            continue
         print(f"evaluating {checkpoint} ({blanks_tag(n_blanks)}) …", flush=True)
-        summary = _evaluate_checkpoint(
-            checkpoint, rows, cfg, Path(EVAL_ROOT) / run.name / checkpoint.name / tag)
+        summary = _evaluate_checkpoint(checkpoint, rows, cfg, out_dir)
         summary["n_blanks"] = n_blanks
         summaries.append(summary)
         checkpoint_volume.commit()
@@ -330,10 +378,10 @@ def train_run(train_cfg: dict, resume: bool = False) -> dict[str, Any]:
     import torch
     from torch.nn.utils.rnn import pad_sequence
     from transformers import (
-        AutoModelForImageTextToText, AutoTokenizer, Trainer, TrainingArguments, set_seed,
+        AutoModelForImageTextToText, Trainer, TrainingArguments, set_seed,
     )
 
-    from lattice_diffusion.data.sudoku_extreme import SudokuExtremeConfig, select_pool
+    from ldt.data.sudoku_extreme import SudokuExtremeConfig, select_pool
 
     cfg = TrainConfig(**train_cfg)
     set_seed(cfg.seed)
@@ -354,10 +402,7 @@ def train_run(train_cfg: dict, resume: bool = False) -> dict[str, Any]:
     }, indent=2))
     checkpoint_volume.commit()
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "right"
+    tokenizer = _tokenizer("right")
     examples = []
     for r in rows:
         prompt = tokenizer.apply_chat_template(make_messages(r["question"]), tokenize=False,
@@ -407,20 +452,16 @@ def train_run(train_cfg: dict, resume: bool = False) -> dict[str, Any]:
     return {"run_dir": str(run_dir), "train_seconds": train_seconds}
 
 
-DEFAULT_RUN = "/checkpoints/followups/llm_baseline/qwen3_5_0_8b_natural_ep16_seed0"
-
-
 @app.local_entrypoint()
 def evaluate(run_dir: str = DEFAULT_RUN, checkpoint: str = "", every_epochs: int = 2,
-             n_eval: int = 200, samples_per_puzzle: int = 32, seed: int = 0,
-             out: str = ""):
+             n_eval: int = 256, samples_per_puzzle: int = 32, seed: int = 0,
+             batch_puzzles: int = 32, out: str = ""):
     """Evaluate an existing run's checkpoints (all even epochs, or one)."""
-    cfg = EvalConfig(n_eval=n_eval, samples_per_puzzle=samples_per_puzzle, seed=seed)
+    cfg = EvalConfig(n_eval=n_eval, samples_per_puzzle=samples_per_puzzle, seed=seed,
+                     batch_puzzles=batch_puzzles)
     summaries = evaluate_run.remote(run_dir, asdict(cfg),
                                     [checkpoint] if checkpoint else None, every_epochs)
-    for s in summaries:
-        print(f"{Path(s['checkpoint']).name} epoch {s['epoch']:g}: " + "  ".join(
-            f"pass@{k}={s[f'pass_at_{k}']:.3f}" for k in PASS_KS if k <= samples_per_puzzle))
+    _print_summaries(summaries, samples_per_puzzle)
     if out:
         Path(out).write_text(json.dumps(summaries, indent=2))
         print(f"wrote {out}")
@@ -428,7 +469,7 @@ def evaluate(run_dir: str = DEFAULT_RUN, checkpoint: str = "", every_epochs: int
 
 @app.local_entrypoint()
 def train(epochs: int = 16, n_blanks: int | None = None, seed: int = 0,
-          eval_every_epochs: int = 2, n_eval: int = 200, samples_per_puzzle: int = 32,
+          eval_every_epochs: int = 2, n_eval: int = 256, samples_per_puzzle: int = 32,
           resume: bool = False):
     """Train a new run, then evaluate it like `evaluate`."""
     cfg = TrainConfig(epochs=epochs, n_blanks=n_blanks, seed=seed,
@@ -436,6 +477,5 @@ def train(epochs: int = 16, n_blanks: int | None = None, seed: int = 0,
     result = train_run.remote(asdict(cfg), resume)
     print(json.dumps(result, indent=2))
     eval_cfg = EvalConfig(n_eval=n_eval, samples_per_puzzle=samples_per_puzzle, seed=seed)
-    for s in evaluate_run.remote(result["run_dir"], asdict(eval_cfg), None, eval_every_epochs):
-        print(f"{Path(s['checkpoint']).name} epoch {s['epoch']:g}: pass@1={s['pass_at_1']:.3f} "
-              f"pass@{samples_per_puzzle}={s[f'pass_at_{samples_per_puzzle}']:.3f}")
+    _print_summaries(evaluate_run.remote(result["run_dir"], asdict(eval_cfg), None,
+                                         eval_every_epochs), samples_per_puzzle)

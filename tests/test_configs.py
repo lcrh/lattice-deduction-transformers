@@ -1,12 +1,11 @@
 import importlib
-import tempfile
 from pathlib import Path
 
 import pytest
 import torch
 
-from lattice_diffusion import config as cfglib
-from lattice_diffusion.eval.stop import FixedN, stop_from_dict
+from ldt import config as cfglib
+from ldt.eval.stop import SequentialStop, stop_from_dict
 from experiments.registry import experiment_class
 from tests.equivalence import fakes, train_runs
 
@@ -71,11 +70,11 @@ def test_json_round_trip():
         assert cfglib.to_dict(cls.from_json(exp.to_json())) == cfglib.to_dict(exp)
 
 
-def test_ablation_config_uses_first_1000_test_puzzles():
+def test_ablation_config_caps_test_puzzles_at_4096():
     exp = cfglib.load(experiment_class("sudoku"), CONFIGS / "sudoku" / "ablation.yaml")
     spec = exp.eval_spec("/ckpt/a.pt")
     assert spec.index_list == "sudoku_test_perm"
-    assert stop_from_dict(spec.stop) == FixedN(1000)
+    assert stop_from_dict(spec.stop) == SequentialStop(n_max=4096)
 
 
 def test_maze_synthetic_eval_spec():
@@ -88,16 +87,24 @@ def test_maze_synthetic_eval_spec():
 
 
 @pytest.mark.parametrize("benchmark", BENCHMARKS)
-def test_monitoring_does_not_change_trained_weights(benchmark, monkeypatch):
-    """Monitoring solves run under a forked RNG, so a run with monitoring
-    every step trains the same weights as the reference run without it."""
+def test_monitoring_does_not_change_trained_weights(benchmark, monkeypatch, tmp_path):
+    """Monitoring runs under a forked RNG, so it never changes the trained weights."""
     module = importlib.import_module(f"experiments.{benchmark}.train")
     calls = []
     real = module.monitor_solve
     monkeypatch.setattr(module, "monitor_solve", lambda *a, **k: calls.append(1) or real(*a, **k))
-    with tempfile.TemporaryDirectory() as tmp:
-        state = train_runs.RUNS[benchmark](Path(tmp), monitor_every=1, monitor_n_puzzles=4,
-                                           monitor_max_rounds=2, monitor_n_chains=4)
+    state = train_runs.RUNS[benchmark](tmp_path, monitor_every=1, monitor_n_puzzles=4,
+                                       monitor_max_rounds=2, monitor_n_chains=4)
     assert len(calls) == 3
     ref = torch.load(fakes.FIXTURES / "train.pt", weights_only=False)[benchmark]
     assert fakes.state_dict_equal(state, ref)
+
+
+def test_one_shot_is_hashed_only_when_set():
+    from experiments.snowflake.config import SnowflakeExperiment
+
+    exp = SnowflakeExperiment()
+    assert "one_shot" not in exp.solve_dict()
+    one_shot = cfglib.load(SnowflakeExperiment, None, ["solve.one_shot=true"])
+    assert one_shot.solve_dict()["one_shot"] is True
+    assert one_shot.eval_spec("x.pt").spec_hash() != exp.eval_spec("x.pt").spec_hash()

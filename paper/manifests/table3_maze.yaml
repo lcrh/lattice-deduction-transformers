@@ -3,9 +3,8 @@ exp_id: M4
 benchmark: maze
 eval: whole
 seeds: [0, 1, 2]
-table:
-  caption: "Maze-Hard (30x30) test accuracy."
-  baselines: baselines
+# Keep a checkpoint every 1,000 steps: training is unstable, and the best one is reported.
+set: {train.keep_step_snapshots: true}
 entries:
   - name: k1
     label: "LDT, K=1"
@@ -13,3 +12,13 @@ entries:
   - name: k512
     label: "LDT, K=512"
     config: configs/maze/paper_k512.yaml
+  # The original evals appear to have used theta_elim = 0.5 (the default above),
+  # while the paper text implies 0.1; evaluate the same checkpoints at both.
+  - name: k1_elim0p1
+    label: "LDT, K=1, theta_elim 0.1 at eval"
+    eval_of: k1
+    set: {solve.step.threshold: 0.1}
+  - name: k512_elim0p1
+    label: "LDT, K=512, theta_elim 0.1 at eval"
+    eval_of: k512
+    set: {solve.step.threshold: 0.1}

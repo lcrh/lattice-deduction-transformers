@@ -1,5 +1,4 @@
-"""Appendix I: fine-tuned Qwen3.5-0.8B, pass@k at each run's final evaluated
-epoch, from the result files of the appendix_i_llm manifest.
+"""Appendix I: fine-tuned Qwen3.5-0.8B, pass@k at each run's final evaluated epoch.
 
     uv run python -m paper.tables.appendix_llm [--copy-to DIR]
 """
@@ -27,7 +26,7 @@ def build(records: list[dict]) -> Table:
         columns=["Training puzzles", "Epoch", *(f"pass@{k} (\\%)" for k in PASS_KS)],
         rows=body, label="tab:llm-sft",
         caption=("Qwen3.5-0.8B fully fine-tuned on the same 1,000 training puzzles, evaluated "
-                 "on the first 200 puzzles of the Sudoku-Extreme test ordering (or their "
+                 "on the first 256 puzzles of the Sudoku-Extreme test ordering (or their "
                  "$k$-blank versions), 32 samples per puzzle; unbiased pass@$k$."))
 
 

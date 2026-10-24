@@ -7,11 +7,12 @@ import time
 import numpy as np
 import torch
 
-from lattice_diffusion.eval import indices as index_lists
-from lattice_diffusion.eval.records import EvalSpec
-from lattice_diffusion.eval.runner import block_args, solve_block
-from lattice_diffusion.eval.stop import SequentialStop
-from lattice_diffusion.eval.tasks import EvalTask
+from ldt.eval import indices as index_lists
+from ldt.eval.records import EvalSpec
+from ldt.eval.runner import block_args, solve_block
+from ldt.eval.scheduler import Executor
+from ldt.eval.stop import SequentialStop
+from ldt.eval.tasks import EvalTask, TaskBlock
 
 _TORCH_LOCK = threading.Lock()
 
@@ -25,9 +26,6 @@ class FakeTask(EvalTask):
     def load_model(self, checkpoint, dropout_p, compile):
         return None
 
-    def warmup(self, model) -> None:
-        pass
-
     def split_size(self, split: str) -> int:
         return 5000
 
@@ -38,7 +36,7 @@ class FakeTask(EvalTask):
             status = "correct" if u < solve["p_correct"] else ("wrong" if u < 0.975 else "timeout")
             rows.append({"idx": idx, "status": status, "rounds": 1, "calls": int(u * 100),
                          "forwards": 64, "n_resets": 0, "solution": "", "verified": False})
-        return rows
+        return TaskBlock(rows, len(indices))
 
 
 def make_spec(stop=None, **kw) -> EvalSpec:
@@ -56,22 +54,20 @@ def index_list():
 
 
 def block_solver(spec: EvalSpec, jitter_s: float = 0.0):
-    """block id -> rows, serialized on the global torch RNG like one process
-    per worker would be, with optional random delay to shuffle completion."""
+    """block id -> rows on the global torch RNG, with optional delay to shuffle completion."""
     task, lst = FakeTask(), index_list()
 
     def solve(block: int):
         if jitter_s:
             time.sleep(random.random() * jitter_s)
         with _TORCH_LOCK:
-            return solve_block(task, None, block_args(spec, lst, block))
+            return solve_block(task, None, block_args(spec, lst, block)).rows
 
     return solve
 
 
-class ReorderExecutor:
-    """Completes submitted blocks one at a time in a random (seeded) order;
-    `slow` blocks only complete when nothing else is pending."""
+class ReorderExecutor(Executor):
+    """Completes blocks one at a time in a seeded random order; `slow` blocks finish last."""
 
     def __init__(self, solve, seed: int = 0, slow: frozenset = frozenset()):
         self.solve = solve

@@ -1,6 +1,6 @@
-"""Parallel pregen of maze canonical pool + K-solutions on Modal CPU
-workers, written as parquet shards on the shared data volume so subsequent
-training runs hit the cache via `MazeDataset._build_or_load_pregen`.
+"""Pregenerate a maze pool and its K sampled paths on Modal CPU workers, as parquet shards.
+
+Training runs then read the cache through `MazeDataset`.
 
 Usage:
     uv run modal run experiments/maze/pregen.py \
@@ -37,7 +37,7 @@ from experiments.maze.data import (
     _build_synthetic_canonical_pool, _load_maze_hard_canonical_pool,
     _pregen_cache_key, _pregen_cache_spec,
 )
-from lattice_diffusion.modal.image import (
+from ldt.modal.image import (
     DATA_MOUNT, data_volume, hf_secret, image,
 )
 
@@ -52,9 +52,7 @@ app = modal.App("maze-pregen")
     timeout=3600 * 4,  # 30x30 hard rejection rate is ~300:1; allow ample time
 )
 def pregen_chunk_shard(spec: dict, chunk_idx: int, chunk_size: int, shard_path: str) -> dict:
-    """Generate `chunk_size` puzzles + K-solutions on a single worker, write
-    parquet shard to `shard_path` on the data volume, and return shard meta.
-    """
+    """Generate one shard of puzzles and K paths, write it to `shard_path`, return its meta."""
     cfg = MazeConfig(
         dataset=spec["dataset"],
         cache_dir=DATA_MOUNT,

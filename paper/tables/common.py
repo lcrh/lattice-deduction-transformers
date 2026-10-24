@@ -1,30 +1,23 @@
-"""Shared helpers for the table and figure scripts: read collected results,
-aggregate over seeds, paired comparisons from per-puzzle rows, LaTeX."""
+"""Shared helpers for the table and figure scripts."""
 
 from __future__ import annotations
 
 import argparse
-import csv
+import io
 import json
 import math
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from lattice_diffusion.eval.stats import PairedDifference, paired_difference
+from ldt.eval.stats import PairedDifference, paired_difference
 
 from paper.manifest import REPO
+from paper.results import RESULTS, read_results
 
-RESULTS = REPO / "paper" / "results"
+__all__ = ["RESULTS", "read_results"]
+
 OUT = REPO / "paper" / "out"
-
-_NUMERIC = {"seed", "eval_seed", "n", "correct", "wrong", "timeout", "accuracy", "acc_lo",
-            "acc_hi", "wrong_rate_upper", "failure_rate", "calls_mean", "calls_p50",
-            "calls_p75", "calls_p90", "calls_p95", "calls_correct_mean", "unsound_rate",
-            "gpu_seconds", "startup_seconds", "wall_seconds", "n_evaluated", "train_seconds",
-            "model_dim", "model_layers", "model_loops", "model_heads", "model_seq_len",
-            "model_ffn_mult", "model_channels", "train_steps", "train_batch", "solve_chains",
-            "solve_max_rounds", "x"}
 
 EVAL_RULES = {
     "fixed_n": ("the first {n} puzzles of a fixed random ordering of the test split, "
@@ -34,27 +27,8 @@ EVAL_RULES = {
                  "(n = {n} per seed)"),
     "half_width": ("a fixed random ordering of the test split, evaluated until the 95% "
                    "interval on accuracy is within 0.1 points (n = {n} per seed)"),
+    "n_max": "a fixed random ordering of the puzzles, evaluated up to a cap (n = {n} per seed)",
 }
-
-
-def parse_cell(key: str, value: str):
-    if value == "" or value is None:
-        return None
-    if key in _NUMERIC:
-        try:
-            f = float(value)
-        except ValueError:
-            return value
-        return int(f) if f.is_integer() and key not in ("accuracy", "x") else f
-    if value in ("True", "False"):
-        return value == "True"
-    return value
-
-
-def read_results(manifest: str, results_dir: Path = RESULTS) -> list[dict]:
-    path = results_dir / f"{manifest}.csv"
-    with path.open() as fh:
-        return [{k: parse_cell(k, v) for k, v in row.items()} for row in csv.DictReader(fh)]
 
 
 def by_entry(records: list[dict]) -> dict[str, list[dict]]:
@@ -66,10 +40,30 @@ def by_entry(records: list[dict]) -> dict[str, list[dict]]:
 
 
 def done(records: list[dict]) -> list[dict]:
+    """Records with a finished eval summary."""
     return [r for r in records if r.get("status") == "done" and r.get("n") is not None]
 
 
+def seeds_cell(recs: list[dict]) -> str:
+    """Finished runs of one entry: "3", or "2/3" with a printed warning when some are missing."""
+    n_done = len(done(recs))
+    if n_done < len(recs):
+        print(f"warning: {recs[0]['entry']}: {n_done} of {len(recs)} runs finished")
+        return f"{n_done}/{len(recs)}"
+    return str(n_done)
+
+
+def seeds_text(records: list[dict]) -> str:
+    """Caption text for the number of finished seeds per entry, e.g. "3" or "2--3"."""
+    return n_range([len(v) for v in by_entry(done(records)).values()])
+
+
+def mean(values: list[float]) -> float:
+    return mean_std(values)[0]
+
+
 def mean_std(values: list[float]) -> tuple[float, float]:
+    """Mean and sample std of the non-None values (nan where undefined)."""
     vals = [v for v in values if v is not None]
     if not vals:
         return math.nan, math.nan
@@ -80,6 +74,7 @@ def mean_std(values: list[float]) -> tuple[float, float]:
 
 
 def load_rows(record: dict, root: Path = REPO) -> list[dict]:
+    """The per-puzzle rows collected for a record (`collect --rows`)."""
     path = record.get("rows_path")
     if not path:
         raise FileNotFoundError(f"{record['key']}: no rows (collect with --rows)")
@@ -92,8 +87,7 @@ def correct_by_pos(rows: list[dict]) -> list[bool]:
 
 
 def paired_vs(reference: list[dict], arm: list[dict], root: Path = REPO) -> PairedDifference:
-    """Arm minus reference, paired puzzle by puzzle within each seed (same
-    seed, same positions), pooled over the seeds both have."""
+    """Arm minus reference, paired by puzzle within each seed and pooled over shared seeds."""
     ref_by_seed = {r["seed"]: r for r in reference}
     a, b = [], []
     for rec in arm:
@@ -110,21 +104,32 @@ def paired_vs(reference: list[dict], arm: list[dict], root: Path = REPO) -> Pair
 def eval_rule(records: list[dict]) -> str:
     """Caption text for how a set of runs was evaluated."""
     reasons = {r["stop_reason"] for r in records if r.get("stop_reason")}
-    ns = sorted({r["n"] for r in records if r.get("n") is not None})
-    n_text = f"{ns[0]:,}" if len(ns) == 1 else f"{ns[0]:,}--{ns[-1]:,}" if ns else "?"
+    n_text = n_range([r["n"] for r in records if r.get("n") is not None])
     if len(reasons) == 1:
         return "Evaluated on " + EVAL_RULES.get(next(iter(reasons)), "{n} puzzles").format(n=n_text)
     return f"Evaluated sequentially on a fixed random ordering of the test split (n = {n_text})"
 
 
+def n_range(ns: list[int]) -> str:
+    """"1,000" or "800--1,000"; "?" when empty."""
+    ns = sorted(set(ns))
+    if not ns:
+        return "?"
+    return f"{ns[0]:,}" if len(ns) == 1 else f"{ns[0]:,}--{ns[-1]:,}"
+
+
+def _missing(x) -> bool:
+    return x is None or (isinstance(x, float) and math.isnan(x))
+
+
 def pct(x: float | None, digits: int = 1) -> str:
-    return "--" if x is None or (isinstance(x, float) and math.isnan(x)) else f"{100 * x:.{digits}f}"
+    return "--" if _missing(x) else f"{100 * x:.{digits}f}"
 
 
 def pm(mu: float, sd: float, digits: int = 1) -> str:
-    if math.isnan(mu):
+    if _missing(mu):
         return "--"
-    if math.isnan(sd):
+    if _missing(sd):
         return f"{100 * mu:.{digits}f}"
     return f"{100 * mu:.{digits}f} $\\pm$ {100 * sd:.{digits}f}"
 
@@ -136,7 +141,7 @@ def delta_text(d: PairedDifference) -> str:
 
 
 def num(x, digits: int = 1) -> str:
-    if x is None or (isinstance(x, float) and math.isnan(x)):
+    if _missing(x):
         return "--"
     return f"{x:,.{digits}f}" if isinstance(x, float) else f"{x:,}"
 
@@ -148,8 +153,10 @@ def escape(text: str) -> str:
 
 @dataclass
 class Table:
+    """A LaTeX table; a body row of a single cell is a section heading."""
+
     columns: list[str]                  # header cells (LaTeX)
-    rows: list[list[str]]               # body cells (LaTeX); a list of one str = midrule label
+    rows: list[list[str]]               # body cells (LaTeX)
     caption: str
     label: str
     align: str | None = None
@@ -168,6 +175,30 @@ class Table:
                 lines.append(" & ".join(row) + " \\\\")
         lines += ["\\bottomrule", "\\end{tabular}", "\\end{table}", ""]
         return "\n".join(lines)
+
+
+def pdf_bytes(fig) -> bytes:
+    """Render a matplotlib figure to PDF bytes and close it."""
+    import matplotlib.pyplot as plt
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="pdf")
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def baseline_rows(benchmark: str, results_dir: Path = RESULTS) -> list[dict]:
+    """Finished baseline runs for `benchmark` as {label, result}; [] before they are collected."""
+    try:
+        records = read_results("baselines", results_dir)
+    except FileNotFoundError:
+        return []
+    out = []
+    for rec in records:
+        if rec.get("group") == benchmark and rec.get("status") == "done" and rec.get("result_path"):
+            out.append({"label": rec["label"],
+                        "result": json.loads((REPO / rec["result_path"]).read_text())})
+    return out
 
 
 def write_output(name: str, content: str | bytes, out_dir: Path = OUT,
@@ -193,5 +224,5 @@ def cli(description: str, default_manifest: str | None = None) -> argparse.Names
     ap.add_argument("--results", type=Path, default=RESULTS)
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--copy-to", type=Path, default=None,
-                    help="also copy outputs here (e.g. ../latticeDiffusion/figs)")
+                    help="also copy outputs here (e.g. path/to/paper/figs)")
     return ap.parse_args()

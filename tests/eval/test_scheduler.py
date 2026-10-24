@@ -2,8 +2,8 @@ import random
 
 import pytest
 
-from lattice_diffusion.eval.scheduler import ThreadExecutor, n_blocks, run_blocks
-from lattice_diffusion.eval.stop import PRESETS, FixedN, NoStop, stop_from_dict
+from ldt.eval.scheduler import ThreadExecutor, n_blocks, run_blocks
+from ldt.eval.stop import PRESETS, FixedN, NoStop, SequentialStop, stop_from_dict
 
 from tests.eval.fakes import ReorderExecutor, block_solver, make_spec
 
@@ -51,8 +51,7 @@ def test_result_independent_of_completion_order(reference, seed):
 
 @pytest.mark.parametrize("seed", range(5))
 def test_resume_from_any_completed_subset(reference, seed):
-    """A killed run leaves an arbitrary set of finished blocks on disk;
-    resuming must give the same result and never redo those blocks."""
+    """Resuming from any set of finished blocks gives the same result and never redoes them."""
     spec, ref = reference
     solve = block_solver(spec)
     rng = random.Random(seed)
@@ -66,8 +65,7 @@ def test_resume_from_any_completed_subset(reference, seed):
 
 @pytest.mark.parametrize("window", [1, 3, 8])
 def test_slow_block_bounds_overshoot(window):
-    """A straggler holds the window: nothing is dispatched beyond
-    prefix + window, so work past the stopping point is at most `window` blocks."""
+    """A straggler holds the window, so work past the stopping point is at most `window` blocks."""
     spec = make_spec()
     executor = ReorderExecutor(block_solver(spec), seed=0, slow=frozenset({2, 5}))
     prefix = [0]
@@ -93,8 +91,7 @@ def test_no_stop_evaluates_everything():
 
 @pytest.mark.parametrize("workers,window", [(1, 1), (4, 1), (4, 4), (16, 16), (16, 64)])
 def test_fixed_n_reports_exactly_n(workers, window):
-    """n is not a multiple of the block size; dispatch stops at the block
-    holding item n, whatever the parallelism."""
+    """Dispatch stops at the block holding item n, whatever the parallelism."""
     spec = make_spec(stop=FixedN(1000))
     executor = ThreadExecutor(block_solver(spec, jitter_s=0.002), n_workers=workers)
     try:
@@ -104,7 +101,7 @@ def test_fixed_n_reports_exactly_n(workers, window):
     assert res.stop_reason == "fixed_n"
     assert res.n == len(res.rows) == 1000
     assert [r["pos"] for r in res.rows] == list(range(1000))
-    assert max(res.blocks_done) == n_blocks(1000, spec.block_size) - 1
+    assert res.n_evaluated == n_blocks(1000, spec.block_size) * spec.block_size
 
 
 def test_fixed_n_longer_than_list_is_exhausted():
@@ -116,4 +113,43 @@ def test_fixed_n_longer_than_list_is_exhausted():
 
 def test_fixed_n_round_trips_and_is_the_ablation_preset():
     assert stop_from_dict(FixedN(1000).to_dict()) == FixedN(1000)
-    assert PRESETS["ablation"] == FixedN(1000)
+    assert PRESETS["ablation"] == SequentialStop(n_max=4096)
+
+
+def test_failed_block_drains_in_flight_blocks_then_raises():
+    spec = make_spec(stop=NoStop())
+    solve = block_solver(spec)
+
+    def flaky(block):
+        if block == 3:
+            raise ValueError("boom")
+        return solve(block)
+
+    persisted = []
+    executor = ThreadExecutor(flaky, n_workers=4)
+    with pytest.raises(RuntimeError, match="block 3 failed"):
+        run_blocks(n_items=len(spec.explicit_indices), block_size=spec.block_size,
+                   executor=executor, stop=NoStop(), max_in_flight=8,
+                   on_block_done=lambda b, rows: persisted.append(b))
+    executor.shutdown()
+    assert 3 not in persisted
+    assert set(range(8)) - {3} <= set(persisted)    # the rest of the window was kept
+
+
+def test_sequential_stop_caps_at_n_max():
+    from ldt.eval.stop import PRESETS, PrefixCounts, SequentialStop, stop_from_dict
+
+    rule = SequentialStop(n_max=4000)
+    assert rule.limit == 4000 and stop_from_dict(rule.to_dict()) == rule
+    counts = PrefixCounts(n=3999, correct=3000, timeout=999)  # many failures, but past n_min
+    assert rule.should_stop(counts) == "failures"
+    assert rule.should_stop(PrefixCounts(n=4000, correct=4000)) == "n_max"
+    assert PRESETS["select"] == rule
+
+
+def test_failure_rule_fires_before_n_min():
+    from ldt.eval.stop import PrefixCounts, SequentialStop
+
+    rule = SequentialStop()
+    assert rule.should_stop(PrefixCounts(n=300, correct=200, timeout=100)) == "failures"
+    assert rule.should_stop(PrefixCounts(n=500, correct=500)) is None   # half-width waits for n_min

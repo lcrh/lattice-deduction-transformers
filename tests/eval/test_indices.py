@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 import torch
 
-from lattice_diffusion.data.sudoku_extreme import SudokuExtremeConfig, SudokuExtremeDataset
-from lattice_diffusion.eval import indices as index_lists
+from ldt.data.sudoku_extreme import SudokuExtremeConfig, SudokuExtremeDataset
+from ldt.eval import indices as index_lists
 
 
 def test_named_lists_match_recorded_checksums():
@@ -34,7 +34,7 @@ def small_train_cache(tmp_path, monkeypatch):
     torch.save({"x": x, "y": x.clone(), "n": n}, tmp_path / "sudoku_extreme_train.pt")
     spec = index_lists.IndexListSpec(task="sudoku", split="train", split_size=n, seed=1,
                                      length=50, sha256="")
-    spec = dataclasses.replace(spec, sha256=index_lists._digest(index_lists.generate(spec)))
+    spec = dataclasses.replace(spec, sha256=index_lists.digest(index_lists.generate(spec)))
     monkeypatch.setitem(index_lists.SPECS, "sudoku_val", spec)
     return tmp_path, set(index_lists.generate(spec).tolist())
 
@@ -51,3 +51,18 @@ def test_training_pool_excludes_val(small_train_cache, n_puzzles):
         assert ds.questions.shape[0] == len(pool)
     finally:
         ds.close()
+
+
+def test_sudoku_holdout_avoids_validation_and_portfolio_training_pools():
+    import numpy as np
+
+    from ldt.data.sudoku_extreme import SudokuExtremeConfig, select_pool
+    from ldt.eval import indices as index_lists
+
+    n = 3_831_994
+    holdout = index_lists.load("sudoku_holdout", split_size=n).indices    # checks the digest
+    assert len(holdout) == len(np.unique(holdout)) == 100_000
+    assert not np.isin(holdout, index_lists.load("sudoku_val", split_size=n).indices).any()
+    for seed in index_lists.PORTFOLIO_DATA_SEEDS:
+        pool, _ = select_pool(n, SudokuExtremeConfig(n_puzzles=1000, seed=seed))
+        assert not np.isin(holdout, pool).any()

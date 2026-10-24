@@ -16,11 +16,12 @@ table:
     s3: "Backtracking"
 entries:
   - name: default
+    eval: ablation_10k     # paired reference for the 10K rows
     exp_id: A0
-    label: "2K model, uniform cell, sampled digit"
+    label: "2K model, uniform cell, argmax digit"
     group: s1_2k
   - name: base1k
-    label: "1K model, uniform cell, sampled digit"
+    label: "1K model, uniform cell, argmax digit"
     group: s1_1k
     set: {train.steps: 1000}
   - name: s1_2k
@@ -36,19 +37,20 @@ entries:
       solve.step.cell_policy: [uniform, mrv, min_entropy, max_entropy]
       solve.step.digit_policy: [sample, argmax, rank_k]
   - name: train_argmax
-    label: "trained argmax, eval sample"
-    group: s2
-    set: {train.step.digit_policy: argmax}
-  - name: train_argmax_eval
     label: "trained argmax, eval argmax"
     group: s2
+    set: {train.step.digit_policy: argmax}
+  - name: train_argmax_eval_sample
+    label: "trained argmax, eval sample"
+    group: s2
     eval_of: train_argmax
-    set: {solve.step.digit_policy: argmax}
+    set: {solve.step.digit_policy: sample}
   - name: s3_2k
     group: s3
     eval_of: default
     sweep: {solve.backtrack: [last, geometric, uniform_depth]}
   - name: s3_2k_negate
+    eval: ablation_10k     # same accuracy, fewer calls at 4K: check at 10K
     group: s3
     eval_of: default
     set: {solve.backtrack_negate: true}

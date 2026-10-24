@@ -1,0 +1,13 @@
+# Phase 1, follow-up: per-step augmentation off in training (kept at
+# evaluation), confirmed at 4K steps on sudoku_val. `default` shares the P6
+# checkpoints.
+exp_id: P8
+benchmark: sudoku
+config: configs/sudoku/paper.yaml
+eval: select
+set: {train.step.augment: true}
+seeds: [0, 1, 2]
+entries:
+  - name: default
+  - name: train_noaug
+    set: {train.step.augment: false}

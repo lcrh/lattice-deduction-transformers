@@ -9,7 +9,7 @@ from pathlib import Path
 
 import torch
 
-from lattice_diffusion.data.sudoku_extreme import SudokuExtremeConfig
+from ldt.data.sudoku_extreme import SudokuExtremeConfig
 from experiments.sudoku.dpll import StepConfig
 from tests.equivalence import fakes
 

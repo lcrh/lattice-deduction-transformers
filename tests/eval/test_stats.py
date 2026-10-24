@@ -1,7 +1,7 @@
 import math
 import random
 
-from lattice_diffusion.eval.stats import (
+from ldt.eval.stats import (
     _binomial_cdf, binomial_upper, confidence_sequence, inverse_binomial_rate,
     paired_difference,
 )
@@ -30,9 +30,10 @@ def test_confidence_sequence_contains_estimate_and_shrinks():
 
 
 def test_confidence_sequence_anytime_coverage():
-    """Covers p at every checkpoint of a stream, so any data-dependent
-    stopping time is covered too: the fraction of streams that ever leave
-    the interval must be <= alpha (up to simulation error)."""
+    """The interval covers p at every point of a stream with probability >= 1 - alpha.
+
+    So any data-dependent stopping time is covered too.
+    """
     rng = random.Random(0)
     n_streams, length, every = 400, 3000, 50
     for p in (0.85, 0.99):

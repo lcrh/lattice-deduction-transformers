@@ -1,10 +1,13 @@
-"""Behavior of the solver options (deduction passes, decision and
-backtracking policies). Their defaults are covered bit for bit by
-tests/equivalence."""
+"""Solver options: deduction passes, decision and backtracking policies.
 
+Their defaults are covered bit for bit by tests/equivalence.
+"""
+
+import numpy as np
 import pytest
 import torch
 
+from experiments.eval_common import result_rows
 from experiments.sudoku.dpll import StepConfig, _alive_entropy, dpll_step
 from experiments.sudoku.solve import DecisionStack, SolveConfig, solve
 from tests.equivalence import fakes
@@ -101,6 +104,20 @@ def test_multi_pass_deduction(passes):
         assert not masks[-1].any() or bool((conflict | solved).all())
 
 
+# Thresholds where only some rows conflict after the first pass.
+@pytest.mark.parametrize("threshold,cls_threshold", [(0.3, 0.462), (0.3, 0.471), (0.5, 0.471)])
+def test_rows_finished_in_a_pass_are_frozen(threshold, cls_threshold):
+    model, inp = _case()
+    kw = dict(threshold=threshold, cls_threshold=cls_threshold)
+    one = _step(model, inp, deduce_passes=1, **kw)
+    many = _step(model, inp, deduce_passes=4, **kw)
+    done = one[1] | one[2]
+    assert torch.equal(many[1][done], one[1][done]) and torch.equal(many[2][done], one[2][done])
+    assert torch.equal(many[0][done], one[0][done])
+    for m in many[4]["pass_deduce_masks"][1:]:
+        assert not m[done].any()
+
+
 def test_eval_loop_override_matches_a_model_built_with_that_depth():
     model, inp = _case()
     shallow = fakes.tiny_model(seed=1, n_loops=1)
@@ -119,7 +136,7 @@ def _hard_solve(**solve_kw):
     cfg = SolveConfig(step=StepConfig(cls_threshold=0.6, augment=True), max_rounds=25,
                       n_chains=4, batch_size=8, **solve_kw)
     torch.manual_seed(9)
-    return solve(model, x, y, x.sum(-1) == 1, cfg, verbose=False)
+    return solve(model, x, y, x.sum(-1) == 1, cfg)
 
 
 @pytest.mark.parametrize("backtrack,negate", [("last", False), ("geometric", False),
@@ -127,8 +144,8 @@ def _hard_solve(**solve_kw):
 def test_backtracking_policies(backtrack, negate):
     res = _hard_solve(backtrack=backtrack, backtrack_negate=negate, max_decision_depth=8)
     assert torch.equal(res.correct | res.wrong | res.timeouts, torch.ones_like(res.correct))
-    assert res.search["backtracks"] == int(res.n_resets.sum())
-    assert res.search["sum_target_depth"] <= res.search["sum_conflict_depth"]
+    assert res.search.backtracks == int(res.n_resets.sum())
+    assert res.search.sum_target_depth <= res.search.sum_conflict_depth
 
 
 @pytest.mark.parametrize("negate,gt_digit", [(False, 2), (True, 2), (True, 1)])
@@ -149,8 +166,33 @@ def test_decision_stack_backtracks_to_the_last_decision(negate, gt_digit):
         expected[0, 0, 1] = 0.0                # the decided candidate is ruled out
     assert torch.equal(out, expected)
     assert bool(at_root[0]) == (not negate)    # back at depth 0, but negation is progress
-    assert stack.n_negations == int(negate)
-    assert stack.n_unsound_negations == int(negate and gt_digit == 1)
+    assert stack.stats.negations == int(negate)
+    assert stack.stats.unsound_negations == int(negate and gt_digit == 1)
+
+
+def test_decision_stack_keeps_the_last_decisions():
+    stack = DecisionStack(1, 2, 8, max_depth=4, device="cpu")
+    states = []
+    for i in range(6):                               # cell 1 = {i}, so states are distinct
+        state = torch.zeros(1, 2, 8)
+        state[0, 0, :] = 1.0
+        state[0, 1, i] = 1.0
+        new_state = state.clone()
+        new_state[0, 0, 1:] = 0.0                    # decided cell 0 = 0
+        stack.push(state, torch.zeros_like(state, dtype=torch.bool), new_state,
+                   torch.tensor([True]), vd=8)
+        states.append(state)
+    out = torch.zeros(1, 2, 8)
+    stack.backtrack(torch.tensor([0]), SolveConfig(backtrack="last"), out, torch.ones(1, 2, 8),
+                    torch.zeros(2, dtype=torch.long), vd=8)
+    assert torch.equal(out, states[5]) and int(stack.depth[0]) == 5
+    # A target before the kept window moves to the oldest kept decision (2), not the root.
+    torch.manual_seed(0)
+    stack.depth[0] = 6
+    far_back = SolveConfig(backtrack="geometric", geometric_p=1e-6)
+    at_root = stack.backtrack(torch.tensor([0]), far_back, out, torch.ones(1, 2, 8),
+                              torch.zeros(2, dtype=torch.long), vd=8)
+    assert torch.equal(out, states[2]) and int(stack.depth[0]) == 2 and not bool(at_root[0])
 
 
 def test_per_puzzle_diagnostics_add_up_to_the_totals():
@@ -168,6 +210,65 @@ def test_multi_pass_solve_reports_per_pass_diagnostics():
     cfg = SolveConfig(step=StepConfig(cls_threshold=0.6, augment=True, deduce_passes=2),
                       max_rounds=25, n_chains=4, batch_size=8)
     torch.manual_seed(9)
-    res = solve(model, x, y, x.sum(-1) == 1, cfg, verbose=False)
+    res = solve(model, x, y, x.sum(-1) == 1, cfg)
     assert res.puzzle_pass_diag.shape == (6, 2, 2)
     assert torch.equal(res.puzzle_pass_diag.sum(dim=1), res.puzzle_diag[:, :2])
+
+
+def test_is_correct_overrides_exact_match_when_accepting():
+    x, y = fakes.sudoku_tensors(6, (3, 6), seed=41)     # near-complete: the untrained model
+    x, y = x.float(), y.float()                          # accepts, but never the solution
+    model = fakes.tiny_model(seed=3)
+    model.train()
+    cfg = SolveConfig(step=StepConfig(cls_threshold=0.6, augment=True), max_rounds=25,
+                      n_chains=4, batch_size=8, estimate_sequential=True)
+    upper = cfg.max_rounds * cfg.n_chains
+    torch.manual_seed(9)
+    exact = solve(model, x, y, x.sum(-1) == 1, cfg)
+    torch.manual_seed(9)
+    lenient = solve(model, x, y, x.sum(-1) == 1, cfg, is_correct=lambda sol, gt: True)
+    assert exact.solved.all() and exact.wrong.all() and (exact.forwards_seq == upper).all()
+    assert lenient.correct.all() and (lenient.forwards_seq < upper).all()
+
+
+def test_forwards_count_deduction_passes():
+    x, y = fakes.sudoku_tensors(6, (25, 40), seed=41)
+    x, y = x.float(), y.float()
+    model = fakes.tiny_model(seed=3)
+    cfg = SolveConfig(step=StepConfig(cls_threshold=0.99, threshold=0.3, augment=True,
+                                      deduce_passes=3),
+                      max_rounds=25, n_chains=4, batch_size=8)
+    torch.manual_seed(9)
+    res = solve(model, x, y, x.sum(-1) == 1, cfg)
+    rows = result_rows(res, np.arange(6), cfg, [""] * 6, [False] * 6, x.sum(-1) == 1).rows
+    for j, row in enumerate(rows):
+        passes = int(res.puzzle_calls[j]) / int(res.puzzle_rounds[j])
+        base = (row["rounds"] + 1 if row["status"] == "correct" else 25) * 4
+        assert row["forwards"] == round(base * passes)
+    assert (res.puzzle_calls > res.puzzle_rounds).any()      # some rounds took several passes
+
+
+class _FixedLogits(torch.nn.Module):
+    """Returns the same digit logits for every state, for the one-shot path."""
+
+    def __init__(self, logits):
+        super().__init__()
+        self.logits = logits
+
+    def forward(self, state, return_all=False):
+        return {"softmax": [self.logits[: state.shape[0]]]}
+
+
+def test_one_shot_takes_the_argmax_in_free_cells_and_never_abstains():
+    V = 3
+    solution = torch.nn.functional.one_hot(torch.tensor([[0, 1, 2], [2, 1, 0]]), V).float()
+    puzzle = torch.ones(2, 3, V + 1)                    # one extra (in-puzzle) channel
+    puzzle[:, 0, :V] = solution[:, 0]                   # cell 0 is given
+    given = torch.tensor([[True, False, False], [True, False, False]])
+    logits = solution.clone()
+    logits[1, 2] = torch.tensor([0.0, 5.0, 0.0])        # puzzle 1: cell 2 guessed wrong
+    res = solve(_FixedLogits(logits), puzzle, solution, given, SolveConfig(one_shot=True))
+    assert res.correct.tolist() == [True, False] and res.wrong.tolist() == [False, True]
+    assert not res.timeouts.any() and res.puzzle_calls.tolist() == [1, 1]
+    assert torch.equal(res.solution[0, :, :V], solution[0])
+    assert torch.equal(res.solution[:, :, V], puzzle[:, :, V])   # extra channels untouched

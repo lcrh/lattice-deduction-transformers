@@ -1,18 +1,16 @@
-"""Model / training ablation options: latent carry, deep supervision, and
-the cross-option checks in the experiment configs."""
+"""Model and training options: latent carry, deep supervision, cross-option checks."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
 import torch
 
-from lattice_diffusion import config as cfglib
-from lattice_diffusion.models.looped_transformer import PowersetModel
+from ldt import config as cfglib
+from ldt.models.looped_transformer import PowersetModel
 from experiments.registry import experiment_class
 from experiments.sudoku.dpll import StepConfig
 from experiments.sudoku.solve import SolveConfig, solve
-from experiments.sudoku.train import _losses
+from experiments.sudoku.train import TrainConfig, _losses
 from tests.equivalence import fakes
 
 
@@ -46,20 +44,19 @@ def test_scratchpad_modes(mode):
 
 
 @pytest.mark.parametrize("mode", ["h", "z", "zero_z"])
-def test_carry_trains_and_solves(mode):
-    with tempfile.TemporaryDirectory() as tmp:
-        state = _train_with_carry(Path(tmp), mode)
+def test_carry_trains_and_solves(mode, tmp_path):
+    state = _train_with_carry(tmp_path, mode)
     model = PowersetModel(fakes.tiny_model_cfg(carry=mode))
     model.load_state_dict(state)
     x, y = fakes.sudoku_tensors(4, (2, 5), seed=3)
     res = solve(model, x.float(), y.float(), x.float().sum(-1) == 1,
                 SolveConfig(step=StepConfig(augment=False), max_rounds=4, n_chains=4,
-                            batch_size=8), verbose=False)
+                            batch_size=8))
     assert torch.equal(res.correct | res.wrong | res.timeouts, torch.ones(4, dtype=torch.bool))
 
 
 def _train_with_carry(tmp: Path, mode: str) -> dict:
-    from lattice_diffusion.data.sudoku_extreme import SudokuExtremeConfig
+    from ldt.data.sudoku_extreme import SudokuExtremeConfig
     from experiments.sudoku.config import SudokuExperiment
     from experiments.sudoku.train import TrainConfig, train
 
@@ -85,10 +82,11 @@ def test_final_only_supervision_uses_the_last_readout():
     state = fakes.random_lattice(B, S, C, seed=2)
     y = torch.nn.functional.one_hot(torch.randint(0, C, (B, S)), C).float()
     args = (state, y, torch.zeros(B, S, dtype=torch.bool), torch.ones(B, dtype=torch.bool),
-            torch.zeros(B, dtype=torch.bool), 4.0, 0.5, 0.2, 0.1)
+            torch.zeros(B, dtype=torch.bool))
+    final, all_ = TrainConfig(supervise="final"), TrainConfig()
     last = {k: v[-1:] for k, v in out.items()}
-    assert torch.isclose(_losses(out, *args, supervise="final"), _losses(last, *args))
-    assert not torch.isclose(_losses(out, *args), _losses(last, *args))
+    assert torch.isclose(_losses(out, *args, final), _losses(last, *args, all_))
+    assert not torch.isclose(_losses(out, *args, all_), _losses(last, *args, all_))
 
 
 def test_cross_option_checks():

@@ -7,7 +7,8 @@
 exp_id: B1
 benchmark: baselines
 table:
-  maze_step: best          # best checkpoint over each trajectory, selected on the test set (stated in the paper)
+  # Best checkpoint of each training trajectory, selected on the test set.
+  maze_step: best
 entries:
   - name: hrm_sudoku
     label: "HRM (released checkpoint)"

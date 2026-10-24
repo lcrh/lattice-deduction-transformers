@@ -1,6 +1,6 @@
 # Appendix A: is recurrence needed? One-factor deviations from the 2K-step
-# default (configs/sudoku/ablation.yaml), each scored on the same first 1,000
-# test puzzles. Arms with 4x compute or the full training split use 2 seeds.
+# default (configs/sudoku/ablation.yaml), each scored on the same ordering of
+# test puzzles (up to 4,096). Arms with 4x compute or the full training split use 2 seeds.
 exp_id: A1
 benchmark: sudoku
 config: configs/sudoku/ablation.yaml
@@ -15,10 +15,12 @@ table:
     escalation: "More compute or data for few loops"
 entries:
   - name: default
+    eval: ablation_10k     # paired reference for the 10K rows
     exp_id: A0
     label: "4 layers x 16 loops (default)"
     group: loops
   - name: loops
+    eval: ablation_10k     # same accuracy, fewer calls at 4K: check at 10K
     group: loops
     sweep: {model.n_loops: [1, 2, 4, 8, 32]}
   - name: shape8x92

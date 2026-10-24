@@ -1,10 +1,8 @@
-# Snowflake Sudoku, paper recipe (Table 2): the varied-topology dataset
-# (experiments/snowflake/gen_data.py, orders 4-10), trained and evaluated on
-# orders 4-8. These are also the SnowflakeExperiment defaults. The model's
-# grid shape and the operator's vocab/augmentation settings are fixed by the
-# covering-grid encoding and set by the config class.
-name: paper
-
+# Snowflake Sudoku (gen_data.py, orders 4-10), trained and evaluated on
+# orders 4-8; the SnowflakeExperiment defaults. Recipe from the P11-P13
+# sweeps on the validation split: constraint-group inputs, 2,000 puzzles,
+# 8K steps.
+# Grid shape and operator vocab / augmentation are fixed by the config class.
 model:
   dim: 128
   num_layers: 4
@@ -14,16 +12,14 @@ model:
   use_rope: false
 
 data:
-  dataset: varied
-  n_puzzles: 500
+  n_puzzles: 2000
   train_orders: [4, 5, 6, 7, 8]
-  train_order_counts: null
   translate_aug: true
-  constraint_group_embed: false
+  constraint_group_embed: true
   seed: 42
 
 train:
-  steps: 1000
+  steps: 8000
   batch_size: 512
   lr: 0.003
   weight_decay: 0.1
@@ -49,8 +45,7 @@ solve:
   batch_size: 512
 
 eval:
-  index_list: snowflake_varied_test
+  index_list: snowflake_test
   index_filter: {orders: [4, 5, 6, 7, 8]}
   stop: full
   dropout_p: 0.05
-  workers: 8
