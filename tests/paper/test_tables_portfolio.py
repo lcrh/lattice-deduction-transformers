@@ -1,6 +1,7 @@
 """Tables (paired deltas), portfolio strategies and compute formulas on synthetic rows."""
 
 import json
+from collections import Counter
 
 import pytest
 
@@ -110,6 +111,47 @@ def test_resolve_handles_colliding_wrong_answers():
     assert chosen.tolist() == [5, 0] and spent.tolist() == [2, 2]
 
 
+def test_load_evals_skips_test_split_evals(tmp_path):
+    rows = tmp_path / "rows.jsonl"
+    rows.write_text(json.dumps({"idx": 0, "status": "correct", "rounds": 1,
+                                "calls": 2, "solution": "good"}) + "\n")
+    rec = lambda entry, index_list: {  # noqa: E731
+        "entry": entry, "seed": 0, "status": "done", "n": 1, "rows_path": "rows.jsonl",
+        "set": json.dumps({"eval.index_list": index_list} if index_list else {})}
+    ev = portfolio.load_evals([rec("same_data", "sudoku_holdout"),
+                               rec("same_data_test", None)], root=tmp_path)
+    assert ev.names == ["same_data/seed0"]
+
+
+def test_test_portfolios_use_the_first_response(tmp_path, monkeypatch):
+    # 3 test puzzles, 15 models. Puzzle 1: seed 0 times out at 1,000 rounds and
+    # answers wrong at 10,000; seed 1 answers the same wrong grid at 1,000.
+    # Puzzle 2: seed 5 times out at both budgets.
+    def rec(entry, seed, rows):
+        path = tmp_path / f"{entry}-{seed}.jsonl"
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        return {"entry": entry, "seed": seed, "status": "done", "n": len(rows),
+                "rows_path": path.name}
+    row = lambda i, st, sol="good": {"idx": i, "status": st, "solution": sol}  # noqa: E731
+    first = {s: [row(0, "correct"), row(1, "correct"), row(2, "correct")] for s in range(15)}
+    first[0][1] = row(1, "timeout", "")
+    first[1][1] = row(1, "wrong", "bad")
+    first[5][2] = row(2, "timeout", "")
+    records = [rec("same_data_test", s, rows) for s, rows in first.items()]
+    hard = [row(1, "wrong", "bad"), row(2, "correct")]
+    records += [rec("same_data_test_r10k", s, hard) for s in (0, 1)]
+    records.append(rec("same_data_test_r10k", 5, [row(1, "correct"), row(2, "timeout", "")]))
+
+    fails, n = portfolio.test_failures(records, root=tmp_path)
+    assert n == 3 and portfolio.hard_set(fails) == [1, 2]
+    by = {(r["portfolio"], r["rule"]): r
+          for r in portfolio.score_test(*portfolio.test_evals(records, root=tmp_path))}
+    assert by["seeds 0-4", "agree2"]["wrong"] == 1           # seeds 0 and 1 agree on "bad"
+    assert by["seeds 0-4", "agree3"]["wrong"] == 0
+    assert by["seeds 5-9", "first"]["unresolved"] == 0       # seed 6 answers puzzle 2
+    assert by["all 15", "majority"]["accuracy"] == 1.0
+
+
 def test_simulate_reports_every_strategy():
     ev = _evals()
     rows = portfolio.simulate(ev, {"all": [0, 1, 2]}, draws=5, max_m=3)
@@ -140,11 +182,16 @@ def test_figures_and_main_tables_render(tmp_path):
 
     records = [_result_record(tmp_path, f"steps_{x}", s, ["correct"] * 9 + ["timeout"], x=x,
                        gpu_seconds=10.0, n_evaluated=10, train_seconds=600.0,
-                       train_post_compile_seconds=540.0)
+                       train_post_compile_seconds=540.0, train_batch=512)
                for x in (500, 4000) for s in (0, 1)]
     curves = fig2.percentile_curves(records, root=tmp_path)
     assert list(curves) == [500, 4000]
-    assert fig2.plot(curves, fig2.solved_forwards(records[-1], tmp_path))[:4] == b"%PDF"
+    assert curves[4000]["examples"] == 4000 * 512
+    densities = {4000: fig2.solved_forwards(records[-1], tmp_path)}
+    budget = fig2.budget_curves([{"correct": Counter({0: 5, 3: 4}), "wrong": Counter({7: 1}),
+                                  "timeout": Counter({-1: 2})}])
+    assert budget["solved"][0, 0] == 5 / 12 and budget["wrong"][0, -1] == 1 / 12
+    assert fig2.plot(curves, densities, budget)[:4] == b"%PDF"
     assert fig3.plot(fig3.k_curve(records))[:4] == b"%PDF"
 
     baseline = {"label": "TRM", "result": {"n": 10000, "exact_accuracy": 0.79, "wrong": 2100,

@@ -6,6 +6,10 @@
 #              0-14; seeds 0-2 are Table 1's steps4k_train_noaug checkpoints
 #   same_data_test  the same models on every test puzzle (1,000 rounds), for
 #              three non-overlapping 5-model portfolios (seeds 0-4, 5-9, 10-14)
+#   same_data_test_r10k  the same models at 10,000 rounds on the test puzzles
+#              any of them did not solve at 1,000 rounds (paper/results/
+#              portfolio_test_hard.txt, written by `python -m paper.portfolio
+#              hard-set`); scored by `python -m paper.portfolio test`
 #   diff_data  a different 1,000-puzzle training set per model (data seeds
 #              43-52; random 1,000-puzzle draws from 3.8M barely overlap)
 exp_id: X1
@@ -19,6 +23,12 @@ entries:
   - name: same_data_test
     eval_of: same_data
     eval: full
+  - name: same_data_test_r10k
+    eval_of: same_data
+    eval: explicit
+    indices_file: paper/results/portfolio_test_hard.txt
+    split: test
+    set: {solve.max_rounds: 10000, eval.tag: test_hard376_r10k}
   - name: diff_data
     seeds: [0]
     sweep: {data.seed: [43, 44, 45, 46, 47, 48, 49, 50, 51, 52]}

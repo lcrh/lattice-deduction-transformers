@@ -12,7 +12,6 @@ from lattice_diffusion import config as cfglib
 from lattice_diffusion.provenance import (
     LedgerRecord, app_run_name, entry_key, read_ledger, require_clean_sha,
 )
-import paper.manifest as manifest
 from paper import launch
 from paper.manifest import eval_overrides, load_manifest, volume_path
 from tests.paper.fakes import FakeVolumeView

@@ -9,7 +9,7 @@ from lattice_diffusion.eval.config import build_spec
 from lattice_diffusion.eval.runner import block_args, solve_block
 from lattice_diffusion.eval.tasks import get_task
 from experiments.registry import experiment_class
-from tests.equivalence import fakes, train_runs
+from tests.equivalence import train_runs
 from tests.eval.fakes import FakeTask
 
 ROW_KEYS = {"idx", "pos", "block", "status", "rounds", "calls", "forwards", "n_resets",

@@ -1,4 +1,4 @@
-"""Portfolio strategies, simulated from per-model evals on the held-out set.
+"""Portfolio strategies, simulated on the held-out set and scored on the test split.
 
 Every portfolio model is evaluated once on `sudoku_holdout` at the full
 round budget (manifest `portfolio`). A row records whether the model solved
@@ -17,8 +17,15 @@ A strategy runs a random order of m distinct models from a pool:
      votes).
 Bootstrap: B random orders per (pool, m), the same orders for every strategy.
 
+On the test split, fixed portfolios of same-data models (`TEST_PORTFOLIOS`)
+are scored with each rule. A model's answer is its 1,000-round answer, or,
+if it timed out, its 10,000-round answer on the hard set (the test puzzles
+any model did not solve at 1,000 rounds).
+
     uv run python -m paper.launch collect portfolio --rows
     uv run python -m paper.portfolio simulate [--draws 100] [--out paper/out/portfolio_sim.csv]
+    uv run python -m paper.portfolio hard-set    # writes the same_data_test_r10k list
+    uv run python -m paper.portfolio test [--out paper/out/portfolio_test.csv]
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ from __future__ import annotations
 import argparse
 import csv
 import itertools
+import json
 import zlib
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -37,7 +45,11 @@ from lattice_diffusion.eval.stats import binomial_upper
 from paper.manifest import REPO
 from paper.tables.common import OUT, RESULTS, done, load_rows, read_results
 
-TIMEOUT = -1        # answer id of a timeout; 0 = the correct answer; > 0 = a wrong answer
+HOLDOUT = "sudoku_holdout"
+HARD_SET = REPO / "paper/results/portfolio_test_hard.txt"
+TEST_PORTFOLIOS = {"seeds 0-4": range(0, 5), "seeds 5-9": range(5, 10),
+                   "seeds 10-14": range(10, 15), "all 15": range(0, 15)}
+TIMEOUT = -1      # answer id of a timeout; 0 = the correct answer; > 0 = a wrong answer
 ROUND_BUDGETS = (1, 2, 5, 10, 20, 50, 100, 1000)
 RULES = ("first", "majority", "agree2", "agree3")
 
@@ -204,12 +216,77 @@ def simulate(ev: Evals, pools: dict[str, list[int]], draws: int, max_m: int,
     return out
 
 
+def on_holdout(record: dict) -> bool:
+    """Whether a record's eval ran on the held-out set (not the test split)."""
+    return json.loads(record.get("set") or "{}").get("eval.index_list") == HOLDOUT
+
+
 def load_evals(records: list[dict], root: Path = REPO) -> Evals:
-    models = {f"{r['entry']}/seed{r['seed']}": load_rows(r, root) for r in done(records)}
+    models = {f"{r['entry']}/seed{r['seed']}": load_rows(r, root)
+              for r in done(records) if on_holdout(r)}
     if not models:
-        raise SystemExit("no finished portfolio evals with rows; run "
+        raise SystemExit("no finished held-out portfolio evals with rows; run "
                          "`paper.launch collect portfolio --rows` first")
     return build_evals(models)
+
+
+def failures(record: dict, root: Path = REPO) -> dict[int, int]:
+    """Answer ids of the puzzles a record did not solve correctly, by puzzle index."""
+    out = {}
+    with (root / record["rows_path"]).open() as fh:
+        for line in fh:
+            if '"status": "correct"' not in line:
+                row = json.loads(line)
+                out[row["idx"]] = answer_id(row)
+    return out
+
+
+def test_failures(records: list[dict], root: Path = REPO) -> tuple[dict[int, dict[int, int]], int]:
+    """Per seed, the 1,000-round failures on the test split; and the number of test puzzles."""
+    recs = [r for r in done(records) if r["entry"] == "same_data_test"]
+    if not recs or len({r["n"] for r in recs}) != 1:
+        raise SystemExit("same_data_test evals missing or of different sizes; run "
+                         "`paper.launch collect portfolio --rows` first")
+    return {r["seed"]: failures(r, root) for r in recs}, recs[0]["n"]
+
+
+def hard_set(fails: dict[int, dict[int, int]]) -> list[int]:
+    """Test puzzles that any model did not solve at 1,000 rounds."""
+    return sorted(set().union(*fails.values()))
+
+
+def test_evals(records: list[dict], root: Path = REPO) -> tuple[Evals, int]:
+    """First-response answers of the same-data models on the hard set; and the test size."""
+    fails, n = test_failures(records, root)
+    retries = {r["seed"]: {row["idx"]: answer_id(row) for row in load_rows(r, root)}
+               for r in done(records) if r["entry"] == "same_data_test_r10k"}
+    hard = hard_set(fails)
+    seeds = sorted(fails)
+    answer = np.zeros((len(seeds), len(hard)), dtype=np.int64)
+    for m, seed in enumerate(seeds):
+        for j, idx in enumerate(hard):
+            a = fails[seed].get(idx, 0)
+            if a == TIMEOUT:
+                if seed not in retries:
+                    raise SystemExit(f"seed {seed}: no same_data_test_r10k eval")
+                a = retries[seed][idx]
+            answer[m, j] = a
+    zeros = np.zeros_like(answer)
+    return Evals([f"seed{s}" for s in seeds], answer, zeros, zeros), n
+
+
+def score_test(ev: Evals, n: int) -> list[dict]:
+    """Each test portfolio under each resolution rule, over all `n` test puzzles."""
+    seed_row = {name: m for m, name in enumerate(ev.names)}
+    out = []
+    for name, seeds in TEST_PORTFOLIOS.items():
+        rows = [seed_row[f"seed{s}"] for s in seeds]
+        for rule in RULES:
+            chosen, _ = _resolve(ev.answer[rows], ev.calls[rows], rule)
+            wrong, unresolved = int((chosen > 0).sum()), int((chosen == TIMEOUT).sum())
+            out.append({"portfolio": name, "rule": rule, "n": n, "wrong": wrong,
+                        "unresolved": unresolved, "accuracy": (n - wrong - unresolved) / n})
+    return out
 
 
 def summary_text(rows: list[dict], top: int = 12) -> str:
@@ -230,30 +307,50 @@ def summary_text(rows: list[dict], top: int = 12) -> str:
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="paper.portfolio")
-    ap.add_argument("cmd", choices=("simulate",))
+    ap.add_argument("cmd", choices=("simulate", "hard-set", "test"))
     ap.add_argument("--manifest", default="portfolio")
     ap.add_argument("--results", type=Path, default=RESULTS)
     ap.add_argument("--draws", type=int, default=100)
     ap.add_argument("--max-models", type=int, default=13)
-    ap.add_argument("--out", type=Path, default=OUT / "portfolio_sim.csv")
+    ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args(argv)
+    records = read_results(args.manifest, args.results)
 
-    ev = load_evals(read_results(args.manifest, args.results))
+    if args.cmd == "hard-set":
+        hard = hard_set(test_failures(records)[0])
+        HARD_SET.write_text("".join(f"{i}\n" for i in hard))
+        print(f"wrote {HARD_SET} ({len(hard)} puzzles)")
+        return
+    if args.cmd == "test":
+        rows = score_test(*test_evals(records))
+        out = args.out or OUT / "portfolio_test.csv"
+        _write_csv(out, rows)
+        for r in rows:
+            print(f"{r['portfolio']:>12} {r['rule']:>8}: {100 * r['accuracy']:.4f}%  "
+                  f"wrong {r['wrong']}  unresolved {r['unresolved']}")
+        print(f"wrote {out}")
+        return
+
+    ev = load_evals(records)
     # diff_data: one model per training set, including data seed 42 (same_data seed 0).
     pools = {"same_data": ev.pool("same_data/"),
              "diff_data": ev.pool("diff_data_") + ev.pool("same_data/seed0"),
              "mixed": list(range(len(ev.names)))}
     pools = {k: v for k, v in pools.items() if v}
     rows = simulate(ev, pools, args.draws, args.max_models)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    with args.out.open("w", newline="") as fh:
+    out = args.out or OUT / "portfolio_sim.csv"
+    _write_csv(out, rows)
+    print(summary_text(rows))
+    print(f"wrote {out} ({len(rows)} strategies, {ev.answer.shape[1]:,} puzzles, "
+          f"{len(ev.names)} models)")
+
+
+def _write_csv(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0]))
         w.writeheader()
         w.writerows(rows)
-    print(summary_text(rows))
-    print(f"wrote {args.out} ({len(rows)} strategies, {ev.answer.shape[1]:,} puzzles, "
-          f"{len(ev.names)} models)")
-
 
 if __name__ == "__main__":
     main()

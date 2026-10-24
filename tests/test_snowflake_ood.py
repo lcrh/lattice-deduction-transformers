@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import torch
 
 from lattice_diffusion import config as cfglib
 from lattice_diffusion.eval import indices as index_lists
