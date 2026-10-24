@@ -61,6 +61,8 @@ train_image = (
         "CC=gcc CXX=g++ CUDAHOSTCXX=/usr/bin/g++ NVCC_PREPEND_FLAGS='-ccbin /usr/bin/g++' "
         "TORCH_CUDA_ARCH_LIST=10.0 pip install /tmp/adam_atan2-*/ --no-build-isolation",
     )
+    .add_local_file(os.path.join(os.path.dirname(__file__), "..", "tqdm_rate.py"),
+                    "/root/tqdm_rate.py")
 )
 
 HRM_CKPT_DIR = f"{HRM_REMOTE}/checkpoints"
@@ -147,7 +149,8 @@ def train(epochs: int = 120000, aug: bool = True, run_name: str = "",
         proc = subprocess.Popen(cmd, cwd=HRM_REMOTE, env=env, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, bufsize=1)
         for line in proc.stdout:
-            lf.write(line); lf.flush()
+            lf.write(line)
+            lf.flush()
             print(line, end="", flush=True)
         rc = proc.wait()
 
@@ -158,6 +161,46 @@ def train(epochs: int = 120000, aug: bool = True, run_name: str = "",
     print(f"[hrm] pretrain.py exited rc={rc}; {len(cks)} checkpoints committed", flush=True)
     print(f"[hrm] latest: {cks[-3:]}", flush=True)
     return {"rc": rc, "n_ckpts": len(cks), "latest": cks[-1] if cks else None}
+
+
+# Sudoku-Extreme recipe of the released checkpoint (its all_config.yaml).
+SUDOKU_ARGS = [
+    "data_path=data/sudoku-extreme-1k-aug-1000", "epochs=40000", "eval_interval=40000",
+    "lr=1e-4", "puzzle_emb_lr=1e-4", "weight_decay=1.0", "puzzle_emb_weight_decay=1.0",
+    "global_batch_size=768",
+]
+
+
+# A separate app: training needs a W&B secret, measuring throughput does not.
+throughput_app = modal.App("hrm-sudoku-throughput")
+
+
+@throughput_app.function(image=train_image, gpu="B200", timeout=3600,
+              secrets=[modal.Secret.from_name("huggingface-secret")])
+def throughput(minutes: int = 12) -> dict:
+    """Steady-state Sudoku-Extreme training s/step on one B200 (no checkpoints)."""
+    import sys
+
+    from tqdm_rate import seconds_per_step
+
+    os.makedirs("/root/shims", exist_ok=True)
+    with open("/root/shims/flash_attn.py", "w") as f:
+        f.write(_FLASH_SHIM)
+    env = {**os.environ, "PYTHONPATH": "/root/shims"}
+    subprocess.run([sys.executable, "dataset/build_sudoku_dataset.py",
+                    "--output-dir", "data/sudoku-extreme-1k-aug-1000",
+                    "--subsample-size", "1000", "--num-aug", "1000"],
+                   cwd=HRM_REMOTE, check=True, env=env)
+    cmd = ["timeout", str(minutes * 60), sys.executable, "pretrain.py", *SUDOKU_ARGS,
+           "+run_name=throughput"]
+    out = subprocess.run(cmd, cwd=HRM_REMOTE, env=env, capture_output=True, text=True)
+    step, total, s_per_step = seconds_per_step(out.stdout + out.stderr)
+    return {"model": "HRM", "step": step, "total_steps": total, "s_per_step": s_per_step}
+
+
+@throughput_app.local_entrypoint()
+def run_throughput(minutes: int = 12):
+    print(throughput.remote(minutes=minutes))
 
 
 def _patch_torch_optim_compat():

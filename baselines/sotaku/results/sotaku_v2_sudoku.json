@@ -1,0 +1,13 @@
+{
+  "model": "Sotaku v2",
+  "commit": "d0ab125",
+  "n": 10000,
+  "correct": 9896,
+  "wrong": 104,
+  "exact_accuracy": 0.9896,
+  "iterations": 1024,
+  "batch_size": 256,
+  "gpu": "B200",
+  "gpu_seconds": 91.37048513100004,
+  "index_list": "sudoku_test_perm"
+}

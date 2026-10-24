@@ -34,6 +34,8 @@ image = (
         f"cd {TRM_REMOTE} && git checkout {TRM_COMMIT}",
         f"cd {TRM_REMOTE} && pip install -e . --no-deps",
     )
+    .add_local_file(os.path.join(os.path.dirname(__file__), "..", "tqdm_rate.py"),
+                    "/root/tqdm_rate.py")
 )
 
 app = modal.App("trm-maze-train")
@@ -104,7 +106,8 @@ def train(epochs: int = 50000, aug: bool = True, run_name: str = "",
         proc = subprocess.Popen(cmd, cwd=TRM_REMOTE, env=env, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, bufsize=1)
         for line in proc.stdout:
-            lf.write(line); lf.flush()
+            lf.write(line)
+            lf.flush()
             print(line, end="", flush=True)
         rc = proc.wait()
 
@@ -115,6 +118,44 @@ def train(epochs: int = 50000, aug: bool = True, run_name: str = "",
     print(f"[trm] train.py exited rc={rc}; {len(cks)} checkpoints committed", flush=True)
     print(f"[trm] latest: {cks[-3:]}", flush=True)
     return {"rc": rc, "n_ckpts": len(cks), "latest": cks[-1] if cks else None}
+
+
+# Sudoku-Extreme recipe of the released checkpoints (TRM README), per variant.
+SUDOKU_ARGS = [
+    "arch=trm", "data_paths=[data/sudoku-extreme-1k-aug-1000]", "evaluators=[]",
+    "epochs=50000", "eval_interval=50000", "lr=1e-4", "puzzle_emb_lr=1e-4",
+    "weight_decay=1.0", "puzzle_emb_weight_decay=1.0", "global_batch_size=768",
+    "arch.L_layers=2", "arch.H_cycles=3", "arch.L_cycles=6", "ema=True",
+]
+SUDOKU_VARIANTS = {"mlp": ["arch.mlp_t=True", "arch.pos_encodings=none"], "att": []}
+
+
+# A separate app: training needs a W&B secret, measuring throughput does not.
+throughput_app = modal.App("trm-sudoku-throughput")
+
+
+@throughput_app.function(image=image, gpu="B200", timeout=3600,
+              secrets=[modal.Secret.from_name("huggingface-secret")])
+def throughput(variant: str = "mlp", minutes: int = 12) -> dict:
+    """Steady-state Sudoku-Extreme training s/step on one B200 (no checkpoints)."""
+    import sys
+
+    from tqdm_rate import seconds_per_step
+
+    subprocess.run([sys.executable, "-m", "trm.data.build_sudoku_dataset",
+                    "--output-dir", "data/sudoku-extreme-1k-aug-1000",
+                    "--subsample-size", "1000", "--num-aug", "1000"],
+                   cwd=TRM_REMOTE, check=True)
+    cmd = ["timeout", str(minutes * 60), sys.executable, "scripts/train.py",
+           *SUDOKU_ARGS, *SUDOKU_VARIANTS[variant], f"+run_name=throughput-{variant}"]
+    out = subprocess.run(cmd, cwd=TRM_REMOTE, capture_output=True, text=True)
+    step, total, s_per_step = seconds_per_step(out.stdout + out.stderr)
+    return {"model": f"TRM-{variant}", "step": step, "total_steps": total, "s_per_step": s_per_step}
+
+
+@throughput_app.local_entrypoint()
+def run_throughput(variant: str = "mlp", minutes: int = 12):
+    print(throughput.remote(variant=variant, minutes=minutes))
 
 
 @app.local_entrypoint()
