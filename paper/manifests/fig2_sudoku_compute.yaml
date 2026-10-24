@@ -9,7 +9,7 @@ eval: sequential
 seeds: [0, 1, 2]
 set: {solve.estimate_sequential: true}
 table:
-  histogram_x: 4000
+  histogram_x: [1000, 2000, 4000]
 entries:
   - name: steps
     sweep: {train.steps: [500, 1000, 1500, 2000, 3000, 4000]}
