@@ -1,0 +1,76 @@
+# Snowflake-Extreme, orders 4-8: LDT against direct prediction, each trained
+# on the original dataset and on Snowflake-Extreme, and each evaluated on
+# both test sets. Original-dataset training entries are the Table 2 runs.
+exp_id: A12
+benchmark: snowflake
+config: configs/snowflake/extreme.yaml
+eval: whole
+seeds: [0, 1, 2]
+table:
+  per_order: [4, 5, 6, 7, 8]
+entries:
+  # Trained on Snowflake-Extreme.
+  - name: ldt
+    label: "LDT"
+  - name: ldt_one_shot
+    label: "LDT, one shot"
+    eval_of: ldt
+    set: &one_shot {solve.one_shot: true, eval.dropout_p: 0.0}
+  - name: ldt_on_original
+    label: "LDT, original test set"
+    eval_of: ldt
+    set: {eval.index_list: snowflake_test}
+  # Same model and data, trained only with cross-entropy against the
+  # solution from the puzzle as given, evaluated in one shot.
+  - name: direct
+    label: "Direct prediction"
+    set: &direct
+      model.cls_token: false
+      train.bce_pos_mult: 0.0
+      train.bce_neg_mult: 0.0
+      train.conflict_loss_weight: 0.0
+      train.softmax_loss_weight: 1.0
+      train.max_age: 0
+      train.monitor_every: 0
+      data.zero_hint_weight: 1.0
+      data.correct_hint_weight: 0.0
+      data.error_hint_weight: 0.0
+      solve.one_shot: true
+      eval.dropout_p: 0.0
+  - name: direct_on_original
+    label: "Direct prediction, original test set"
+    eval_of: direct
+    set: {eval.index_list: snowflake_test}
+
+  # Twice the training steps.
+  - name: ldt_16k
+    label: "LDT, 16K steps"
+    set: {train.steps: 16000}
+  - name: ldt_16k_one_shot
+    label: "LDT, 16K steps, one shot"
+    eval_of: ldt_16k
+    set: *one_shot
+  - name: direct_16k
+    label: "Direct prediction, 16K steps"
+    set: {<<: *direct, train.steps: 16000}
+
+  # Trained on the original dataset (the Table 2 checkpoints).
+  - name: orig_ldt
+    label: "LDT (original data), original test set"
+    config: configs/snowflake/paper.yaml
+  - name: orig_ldt_on_extreme
+    label: "LDT (original data)"
+    eval_of: orig_ldt
+    set: {eval.index_list: snowflake_extreme_test}
+  - name: orig_ldt_one_shot_on_extreme
+    label: "LDT (original data), one shot"
+    eval_of: orig_ldt
+    set: {<<: *one_shot, eval.index_list: snowflake_extreme_test}
+  - name: orig_direct
+    label: "Direct prediction (original data), original test set"
+    config: configs/snowflake/paper.yaml
+    set: *direct
+  - name: orig_direct_on_extreme
+    label: "Direct prediction (original data)"
+    eval_of: orig_direct
+    set: {eval.index_list: snowflake_extreme_test}

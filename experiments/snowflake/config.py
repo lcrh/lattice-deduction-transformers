@@ -48,3 +48,11 @@ class SnowflakeExperiment(Experiment):
         self.train = with_step(self.train, vocab_dim=VOCAB, augment_dihedral=False)
         self.solve = with_step(self.solve, vocab_dim=VOCAB, augment_dihedral=False)
         check_options(self.model, self.train, self.solve, carry_supported=False)
+
+    def training_dict(self) -> dict:
+        d = super().training_dict()
+        # `extreme` is hashed only when set, so runs on the original dataset
+        # keep their hashes.
+        if not d["data"]["extreme"]:
+            del d["data"]["extreme"]
+        return d

@@ -22,10 +22,16 @@ Schema (per row):
   - puzzle    : list<int8>  (per-cell input: 1-6 = given digit, 7 = blank)
   - solution  : list<int8>  (per-cell GT digit, 1-6)
   - givens    : int32   (count of non-7 entries in `puzzle`)
+  - rating    : int32   (guesses a singles-propagation solver needs; see `rating`)
   - topology  : string  (JSON-encoded {n_cells, hex_coords, cell_positions, constraints})
+
+Snowflake-Extreme (`--extreme`) keeps only minimal puzzles rated at least 1,
+i.e. that naked and hidden singles alone do not solve, in files
+`snowflake_extreme_<split>.parquet`.
 
 Usage:
     uv run modal run --detach experiments/snowflake/gen_data.py      # orders 4-10
+    uv run modal run --detach experiments/snowflake/gen_data.py --extreme --n-shards 300
 
 After generation, the entrypoint prints the index-list entries to pin in
 src/ldt/eval/indices.py.
@@ -60,7 +66,7 @@ gen_image = (
 # Covering-grid bounds; must match experiments/snowflake/data.py.
 COVER_Q_MIN, COVER_Q_MAX = -2, 2
 COVER_R_MIN, COVER_R_MAX = -2, 2
-SHARDS_DIR = "snowflake_shards"
+BLANK = 7
 
 data_volume = modal.Volume.from_name("ldt-data", create_if_missing=True)
 DATA_MOUNT = "/data"
@@ -73,6 +79,64 @@ def split_file(split: str) -> str:
     return f"snowflake_{split}.parquet"
 
 
+def shards_dir(prefix: str) -> str:
+    return f"snowflake_{prefix}shards"
+
+
+def _propagate(dom: list[set[int]], groups: list[list[int]]) -> bool:
+    """Naked and hidden singles to a fixed point; False on a contradiction."""
+    changed = True
+    while changed:
+        changed = False
+        for g in groups:
+            for i in g:
+                if len(dom[i]) == 1:
+                    for j in g:
+                        if j != i and dom[i] <= dom[j]:
+                            dom[j] = dom[j] - dom[i]
+                            if not dom[j]:
+                                return False
+                            changed = True
+            for v in range(1, 7):
+                where = [j for j in g if v in dom[j]]
+                if not where:
+                    return False
+                if len(where) == 1 and len(dom[where[0]]) > 1:
+                    dom[where[0]] = {v}
+                    changed = True
+    return True
+
+
+def rating(puzzle: list[int], constraints: list[list[int]]) -> int:
+    """Guesses a singles-propagation solver makes before it finds the solution.
+
+    Branches on the first cell with the fewest candidates, digits in
+    increasing order; 0 means singles alone solve the puzzle. Every
+    constraint group holds 6 cells, so hidden singles are sound.
+    """
+    guesses = 0
+
+    def solve(dom):
+        nonlocal guesses
+        if not _propagate(dom, constraints):
+            return False
+        open_cells = [i for i, d in enumerate(dom) if len(d) > 1]
+        if not open_cells:
+            return True
+        i = min(open_cells, key=lambda k: len(dom[k]))
+        for v in sorted(dom[i]):
+            guesses += 1
+            branch = [set(d) for d in dom]
+            branch[i] = {v}
+            if solve(branch):
+                return True
+        return False
+
+    if not solve([set(range(1, 7)) if v == BLANK else {v} for v in puzzle]):
+        raise ValueError("puzzle has no solution")
+    return guesses
+
+
 @app.function(image=gen_image, cpu=1.0, timeout=3600,
               volumes={DATA_MOUNT: data_volume})
 def gen_shard(
@@ -82,8 +146,13 @@ def gen_shard(
     count_per_shard: int = 10,
     variants: int = 6,
     seed_base: int = 42,
+    min_rating: int = 0,
+    prefix: str = "",
 ) -> dict:
-    """Generate one parquet shard. Returns a small status dict for logging."""
+    """Generate one parquet shard. Returns a small status dict for logging.
+
+    Puzzles rated below `min_rating` are dropped.
+    """
     import cvc5
     from cvc5 import Kind
     import pyarrow as pa
@@ -232,6 +301,9 @@ def gen_shard(
             vlist = puzzle_variants(solution, t["n_cells"], min_givens, removed, rng, variants)
             code = three_char_code(rng)
             for var_idx, (pv, givens) in enumerate(vlist):
+                r = rating(pv, t["constraints"])
+                if r < min_rating:
+                    continue
                 tag = f"{code}-{n}-{givens}" + (f"v{var_idx}" if var_idx > 0 else "")
                 records.append({
                     "id": -1,  # assigned in consolidation
@@ -240,6 +312,7 @@ def gen_shard(
                     "puzzle": pv,
                     "solution": solution,
                     "givens": givens,
+                    "rating": r,
                     "topology": json.dumps({
                         "n_cells": t["n_cells"],
                         "hex_coords": [{"q": q, "r": r} for q, r in t["hex_coords"]],
@@ -253,7 +326,7 @@ def gen_shard(
           flush=True)
 
     # Write parquet shard.
-    out_dir = Path(DATA_MOUNT) / SHARDS_DIR
+    out_dir = Path(DATA_MOUNT) / shards_dir(prefix)
     out_dir.mkdir(parents=True, exist_ok=True)
     table = pa.table({
         "id":       pa.array([r["id"] for r in records], type=pa.int64()),
@@ -262,6 +335,7 @@ def gen_shard(
         "puzzle":   pa.array([r["puzzle"] for r in records], type=pa.list_(pa.int8())),
         "solution": pa.array([r["solution"] for r in records], type=pa.list_(pa.int8())),
         "givens":   pa.array([r["givens"] for r in records], type=pa.int32()),
+        "rating":   pa.array([r["rating"] for r in records], type=pa.int32()),
         "topology": pa.array([r["topology"] for r in records], type=pa.string()),
     })
     out_path = out_dir / f"shard_{shard_id:03d}.parquet"
@@ -319,7 +393,7 @@ def split_rows(rows: list[dict], test_frac: float, val_frac: float,
 @app.function(image=gen_image, cpu=2.0, timeout=600,
               volumes={DATA_MOUNT: data_volume})
 def consolidate(generator: dict, test_frac: float = 0.1, val_frac: float = 0.05,
-                seed: int = 0) -> dict:
+                seed: int = 0, prefix: str = "") -> dict:
     """Merge the shards into one parquet file per split (see split_rows).
 
     Each file's metadata records the generator settings and a content hash.
@@ -327,7 +401,7 @@ def consolidate(generator: dict, test_frac: float = 0.1, val_frac: float = 0.05,
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    in_dir = Path(DATA_MOUNT) / SHARDS_DIR
+    in_dir = Path(DATA_MOUNT) / shards_dir(prefix)
     shard_files = sorted(in_dir.glob("shard_*.parquet"))
     print(f"reading {len(shard_files)} shards from {in_dir}", flush=True)
     if not shard_files:
@@ -345,6 +419,7 @@ def consolidate(generator: dict, test_frac: float = 0.1, val_frac: float = 0.05,
             "puzzle":   pa.array([r["puzzle"] for r in rows], type=pa.list_(pa.int8())),
             "solution": pa.array([r["solution"] for r in rows], type=pa.list_(pa.int8())),
             "givens":   pa.array([r["givens"] for r in rows], type=pa.int32()),
+            "rating":   pa.array([r["rating"] for r in rows], type=pa.int32()),
             "topology": pa.array([r["topology"] for r in rows], type=pa.string()),
         })
         return table.replace_schema_metadata({b"snowflake": json.dumps(meta).encode()})
@@ -355,7 +430,7 @@ def consolidate(generator: dict, test_frac: float = 0.1, val_frac: float = 0.05,
                 "split_rule": {"test_frac": test_frac, "val_frac": val_frac, "seed": seed},
                 "generator_repo": SNOWFLAKE_REPO_URL, "generator_commit": SNOWFLAKE_REPO_COMMIT,
                 "n_rows": len(split_rows_), "content_sha256": content_sha256(split_rows_)}
-        path = Path(DATA_MOUNT) / split_file(split)
+        path = Path(DATA_MOUNT) / split_file(prefix + split)
         pq.write_table(_to_table(split_rows_, meta), str(path), compression="zstd")
         out["splits"][split] = {"path": str(path), "n_rows": len(split_rows_),
                                 "content_sha256": meta["content_sha256"]}
@@ -374,14 +449,17 @@ def main(
     test_frac: float = 0.1,
     val_frac: float = 0.05,
     split_seed: int = 0,
+    extreme: bool = False,
 ):
+    # Snowflake-Extreme: minimal puzzles that singles propagation cannot solve.
+    variants, min_rating, prefix = (1, 1, "extreme_") if extreme else (variants, 0, "")
     print(f"Spawning {n_shards} shard workers ("
           f"n in [{n_min}, {n_max}], count_per_shard={count_per_shard}, "
           f"variants={variants}). Each shard targets ~"
           f"{(n_max - n_min + 1) * count_per_shard * variants} puzzles.",
           flush=True)
     args = [
-        (i, n_min, n_max, count_per_shard, variants, seed_base)
+        (i, n_min, n_max, count_per_shard, variants, seed_base, min_rating, prefix)
         for i in range(n_shards)
     ]
     total = 0
@@ -395,24 +473,24 @@ def main(
 
     generator = {"n_shards": n_shards, "n_min": n_min, "n_max": n_max,
                  "count_per_shard": count_per_shard, "variants": variants,
-                 "seed_base": seed_base}
+                 "seed_base": seed_base, "min_rating": min_rating}
     summary = consolidate.remote(generator, test_frac=test_frac, val_frac=val_frac,
-                                 seed=split_seed)
+                                 seed=split_seed, prefix=prefix)
     print(f"\nConsolidation: {summary['n_rows']} rows, "
           f"{summary['n_dropped_dups']} duplicates dropped", flush=True)
     for split, info in summary["splits"].items():
         print(f"  {split}: {info['n_rows']} rows → {info['path']}  "
               f"(content sha256 {info['content_sha256'][:16]}…)", flush=True)
-    print_index_pins({k: v["n_rows"] for k, v in summary["splits"].items()})
+    print_index_pins({k: v["n_rows"] for k, v in summary["splits"].items()}, prefix)
 
 
-def print_index_pins(sizes: dict[str, int]) -> None:
+def print_index_pins(sizes: dict[str, int], prefix: str = "") -> None:
     """Print the split sizes and checksums to pin in src/ldt/eval/indices.py."""
     from ldt.eval import indices as index_lists
 
     print("\nPin these in src/ldt/eval/indices.py:", flush=True)
     for split in ("test", "val"):
-        name = f"snowflake_{split}"
+        name = f"snowflake_{prefix}{split}"
         spec = index_lists.SPECS.get(name)
         if spec is None:
             print(f"  (no index list named {name})", flush=True)

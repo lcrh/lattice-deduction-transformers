@@ -20,7 +20,8 @@ covering grid (`translate_aug`). Optional inputs: randomized multi-hot
 constraint-group channels (`constraint_group_embed`).
 
 Splits are parquet files `snowflake_<split>.parquet` in the data directory
-(see `split_file`).
+(see `split_file`); the Snowflake-Extreme splits are `extreme_train`,
+`extreme_val` and `extreme_test`.
 """
 
 from __future__ import annotations
@@ -58,6 +59,11 @@ MAX_CONSTRAINT_GROUPS = 43
 def split_file(data_dir: str, split: str) -> Path:
     """Parquet file of `split` ("train", "val" or "test")."""
     return Path(data_dir) / f"snowflake_{split}.parquet"
+
+
+def split_name(cfg: "SnowflakeConfig", split: str) -> str:
+    """`split` of the dataset `cfg` trains on."""
+    return f"extreme_{split}" if cfg.extreme else split
 
 
 def cell_index(cp: dict) -> int:
@@ -180,6 +186,7 @@ def select_pool(puzzles: list[dict], cfg: "SnowflakeConfig") -> np.ndarray:
 @dataclass
 class SnowflakeConfig:
     data_dir: str = "data"
+    extreme: bool = False               # Snowflake-Extreme splits (gen_data.py --extreme)
     n_puzzles: int | None = None        # subset size, None = all
     train_orders: list[int] | None = None   # keep only these orders (None = all)
     translate_aug: bool = False         # random whole-hex translation per sample
@@ -262,7 +269,7 @@ def load_states(puzzles: list[dict], indices, rng: np.random.Generator | None = 
 class SnowflakeDataset:
     def __init__(self, cfg: SnowflakeConfig):
         self.cfg = cfg
-        puzzles = load_puzzles(split_file(cfg.data_dir, "train"))
+        puzzles = load_puzzles(split_file(cfg.data_dir, split_name(cfg, "train")))
         self.pool_indices = select_pool(puzzles, cfg)
         self.puzzles = [puzzles[i] for i in self.pool_indices]
         self.n_puzzles = len(self.puzzles)

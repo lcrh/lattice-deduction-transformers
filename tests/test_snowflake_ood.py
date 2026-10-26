@@ -15,7 +15,7 @@ from experiments.registry import experiment_class
 from experiments.snowflake import gen_data
 from experiments.snowflake.data import (
     MAX_CONSTRAINT_GROUPS, SEQ_LEN, SnowflakeConfig, load_puzzles, constraint_group_features,
-    puzzle_to_state, random_translate, select_pool, split_file,
+    puzzle_to_state, random_translate, select_pool, split_file, split_name,
 )
 from tests.equivalence import fakes
 
@@ -175,3 +175,25 @@ def test_split_file_names_match_the_generator(tmp_path):
     for split in ("train", "val", "test"):
         assert split_file(str(tmp_path), split).name == gen_data.split_file(split)
     assert {"snowflake_test", "snowflake_val"} <= index_lists.SPECS.keys()
+
+
+def test_rating_counts_guesses():
+    groups = [list(range(6)), list(range(6, 12))]
+    solution = [1, 2, 3, 4, 5, 6, 6, 5, 4, 3, 2, 1]
+    one_blank = [7] + solution[1:]
+    assert gen_data.rating(one_blank, groups) == 0
+    # A blank group has many completions; singles cannot pick one.
+    assert gen_data.rating([7] * 6 + solution[6:], groups) >= 1
+    with pytest.raises(ValueError):
+        gen_data.rating([1, 1] + [7] * 10, groups)
+
+
+def test_extreme_is_hashed_only_when_set():
+    cls = experiment_class("snowflake")
+    plain = cls()
+    extreme = cfglib.from_dict(cls, cfglib.merge(cfglib.to_dict(plain), {"data": {"extreme": True}}))
+    assert "extreme" not in plain.training_dict()["data"]
+    assert extreme.training_dict()["data"]["extreme"] is True
+    assert extreme.train_hash() != plain.train_hash()
+    assert split_name(extreme.data, "train") == "extreme_train"
+    assert split_name(plain.data, "val") == "val"
