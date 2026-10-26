@@ -30,14 +30,16 @@ entries:
     command: [baselines/hrm_trm/trm_eval/modal_eval.py::sudoku, --n, "10000", --variant, att,
               --out, baselines/hrm_trm/results/trm_att_sudoku.json]
     result: baselines/hrm_trm/results/trm_att_sudoku.json
+  # Each method's better run: HRM with 8x dihedral augmentation, TRM without
+  # (baselines/hrm_trm/README.md, Maze-Hard findings).
   - name: hrm_maze
     exp_id: B3
-    label: "HRM (B200 retrain)"
+    label: "HRM (B200 retrain, augmented)"
     group: maze
     command: [baselines/hrm_trm/hrm_eval/modal_eval.py::sweep,
-              --run-dir, maze-hard-repro/hrm-maze-noaug,
-              --out, baselines/hrm_trm/results/hrm_noaug_sweep.json]
-    result: baselines/hrm_trm/results/hrm_noaug_sweep.json
+              --run-dir, maze-hard-repro/hrm-maze-aug,
+              --out, baselines/hrm_trm/results/hrm_aug_sweep.json]
+    result: baselines/hrm_trm/results/hrm_aug_sweep.json
   - name: trm_maze
     exp_id: B3
     label: "TRM (B200 retrain)"

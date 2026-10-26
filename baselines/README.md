@@ -104,8 +104,9 @@ LDT pool.
 - **TRM Maze sweeps in `hrm_trm/results/` used the wrong loop count.** They
   ran with the fork's default `L_cycles=6`, but the checkpoints were trained
   with `L_cycles=4`. The loop count does not change parameter shapes, so this
-  loads silently. The eval passes `trm_eval/cfg_maze.yaml` (`L_cycles=4`);
-  rerun the sweeps before using any TRM Maze number.
+  loads silently. The eval now passes `trm_eval/cfg_maze.yaml` (`L_cycles=4`);
+  `trm_noaug_sweep_lcycles4.json` and `trm_aug_sweep_lcycles4.json` are the
+  re-evaluated sweeps (best lenient 91.9% and 21.3%).
 - **TRM Sudoku checkpoint variant (unverified).** The mapping of
   `step_32550_sudoku_epoch50k` to TRM-MLP comes from the fork README's eval
   example and the model card's variant table. Loading it with the wrong

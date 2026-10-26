@@ -8,25 +8,3 @@ seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8]
 entries:
   - name: k
     sweep: {data.k_solutions: [1, 8, 32, 64, 128, 256, 512]}
-  # The same checkpoints with sampled digits at evaluation (argmax is the default).
-  - name: k_1_sample
-    eval_of: k_1
-    set: {solve.step.digit_policy: sample}
-  - name: k_8_sample
-    eval_of: k_8
-    set: {solve.step.digit_policy: sample}
-  - name: k_32_sample
-    eval_of: k_32
-    set: {solve.step.digit_policy: sample}
-  - name: k_64_sample
-    eval_of: k_64
-    set: {solve.step.digit_policy: sample}
-  - name: k_128_sample
-    eval_of: k_128
-    set: {solve.step.digit_policy: sample}
-  - name: k_256_sample
-    eval_of: k_256
-    set: {solve.step.digit_policy: sample}
-  - name: k_512_sample
-    eval_of: k_512
-    set: {solve.step.digit_policy: sample}

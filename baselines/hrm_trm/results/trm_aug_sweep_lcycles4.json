@@ -1,0 +1,56 @@
+[
+  {
+    "step": 6510,
+    "n": 1000,
+    "exact": 41,
+    "lenient": 213
+  },
+  {
+    "step": 13020,
+    "n": 1000,
+    "exact": 20,
+    "lenient": 53
+  },
+  {
+    "step": 19530,
+    "n": 1000,
+    "exact": 45,
+    "lenient": 85
+  },
+  {
+    "step": 26040,
+    "n": 1000,
+    "exact": 58,
+    "lenient": 136
+  },
+  {
+    "step": 32550,
+    "n": 1000,
+    "exact": 65,
+    "lenient": 173
+  },
+  {
+    "step": 39060,
+    "n": 1000,
+    "exact": 53,
+    "lenient": 186
+  },
+  {
+    "step": 45570,
+    "n": 1000,
+    "exact": 106,
+    "lenient": 139
+  },
+  {
+    "step": 52080,
+    "n": 1000,
+    "exact": 55,
+    "lenient": 99
+  },
+  {
+    "step": 58590,
+    "n": 1000,
+    "exact": 68,
+    "lenient": 124
+  }
+]
