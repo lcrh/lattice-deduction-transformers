@@ -20,8 +20,9 @@ blanks) is read from the run's `run_config.json`.
 Training (optional; existing checkpoints are listed in baselines/README.md):
     uv run modal run --detach baselines/qwen_sft/run.py::train [--n-blanks K] [--seed S]
 
-trains on the same 1,000 puzzles as LDT (`select_pool`, seed 42, validation
-holdout) and evaluates every `eval_every_epochs` epochs.
+trains on a seed-42 draw of 1,000 puzzles from the whole train split (no
+`sudoku_val` holdout, unlike LDT's pool) and evaluates every
+`eval_every_epochs` epochs.
 
 Needs the `llm` extra (transformers, accelerate, ...); the Modal image
 installs it.
@@ -393,7 +394,7 @@ def train_run(train_cfg: dict, resume: bool = False) -> dict[str, Any]:
 
     train_ds = _load_dataset("train")
     pool, _ = select_pool(len(train_ds), SudokuExtremeConfig(
-        split="train", n_puzzles=cfg.n_train, seed=TRAIN_SUBSET_SEED))
+        split="train", n_puzzles=cfg.n_train, seed=TRAIN_SUBSET_SEED, exclude_val=False))
     rows = make_rows(train_ds, np.asarray(pool).tolist(), cfg.n_blanks)
     (run_dir / "run_config.json").write_text(json.dumps({
         "model_id": MODEL_ID, **asdict(cfg),

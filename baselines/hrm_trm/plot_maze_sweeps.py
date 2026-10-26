@@ -1,10 +1,10 @@
-"""Plot exact vs lenient maze-hard accuracy over training, aug vs no-aug.
+"""Plot exact and lenient Maze-Hard accuracy over training, with and without augmentation.
 
-Reads the per-checkpoint sweep JSONs produced by
-{trm,hrm}_eval/modal_eval.py::sweep  (lists of {step, n, exact, lenient}) and
-renders one PNG with a panel per model. Run via the eval_*.sh scripts, or:
+Reads the per-checkpoint sweep JSONs written by
+{trm,hrm}_eval/modal_eval.py::sweep (lists of {step, n, exact, lenient}) and
+renders one PNG with a panel per model. Run by the eval_*.sh scripts, or:
 
-    uv run --with matplotlib python baselines/hrm_trm/plot_maze_sweeps.py
+    uv run python baselines/hrm_trm/plot_maze_sweeps.py
 """
 
 import json
@@ -16,13 +16,7 @@ import matplotlib.pyplot as plt
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
 
-# released-checkpoint reference lines (our lenient eval of the public weights)
-REF = {
-    "TRM": {"exact": 83.8, "lenient": 90.7},
-    "HRM": {"exact": 74.4, "lenient": 81.6},
-}
-# (model, sweep-json basename) per condition. The TRM files without the suffix
-# were evaluated with L_cycles=6 instead of the training value 4.
+# Sweep JSON per model and training condition.
 PANELS = {
     "TRM": {"aug": "trm_aug_sweep_lcycles4.json", "no-aug": "trm_noaug_sweep_lcycles4.json"},
     "HRM": {"aug": "hrm_aug_sweep.json", "no-aug": "hrm_noaug_sweep.json"},
@@ -53,13 +47,6 @@ for ax, (model, conds) in zip(axes, PANELS.items()):
         c = COND_COLOR[cond]
         ax.plot(xs, le, "-", color=c, lw=2.2, label=f"{cond} · lenient")
         ax.plot(xs, ex, "--", color=c, lw=1.6, alpha=0.8, label=f"{cond} · exact")
-    # released reference lines
-    ax.axhline(REF[model]["lenient"], color="#777", lw=1, ls=":")
-    ax.axhline(REF[model]["exact"], color="#bbb", lw=1, ls=":")
-    ax.text(0.99, REF[model]["lenient"] + 1, f"released lenient {REF[model]['lenient']}%",
-            transform=ax.get_yaxis_transform(), ha="right", fontsize=7.5, color="#777")
-    ax.text(0.99, REF[model]["exact"] - 3.5, f"released exact {REF[model]['exact']}%",
-            transform=ax.get_yaxis_transform(), ha="right", fontsize=7.5, color="#999")
     ax.set_title(model, fontsize=14, fontweight="bold", color="#15233b")
     ax.set_xlabel("training step")
     ax.set_ylim(0, 100)

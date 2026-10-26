@@ -1,61 +1,22 @@
 # HRM and TRM baselines
 
-Independent reproductions of **HRM** ([sapientinc/HRM](https://github.com/sapientinc/HRM))
-and **TRM** ([alphaXiv/TinyRecursiveModels](https://github.com/alphaXiv/TinyRecursiveModels))
-on **Maze-30×30-hard**, re-evaluated with a *lenient* metric and trained with/without
-augmentation. Runs on [Modal](https://modal.com/) (B200 train, H100 eval); the
-external repos are cloned at image-build time (nothing vendored/forked).
+Evaluation and Maze-Hard training of **HRM**
+([sapientinc/HRM](https://github.com/sapientinc/HRM)) and **TRM**
+([alphaXiv/TinyRecursiveModels](https://github.com/alphaXiv/TinyRecursiveModels))
+on [Modal](https://modal.com/). The upstream repos are cloned at a pinned
+commit at image-build time; nothing is vendored. Which numbers the paper
+reports is summarized in [`../README.md`](../README.md).
 
-## Maze-Hard: why re-evaluate
+## Sudoku-Extreme: released checkpoints
 
-The HRM paper's stated maze-hard correctness criterion is that a path is correct
-if it is **valid and optimal**. But for the model comparison the reported numbers
-use **exact match** against the single shortest path produced by their
-(deterministic) A\* solver. Two reasons that's worth revisiting:
-
-1. **Exact match is too strict for mazes.** A 30×30 maze has many shortest paths;
-   the interesting question is whether the model finds *any* valid optimal
-   solution, not whether it reproduces A\*'s particular one. So we add a
-   **lenient** score: a prediction is correct if its marked path cells form a
-   valid simple start→goal path whose length equals the maze's BFS-optimal
-   length — i.e. any optimal path counts.
-2. **TRM's augmentation claim.** The TRM paper states training used data
-   augmentation, but the code (maze builder defaults to no augmentation) and our
-   results (augmentation underperforms / changes behaviour) suggest the released
-   maze model was trained **without** it. So we train both ways and compare.
-
-## Quick start
-```bash
-modal token new                                                # one-time
-modal secret create huggingface-secret HF_TOKEN=<your HF token>
-modal secret create wandb-secret WANDB_API_KEY=<your W&B key>  # training logs to W&B
-
-# Eval the RELEASED checkpoints (no training needed):
-uv run modal run baselines/hrm_trm/hrm_eval/modal_eval.py::main    # HRM
-uv run modal run baselines/hrm_trm/trm_eval/modal_eval.py::main    # TRM
-
-# Augmentation study (each train script ~24h on a B200):
-./baselines/hrm_trm/train_with_aug.sh  &&  ./baselines/hrm_trm/eval_with_aug.sh
-./baselines/hrm_trm/train_no_aug.sh    &&  ./baselines/hrm_trm/eval_no_aug.sh   # the eval scripts also plot
-```
-
-Training streams to **Weights & Biases** (online via `wandb-secret`) and writes a
-persistent `<run_name>.train.log` to the checkpoint volume. Eval sweeps + plots
-land in `baselines/hrm_trm/results/`.
-
-## Sudoku-Extreme: evaluation of existing checkpoints
-
-No Sudoku training is done here. The released checkpoints are evaluated on the
-first N puzzles (default 10,000) of LDT's `sudoku_test_perm` ordering
-(`ldt.eval.indices`), so baselines and LDT see the same puzzles
-in the same order. Their accuracy is far from 100%, so a fixed subset with a
-binomial interval is enough; no sequential stopping.
+The released checkpoints are evaluated on the first N puzzles (default
+10,000) of LDT's `sudoku_test_perm` ordering (`ldt.eval.indices`):
 
 ```bash
 uv run modal run baselines/hrm_trm/hrm_eval/modal_eval.py::sudoku            # HRM (authors' release)
 uv run modal run baselines/hrm_trm/trm_eval/modal_eval.py::sudoku            # TRM-MLP (alphaXiv reproduction)
 uv run modal run baselines/hrm_trm/trm_eval/modal_eval.py::sudoku --variant att
-# --n 422786 evaluates the full test split
+# --n 422786 evaluates the whole test split
 ```
 
 Each run:
@@ -67,71 +28,65 @@ Each run:
 - writes per-puzzle rows (`idx`, `pos`, `status`, `solution`, the
   `ldt/eval/records.py` field names) and a summary to
   `eval/baselines/<model>/sudoku_test_perm_n<N>-<hash>/` (hash of the
-  checkpoint and batch size) on the
-  `ldt-checkpoints` volume;
-- writes the summary with a Clopper–Pearson interval and the eval time
-  (`gpu_seconds`, single B200) to `baselines/hrm_trm/results/`.
+  checkpoint and batch size) on the `ldt-checkpoints` volume;
+- writes the summary, with a Clopper-Pearson interval and the eval time
+  (`gpu_seconds`, one B200), to `baselines/hrm_trm/results/`.
 
 TRM checkpoints need their architecture config: `trm_eval/cfg_sudoku_mlp.yaml`
-(TRM-MLP, the variant behind the TRM paper's 87.4%) or `cfg_sudoku_att.yaml`.
+(TRM-MLP) or `cfg_sudoku_att.yaml` (TRM-attention). The MLP and attention
+weights have different shapes, so the wrong config fails to load.
 
-## Maze-Hard results — released checkpoints, full 1,000-puzzle test set
-| model | params | exact | lenient (any optimal path) |
-|---|---|---|---|
-| HRM | 27M | 74.4% | **81.6%** |
-| TRM | 7M  | 83.8% | **90.7%** |
+## Maze-Hard: retrains with and without augmentation
 
-Exact-match understates both by ~7 points — they routinely find a valid optimal
-path that simply isn't A\*'s labelled one.
+Both models are trained on one B200 each with their published Maze-Hard
+recipes (global batch 768), once with 8x dihedral augmentation and once
+without. Training is bounded by Modal's 24 h function timeout. Every saved
+checkpoint is then evaluated on all 1,000 test mazes:
 
-> The TRM checkpoint is an **independent reproduction** by alphaXiv
-> ([`alphaXiv/trm-model-maze`](https://huggingface.co/alphaXiv/trm-model-maze),
-> file `maze_hard_step_32550`), *not* original-author weights. The HRM checkpoint
-> is the authors' own release
-> ([`sapientinc/HRM-checkpoint-maze-30x30-hard`](https://huggingface.co/sapientinc/HRM-checkpoint-maze-30x30-hard)).
+```bash
+modal secret create wandb-secret WANDB_API_KEY=<your W&B key>   # training logs to W&B
+./baselines/hrm_trm/train_with_aug.sh  &&  ./baselines/hrm_trm/eval_with_aug.sh
+./baselines/hrm_trm/train_no_aug.sh    &&  ./baselines/hrm_trm/eval_no_aug.sh
+```
 
-## Maze-Hard findings
+Training streams to Weights & Biases and writes `<run_name>.train.log` to the
+checkpoint volume (`hrm-maze-aug-ckpts`, `trm-maze-aug-ckpts`, under
+`maze-hard-repro/{hrm,trm}-maze-{aug,noaug}/`). The eval scripts write one
+sweep per run to `results/` (a list of `{step, n, exact, lenient}`) and plot
+them with `plot_maze_sweeps.py`. TRM is evaluated with its training loop
+count (`trm_eval/cfg_maze.yaml`, `L_cycles=4`); the loop count does not
+change parameter shapes, so a different value would load without error.
 
-**1. The paper numbers reproduce.** Re-training from scratch *without* augmentation
-matches the papers' reported maze-hard exact-match accuracy, and evaluating the
-released checkpoints agrees:
+Each prediction is scored twice (`maze_scoring.py`):
 
-| model | best exact (ours) | paper exact | released-ckpt exact | best lenient (ours) |
+- **exact**: the predicted grid equals the dataset's reference path, the
+  single A\* shortest path;
+- **lenient**: the marked path cells form a simple start-to-goal path whose
+  length equals the maze's BFS shortest-path length, so any shortest path
+  counts.
+
+Best lenient accuracy over each run's checkpoints:
+
+| Model | Training | Best lenient | Step | Exact at that step |
 |---|---|---|---|---|
-| TRM (7M)  | 85.1%† | 85.3% | 83.8%† | 91.6%† |
-| HRM (27M) | 74.8% | 74.5% | 74.4% | 82.2% |
+| HRM (27M) | with augmentation | **84.6%** | 122,388 | 16.7% |
+| HRM (27M) | without augmentation | 82.2% | 39,060 | 72.4% |
+| TRM (7M) | without augmentation | **91.9%** | 19,530 | 84.5% |
+| TRM (7M) | with augmentation | 21.3% | 6,510 | 4.1% |
 
-† Evaluated with `L_cycles=6`; the checkpoints were trained with
-`L_cycles=4`. `trm_eval/cfg_maze.yaml` sets 4; these numbers need
-re-evaluation.
+Table 3 reports the better run of each model (in bold): HRM with
+augmentation, TRM without.
 
-**2. 8× dihedral augmentation hurts TRM, and helps HRM only on long runs (lenient
-only).** Best performance reached over each training trajectory:
+![Maze-Hard: exact and lenient accuracy over training, with and without augmentation](results/maze_aug_vs_noaug.png)
 
-| model | training | best exact | best lenient |
-|---|---|---|---|
-| TRM | no-aug | **85.1%** | **91.6%** |
-| TRM | aug | 10.1% | 22.0% |
-| HRM | no-aug | **74.8%** | 82.2% |
-| HRM | aug | 23.6% | **84.6%** |
+## Maze-Hard training throughput (one B200, global batch 768)
 
-- **TRM (7M):** augmentation is catastrophic — best lenient 22% vs 92% no-aug. The
-  tiny model destabilises under the 8× more varied data.
-- **HRM (27M):** augmentation *tanks exact* (24% vs 75%) because it decorrelates the
-  model from the dataset's single canonical A\* path — but its best *lenient* (84.6%,
-  reached only after ~120k steps) edges out no-aug (82.2%). So augmentation helps HRM
-  **only** on the any-optimal-path metric and **only** with long training.
+Steady-state step times of the Maze runs above, read off their training
+progress logs. The step time does not depend on augmentation.
+`modal_train.py::run_throughput` measures the Sudoku-Extreme training step
+time the same way (`tqdm_rate.py`), for Table 1's compute estimates.
 
-HRM training is noisy under constant LR, so these are best-over-trajectory; the full
-curves are below.
-
-![Maze-30×30-hard: exact vs lenient accuracy over training, augmentation vs none](results/maze_aug_vs_noaug.png)
-
-## Maze-Hard steady-state training throughput (single B200, global batch 768)
-For compute-matched comparisons later. Per-step cost is independent of
-augmentation (same model/batch); total steps = `epochs × 1.302`.
-
-| model | s / step | steps / s |
+| Model | s / step | steps / s |
 |---|---|---|
 | TRM (7M) | ~1.46 | ~0.68 |
 | HRM (27M) | ~0.61 | ~1.64 |

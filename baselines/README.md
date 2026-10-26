@@ -1,87 +1,80 @@
 # Baselines
 
-No baseline is retrained for the camera-ready. Every baseline number comes
-from an existing checkpoint, evaluated with the scripts here.
-
-| Dir | Baseline | Benchmarks |
-|---|---|---|
-| [`hrm_trm/`](hrm_trm/README.md) | HRM, TRM | Maze-Hard (exact + lenient), Sudoku-Extreme (exact) |
-| [`qwen_sft/`](qwen_sft/run.py) | Qwen3.5-0.8B, full SFT | Sudoku-Extreme (pass@k) |
-
-## Evaluation protocol
-
-- **Sudoku-Extreme:** the first N puzzles of LDT's `sudoku_test_perm`
-  ordering (`ldt.eval.indices`), so baselines and LDT see the
-  same puzzles in the same order.
-  - HRM/TRM: N = 10,000 by default; exact match; Clopper–Pearson 95% interval.
-  - Qwen: N = 256 × 32 samples by default; unbiased pass@k.
-  - Their accuracy is far from 100%, so there is no sequential stopping.
-- **Maze-Hard:** the whole 1,000-puzzle test set, exact and lenient
-  (any optimal path).
-- **Per-puzzle rows** go to `eval/baselines/<model>/...` on the
-  `ldt-checkpoints` volume. They use the
-  `ldt/eval/records.py` field names (`idx`, `pos`, `status`,
-  `solution`).
-- **Resuming:** every eval saves its work in units and skips finished units
-  when rerun: HRM/TRM Sudoku in chunks of 1,024 puzzles, Maze sweeps per
-  checkpoint (scores cached next to the checkpoint, keyed by the eval
-  settings), Qwen per checkpoint.
+Where every baseline number in the paper comes from, and the scripts that
+produce it. The `baselines` and `llm_finetune` manifests list the exact
+`modal run` command behind each reported result:
 
 ```bash
-uv run python -m paper.launch launch baselines        # HRM/TRM, Sudoku + Maze
-uv run python -m paper.launch launch appendix_i_llm   # Qwen SFT
+uv run python -m paper.launch launch baselines      # HRM, TRM and Sotaku v2 evals
+uv run python -m paper.launch launch llm_finetune   # fine-tuned Qwen evals
 ```
 
-The manifests list the exact `modal run` commands.
-
-## Checkpoint provenance
-
-Training times marked "derived" are step count × the measured steady-state
-B200 throughput in `hrm_trm/README.md` (TRM ~1.46 s/step, HRM ~0.61 s/step).
-They exclude compile and startup time.
-
-### Maze-Hard (Table 3)
-
-| Baseline | Checkpoint | Provenance | Training hardware / time | Exact | Lenient |
-|---|---|---|---|---|---|
-| TRM, B200 retrain | volume `trm-maze-aug-ckpts`: `maze-hard-repro/trm-maze-noaug/step_19530` | Our retrain, published no-aug recipe (`hrm_trm/trm_eval/modal_train.py`), global batch 768 | 1× B200; ~7.9 h to this step (derived). Run hit Modal's 24 h cap at step 58,590, before the recipe's ~65,100 steps | 85.1%† | 91.6%† |
-| HRM, B200 retrain | volume `hrm-maze-aug-ckpts`: `maze-hard-repro/hrm-maze-noaug/step_23436` | Our retrain, published no-aug recipe (`hrm_trm/hrm_eval/modal_train.py`), global batch 768 | 1× B200; ~4.0 h to this step (derived) | 74.8% | 81.1% |
-| HRM, B200 retrain, best lenient | same run, `step_39060` | as above | 1× B200; ~6.6 h (derived) | 72.4% | 82.2% |
-| HRM, released | `sapientinc/HRM-checkpoint-maze-30x30-hard` | Authors' release | not published | 74.4% | 81.6% |
-| TRM, released | `alphaXiv/trm-model-maze/maze_hard_step_32550` | alphaXiv independent reproduction (the TRM authors released no weights) | not published | 83.8%† | 90.7%† |
-
-† Evaluated with `L_cycles=6`, but trained with `L_cycles=4`; must be
-re-evaluated (see Known issues). The released checkpoint's 83.8% is close to
-alphaXiv's reported 83.67%, so their number likely used the same default.
-
-The paper's current Table 3 baselines (HRM 74.5%, TRM 85.3%; TRM "24 h,
-4× L40S") are the original papers' self-reported exact-match numbers, not
-from any checkpoint here.
-
-### Sudoku-Extreme (Table 1)
-
-| Baseline | Checkpoint | Provenance | Training hardware / time |
-|---|---|---|---|
-| HRM | `sapientinc/HRM-checkpoint-sudoku-extreme` (`all_config.yaml`: 40,000 epochs, global batch 768, lr 1e-4, 1k puzzles × 1,000 augmentations) | Authors' release | not published |
-| TRM-MLP | `alphaXiv/trm-model-sudoku/step_32550_sudoku_epoch50k` | alphaXiv independent reproduction; model card reports 79.37% ± 0.12% vs the TRM paper's 87.4% | not published |
-| TRM-attention | `alphaXiv/trm-model-sudoku/step_32550_sudoku_50k_epoch_attn_type` | alphaXiv reproduction; model card 73.66% vs paper 74.7% | not published |
-
-The paper's current Table 1 baselines (HRM 55.0%; TRM 87.4%, "36 h, 4× L40S")
-are the original papers' self-reported numbers. Neither Sudoku checkpoint
-has published training hardware or time, so **B200-normalized Sudoku training
-compute for HRM/TRM cannot be measured without retraining**. Only their
-inference cost can be measured: the eval summaries record B200 seconds.
-
-### Fine-tuned LLM (appendix)
-
-Existing runs are on the `ldt-checkpoints` volume under
-`/checkpoints/followups/llm_baseline/`. Each was trained by the earlier
-version of this script, Qwen3.5-0.8B full BF16 SFT for 16 epochs, with seed 0
-and one checkpoint per epoch (`checkpoint-<32 × epoch>`).
-
-| Run | Puzzles | Training (1× B200) |
+| Dir | Baseline | Paper |
 |---|---|---|
-| `qwen3_5_0_8b_natural_ep16_seed0` | natural (~56 blanks) | 406 s |
+| [`hrm_trm/`](hrm_trm/README.md) | HRM, TRM | Table 1 (Sudoku-Extreme), Table 3 (Maze-Hard) |
+| [`sotaku/`](sotaku/modal_eval.py) | Sotaku v2 | Table 1 |
+| [`eqr/`](eqr/modal_throughput.py) | Equilibrium Reasoners | Table 1 (accuracy as reported; B200 throughput measured here) |
+| [`qwen_sft/`](qwen_sft/run.py) | Qwen3.5-0.8B, full fine-tune | Appendix I |
+| [`frontier_llm/`](frontier_llm/run.py) | Frontier LLMs via OpenRouter | Appendix J |
+
+## Sudoku-Extreme (Table 1)
+
+HRM, TRM and Sotaku v2 are their released checkpoints, evaluated on the
+first 10,000 puzzles of LDT's `sudoku_test_perm` ordering
+(`ldt.eval.indices`), so every method sees the same puzzles in the same
+order. A puzzle counts as solved when the output grid equals the solution.
+
+| Baseline | Checkpoint | Result | Accuracy |
+|---|---|---|---|
+| HRM | `sapientinc/HRM-checkpoint-sudoku-extreme` (authors' release) | `hrm_trm/results/hrm_sudoku.json` | 55.4% |
+| TRM-MLP | `alphaXiv/trm-model-sudoku/step_32550_sudoku_epoch50k` (alphaXiv reproduction; the TRM authors released no weights) | `hrm_trm/results/trm_mlp_sudoku.json` | 79.5% |
+| TRM-attention | `alphaXiv/trm-model-sudoku/step_32550_sudoku_50k_epoch_attn_type` | `hrm_trm/results/trm_att_sudoku.json` | 70.4% |
+| Sotaku v2 | release v2.0.0, `model_late_state_ce.pt` (commit `d0ab125`; FP32, batch 256, 1,024 iterations) | `sotaku/results/sotaku_v2_sudoku.json` | 98.96% |
+
+The paper's TRM row is TRM-MLP. EqR's accuracy (99.8%) is as reported by its
+authors; `eqr/modal_throughput.py` measures the B200 training and inference
+throughput of its released config and checkpoint for the compute estimates.
+HRM, TRM and Sotaku v2 training times are likewise estimated from measured
+B200 throughput (`hrm_trm/trm_eval/modal_train.py::run_throughput`,
+`hrm_trm/hrm_eval/modal_train.py::run_throughput`,
+`sotaku/modal_eval.py::run_throughput`).
+
+## Maze-Hard (Table 3)
+
+HRM and TRM are our retrains on one B200 each, with the published Maze-Hard
+recipes (global batch 768), once with 8x dihedral augmentation and once
+without (`hrm_trm/train_with_aug.sh`, `hrm_trm/train_no_aug.sh`). Every saved
+checkpoint of each run is evaluated on all 1,000 test mazes with two
+metrics: *lenient* (any shortest path from start to goal) and *exact* (the
+dataset's reference path). Table 3 reports the lenient metric, at each
+method's best run and checkpoint by lenient test accuracy:
+
+| Run | Sweep | Best lenient | Step | Exact at that step |
+|---|---|---|---|---|
+| **HRM, with augmentation** (reported) | `hrm_trm/results/hrm_aug_sweep.json` | **84.6%** | 122,388 | 16.7% |
+| HRM, without augmentation | `hrm_trm/results/hrm_noaug_sweep.json` | 82.2% | 39,060 | 72.4% |
+| **TRM, without augmentation** (reported) | `hrm_trm/results/trm_noaug_sweep_lcycles4.json` | **91.9%** | 19,530 | 84.5% |
+| TRM, with augmentation | `hrm_trm/results/trm_aug_sweep_lcycles4.json` | 21.3% | 6,510 | 4.1% |
+
+TRM is evaluated with the loop count it was trained with (`L_cycles=4`,
+`hrm_trm/trm_eval/cfg_maze.yaml`). Checkpoints are on the Modal volumes
+`hrm-maze-aug-ckpts` and `trm-maze-aug-ckpts` under
+`maze-hard-repro/<run>/step_<N>`. The training times in Table 3 are the
+reported step count times the measured steady-state B200 throughput (HRM about
+0.61 s/step, TRM about 1.46 s/step), excluding compile and startup.
+
+## Fine-tuned LLM (Appendix I)
+
+`qwen_sft/run.py` fine-tunes all parameters of Qwen3.5-0.8B in BF16 for 16
+epochs (seed 0, one checkpoint per epoch) on a seed-42 draw of 1,000 puzzles
+from the Sudoku-Extreme train split, either as given (`natural`) or rebuilt
+from each solution with exactly K blank cells (`--n-blanks K`). The
+evaluated runs are on the `ldt-checkpoints` volume under
+`/checkpoints/followups/llm_baseline/`:
+
+| Run | Puzzles | Training (1x B200) |
+|---|---|---|
+| `qwen3_5_0_8b_natural_ep16_seed0` | natural (about 56 blanks) | 406 s |
 | `qwen3_5_0_8b_blanks1_ep16_seed0` | 1 blank | 732 s |
 | `qwen3_5_0_8b_blanks2_ep16_seed0` | 2 blanks | 395 s |
 | `qwen3_5_0_8b_blanks4_ep16_seed0` | 4 blanks | 407 s |
@@ -89,25 +82,23 @@ and one checkpoint per epoch (`checkpoint-<32 × epoch>`).
 | `qwen3_5_0_8b_blanks16_ep16_seed0` | 16 blanks | 545 s |
 | `qwen3_5_0_8b_blanks32_ep16_seed0` | 32 blanks | 401 s |
 
-These runs trained on a seed-42 1,000-puzzle subset drawn without the
-`sudoku_val` holdout, so their training puzzles differ slightly from the
-retrained LDT models'. New training runs (`run.py::train`) use the current
-LDT pool.
+`run.py::evaluate` scores every second epoch's checkpoint on the first 256
+puzzles of `sudoku_test_perm` (or their K-blank versions), 32 samples per
+puzzle, with unbiased pass@k; the summaries are in `qwen_sft/results/`.
 
-## Known issues
+## Frontier LLMs (Appendix J)
 
-- **Maze checkpoints are selected on the test set.** Table 3 reports each
-  retrain's best checkpoint by lenient test accuracy (`maze_step: best` in
-  the baselines manifest), and the caption says so. Final checkpoints for
-  comparison: HRM `step_26040` 72.2% exact / 80.6% lenient; TRM `step_58590`
-  77.9% / 89.6% (with the old loop count).
-- **TRM Maze sweeps in `hrm_trm/results/` used the wrong loop count.** They
-  ran with the fork's default `L_cycles=6`, but the checkpoints were trained
-  with `L_cycles=4`. The loop count does not change parameter shapes, so this
-  loads silently. The eval now passes `trm_eval/cfg_maze.yaml` (`L_cycles=4`);
-  `trm_noaug_sweep_lcycles4.json` and `trm_aug_sweep_lcycles4.json` are the
-  re-evaluated sweeps (best lenient 91.9% and 21.3%).
-- **TRM Sudoku checkpoint variant (unverified).** The mapping of
-  `step_32550_sudoku_epoch50k` to TRM-MLP comes from the fork README's eval
-  example and the model card's variant table. Loading it with the wrong
-  config fails, because the MLP and attention weights have different shapes.
+`frontier_llm/run.py` sends the appendix prompts to the models in its
+`MODELS` list through OpenRouter (`OPENROUTER_API_KEY`), for the first 50
+puzzles of each benchmark's test ordering, and writes
+`frontier_llm/results.json`; `frontier_llm/analyze.py` prints the solve
+rate, output tokens and cost per puzzle and classifies every unsolved
+answer. Both run locally (see their docstrings).
+
+## Per-puzzle rows
+
+The HRM, TRM, Sotaku v2 and Qwen evals write per-puzzle rows to
+`eval/baselines/<model>/...` on the `ldt-checkpoints` volume, with the field
+names of `ldt/eval/records.py` (`idx`, `pos`, `status`, `solution`). Every
+eval saves its work in units and skips finished units when rerun: Sudoku in
+chunks of 1,024 puzzles, Maze sweeps per checkpoint, Qwen per checkpoint.
