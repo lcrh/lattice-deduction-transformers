@@ -212,7 +212,7 @@ def test_figures_and_main_tables_render(tmp_path):
     assert "LDT, 4K train steps & 90.000 & 0.00000" in tex      # pooled over seeds
 
     # Maze: each seed's best of its final checkpoint and step snapshots.
-    maze = [dict(r, entry="k1_elim0p1", train_steps=20000) for r in records if r["entry"] == "steps_500"]
+    maze = [dict(r, entry="k1", train_steps=20000) for r in records if r["entry"] == "steps_500"]
     maze += [_result_record(tmp_path, "k1_snap_step10000", s, ["correct"] * 10) for s in (0, 1)]
     sweep = [{"step": 10, "n": 1000, "exact": 700, "lenient": 800},
              {"step": 20, "n": 1000, "exact": 720, "lenient": 810}]

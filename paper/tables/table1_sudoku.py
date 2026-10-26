@@ -4,7 +4,7 @@ Rows, in the paper's order:
   baselines   released checkpoints on the first 10,000 puzzles of
               `sudoku_test_perm` (manifest `baselines`); EqR as reported
   LDT rows    manifest `table1_sudoku`; accuracy and wrong answers pooled over
-              seeds (the rows trained without per-step augmentation)
+              seeds
   10,000 search rounds
               the 4K-step models (seeds 0-2, manifest `portfolio`, which shares
               their checkpoints) with every 1,000-round timeout rerun at
@@ -77,8 +77,8 @@ def build(records: list[dict], baselines: list[dict],
     if recs:
         body.append([NO_AUG[0], *acc_cells(*pooled(recs), 2)])
     caption = ("Sudoku-Extreme test accuracy and wrong answers (\\%). Baselines: released "
-               "checkpoints on the first 10,000 puzzles of the test ordering. LDT: pooled over 3 "
-               "seeds; portfolios use up to 10,000 rounds per model.")
+               "checkpoints on the first 10,000 puzzles of the test ordering. LDT: accuracy and "
+               "wrong answers pooled over the 3 seeds; portfolios use up to 10,000 rounds per model.")
     return Table(columns=["Model", "Acc. \\%", "Wrong \\%"], rows=body, caption=caption,
                  label="tab:Sudoku-extreme")
 

@@ -3,7 +3,9 @@ exp_id: M4
 benchmark: maze
 eval: whole
 seeds: [0, 1, 2]
-# Keep a checkpoint every 1,000 steps: training is unstable, and the best one is reported.
+# Keep a checkpoint every 1,000 steps: training is unstable, and Table 3
+# reports each seed's best checkpoint, over the step snapshots below and the
+# final checkpoint.
 set: {train.keep_step_snapshots: true}
 entries:
   - name: k1
@@ -12,25 +14,11 @@ entries:
   - name: k512
     label: "LDT, K=512"
     config: configs/maze/paper_k512.yaml
-  # The original evals appear to have used theta_elim = 0.5 (the default above),
-  # while the paper text implies 0.1; evaluate the same checkpoints at both.
-  - name: k1_elim0p1
-    label: "LDT, K=1, theta_elim 0.1 at eval"
-    eval_of: k1
-    set: {solve.step.threshold: 0.1}
-  - name: k512_elim0p1
-    label: "LDT, K=512, theta_elim 0.1 at eval"
-    eval_of: k512
-    set: {solve.step.threshold: 0.1}
-  # Training is unstable, so Table 3 reports each seed's best checkpoint at
-  # theta_elim 0.1: the step snapshots below or the final checkpoint above.
   - name: k1_snap
     label: "LDT, K=1, step snapshot"
     eval_of: k1
     snapshots: [10000, 12000, 14000, 16000, 18000]
-    set: {solve.step.threshold: 0.1}
   - name: k512_snap
     label: "LDT, K=512, step snapshot"
     eval_of: k512
     snapshots: [10000, 12000, 14000, 16000, 18000]
-    set: {solve.step.threshold: 0.1}

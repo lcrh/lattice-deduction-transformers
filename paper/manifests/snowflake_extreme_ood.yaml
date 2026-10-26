@@ -1,6 +1,6 @@
-# Snowflake order transfer, LDT against direct prediction: train on small
-# orders, test on larger ones, on Snowflake-Extreme and on the original
-# dataset. Original-dataset LDT training entries are the Appendix H runs.
+# Snowflake order transfer on hard puzzles, LDT against direct prediction:
+# train on small orders, test on larger ones (Table 2 and the appendix's
+# order-transfer table).
 exp_id: A13
 benchmark: snowflake
 eval: whole
@@ -42,44 +42,3 @@ entries:
     label: "Direct prediction, train 6-8"
     config: configs/snowflake/extreme_ood_6to8_eval9to10.yaml
     set: *direct
-
-  # Trained on the original dataset; evaluated on its test set and on
-  # Snowflake-Extreme.
-  - name: orig_ldt_4to6
-    label: "LDT (original data), train 4-6"
-    config: configs/snowflake/ood_4to6_eval7to10.yaml
-  - name: orig_ldt_4to6_one_shot
-    label: "LDT (original data), train 4-6, one shot"
-    eval_of: orig_ldt_4to6
-    set: *one_shot
-  - name: orig_ldt_4to6_on_extreme
-    label: "LDT (original data), train 4-6, extreme test set"
-    eval_of: orig_ldt_4to6
-    set: {eval.index_list: snowflake_extreme_test}
-  - name: orig_direct_4to6
-    label: "Direct prediction (original data), train 4-6"
-    config: configs/snowflake/ood_4to6_eval7to10.yaml
-    set: *direct
-  - name: orig_direct_4to6_on_extreme
-    label: "Direct prediction (original data), train 4-6, extreme test set"
-    eval_of: orig_direct_4to6
-    set: {eval.index_list: snowflake_extreme_test}
-  - name: orig_ldt_6to8
-    label: "LDT (original data), train 6-8"
-    config: configs/snowflake/ood_6to8_eval9to10.yaml
-  - name: orig_ldt_6to8_one_shot
-    label: "LDT (original data), train 6-8, one shot"
-    eval_of: orig_ldt_6to8
-    set: *one_shot
-  - name: orig_ldt_6to8_on_extreme
-    label: "LDT (original data), train 6-8, extreme test set"
-    eval_of: orig_ldt_6to8
-    set: {eval.index_list: snowflake_extreme_test}
-  - name: orig_direct_6to8
-    label: "Direct prediction (original data), train 6-8"
-    config: configs/snowflake/ood_6to8_eval9to10.yaml
-    set: *direct
-  - name: orig_direct_6to8_on_extreme
-    label: "Direct prediction (original data), train 6-8, extreme test set"
-    eval_of: orig_direct_6to8
-    set: {eval.index_list: snowflake_extreme_test}

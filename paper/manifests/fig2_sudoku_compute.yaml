@@ -1,7 +1,7 @@
-# Figure 2: test-time compute against training compute, measured as the
-# drained-chain sequential forwards per solved puzzle. Shares checkpoints with
-# Table 1; its evals are separate because the estimate changes the solver's
-# batch schedule.
+# Figure 4: test-time compute against training compute, measured as the
+# drained-chain sequential forwards per solved puzzle. These models are
+# trained with per-step augmentation; the evals record the sequential-forward
+# estimate, which changes the solver's batch schedule.
 exp_id: M2
 benchmark: sudoku
 config: configs/sudoku/paper.yaml

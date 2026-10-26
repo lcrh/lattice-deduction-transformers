@@ -4,11 +4,11 @@
 presets:
   # Sudoku test split, walked in a fixed random order until the error rate
   # is pinned down (K=100 failures, or +-0.1pp once n >= 1000). Table 1 rows below
-  # 4K steps, Figure 2.
+  # 4K steps, Figure 4.
   sequential:
     eval.index_list: sudoku_test_perm
     eval.stop: sequential
-  # Every Sudoku test puzzle. Table 1 4K rows (also portfolio anchors).
+  # Every Sudoku test puzzle. Table 1 4K and 8K rows, portfolio test evals.
   full:
     eval.index_list: sudoku_test_perm
     eval.stop: full
@@ -24,8 +24,8 @@ presets:
   ablation_10k:
     eval.index_list: sudoku_test_perm
     eval.stop: ablation_10k
-  # Held-out train puzzles, sequential, at most 4,000. Phase-1 default selection only;
-  # never touches the test split.
+  # Held-out train puzzles (sudoku_val), sequential, at most 4,000. Tuning
+  # defaults (tuning_* manifests); never touches the test split.
   select:
     eval.index_list: sudoku_val
     eval.stop: select

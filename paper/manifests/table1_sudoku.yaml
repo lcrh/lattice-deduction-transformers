@@ -1,100 +1,48 @@
-# Table 1: Sudoku-Extreme, LDT rows. The 4K-step rows are evaluated on every
-# test puzzle; their seeds 0-2 are also the portfolio anchors (portfolio.yaml
-# trains the same config, so the checkpoints are shared).
+# Table 1: Sudoku-Extreme, LDT rows (no per-step augmentation in training,
+# per-step augmentation at evaluation). The 4K and 8K rows are evaluated on
+# every test puzzle; the 4K seeds 0-2 are also portfolio models
+# (portfolio.yaml trains the same config, so the checkpoints are shared).
 exp_id: M1
 benchmark: sudoku
 config: configs/sudoku/paper.yaml
 eval: sequential
-set: {train.step.augment: true}
 seeds: [0, 1, 2]
 entries:
-  - name: steps1k
+  - name: steps1k_train_noaug
     label: "LDT, 1K steps"
     set: {train.steps: 1000}
-  - name: steps2k
+  - name: steps2k_train_noaug
     label: "LDT, 2K steps"
     set: {train.steps: 2000}
-  - name: steps4k
+  - name: steps4k_train_noaug
     label: "LDT, 4K steps"
     eval: full
-  # 8K rows: trained separately so their full-split evals can be queued one at a time.
-  - name: steps8k_ckpt
-    train_only: true
-    set: {train.steps: 8000}
-  - name: steps8k
-    label: "LDT, 8K steps"
-    eval_of: steps8k_ckpt
-    eval: full
-  # The same rows without per-step augmentation in training (kept at
-  # evaluation): reported alongside, as phase 1 left it undecided for Sudoku.
-  - name: steps1k_train_noaug
-    label: "LDT, 1K steps, no per-step aug. in training"
-    set: {train.steps: 1000, train.step.augment: false}
-  - name: steps2k_train_noaug
-    label: "LDT, 2K steps, no per-step aug. in training"
-    set: {train.steps: 2000, train.step.augment: false}
-  - name: steps4k_train_noaug
-    label: "LDT, 4K steps, no per-step aug. in training"
-    eval: full
-    set: {train.step.augment: false}
+  # Trained separately so the full-split evals can be queued one at a time.
   - name: steps8k_train_noaug_ckpt
     train_only: true
-    set: {train.steps: 8000, train.step.augment: false}
+    set: {train.steps: 8000}
   - name: steps8k_train_noaug
-    label: "LDT, 8K steps, no per-step aug. in training"
+    label: "LDT, 8K steps"
     eval_of: steps8k_train_noaug_ckpt
     eval: full
+  # 1,000 puzzles with no data or per-step augmentation, in training or at
+  # evaluation.
   - name: noaug4k
     label: "LDT, 4K steps, no augmentation"
     set:
       data.augment_digit_perm: false
       data.augment_dihedral: false
-      train.step.augment: false
       solve.step.augment: false
-  # Without per-step augmentation, argmax digits leave eval dropout as the only
-  # source of chain diversity; sampled digits restore it.
-  - name: noaug4k_sample
-    label: "LDT, 4K steps, no augmentation, sampled digits"
-    eval_of: noaug4k
-    set: {solve.step.digit_policy: sample}
-  # The original paper's eval recipe (sampled digits) on the full split, for
-  # models trained with and without per-step augmentation.
-  - name: steps4k_sample
-    label: "LDT, 4K steps, sampled digits"
-    eval_of: steps4k
-    eval: full
-    set: {solve.step.digit_policy: sample}
-  - name: steps4k_train_noaug_sample
-    label: "LDT, 4K steps, no per-step aug. in training, sampled digits"
-    eval_of: steps4k_train_noaug
-    eval: full
-    set: {solve.step.digit_policy: sample}
-  # Full train split (all of Sudoku-Extreme train, sudoku_val held out), no
-  # augmentation in training (neither data nor per-step), per-step augmentation
-  # at evaluation. 4K/8K are evaluated on the full test split, queued one at a time.
-  - name: fullsplit_noaug_1k
-    label: "LDT, full train split, no train aug., 1K steps"
-    set: {data.n_puzzles: null, data.augment_digit_perm: false, data.augment_dihedral: false, train.step.augment: false, train.steps: 1000}
-  - name: fullsplit_noaug_2k
-    label: "LDT, full train split, no train aug., 2K steps"
-    set: {data.n_puzzles: null, data.augment_digit_perm: false, data.augment_dihedral: false, train.step.augment: false, train.steps: 2000}
-  - name: fullsplit_noaug_4k_ckpt
-    train_only: true
-    set: {data.n_puzzles: null, data.augment_digit_perm: false, data.augment_dihedral: false, train.step.augment: false, train.steps: 4000}
-  - name: fullsplit_noaug_4k
-    label: "LDT, full train split, no train aug., 4K steps"
-    eval_of: fullsplit_noaug_4k_ckpt
-    eval: full
-  - name: fullsplit_noaug_8k_ckpt
-    train_only: true
-    set: {data.n_puzzles: null, data.augment_digit_perm: false, data.augment_dihedral: false, train.step.augment: false, train.steps: 8000}
-  - name: fullsplit_noaug_8k
-    label: "LDT, full train split, no train aug., 8K steps"
-    eval_of: fullsplit_noaug_8k_ckpt
-    eval: full
-  # 1,000 puzzles with no data or per-step augmentation in training, but
-  # per-step augmentation at evaluation.
+  # The same checkpoints with per-step augmentation at evaluation.
   - name: noaug4k_evalaug
     label: "LDT, 4K steps, no train aug., per-step aug. at eval"
     eval_of: noaug4k
     set: {solve.step.augment: true}
+  # The whole train split (sudoku_val held out), no data augmentation in training.
+  - name: fullsplit_noaug_4k_ckpt
+    train_only: true
+    set: {data.n_puzzles: null, data.augment_digit_perm: false, data.augment_dihedral: false}
+  - name: fullsplit_noaug_4k
+    label: "LDT, full train split, no train aug., 4K steps"
+    eval_of: fullsplit_noaug_4k_ckpt
+    eval: full

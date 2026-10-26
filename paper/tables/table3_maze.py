@@ -1,9 +1,9 @@
 """Maze-Hard table: lenient (any shortest path) and exact (reference path) accuracy.
 
-LDT rows report each seed's best checkpoint at theta_elim 0.1, over the step
-snapshots and the final checkpoint (manifest `table3_maze`). Baselines come from the HRM/TRM checkpoint sweeps at the baselines manifest's
-`maze_step`: `best` (highest lenient accuracy, chosen on the test set), `last`,
-or a step number.
+LDT rows report each seed's best checkpoint, over the step snapshots and the
+final checkpoint (manifest `table3_maze`). Baselines come from the HRM/TRM
+checkpoint sweeps at the baselines manifest's `maze_step`: `best` (highest
+lenient accuracy, chosen on the test set), `last`, or a step number.
 
     uv run python -m paper.tables.table3_maze [--copy-to DIR]
 """
@@ -33,9 +33,9 @@ def _sweep_point(sweep: list[dict], step: MazeStep) -> dict:
 
 
 def _best_checkpoints(records: list[dict], train_entry: str) -> list[dict]:
-    """Per seed, the most accurate eval at theta_elim 0.1: a step snapshot or the final checkpoint."""
+    """Per seed, the most accurate eval: a step snapshot or the final checkpoint."""
     cands = [r for r in done(records)
-             if r["entry"] == f"{train_entry}_elim0p1" or r["entry"].startswith(f"{train_entry}_snap_step")]
+             if r["entry"] == train_entry or r["entry"].startswith(f"{train_entry}_snap_step")]
     best = {}
     for r in cands:
         if r["seed"] not in best or r["accuracy"] > best[r["seed"]]["accuracy"]:

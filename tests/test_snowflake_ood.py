@@ -111,10 +111,10 @@ def test_variants_of_a_puzzle_share_a_split():
 
 def test_ood_configs_load_with_their_order_settings():
     cls = experiment_class("snowflake")
-    leq6 = cfglib.load(cls, CONFIGS / "ood_4to6_eval7to10.yaml")
+    leq6 = cfglib.load(cls, CONFIGS / "extreme_ood_4to6_eval7to10.yaml")
     assert leq6.data.train_orders == [4, 5, 6]
     assert leq6.eval.index_filter == {"orders": [7, 8, 9, 10]}
-    leq8 = cfglib.load(cls, CONFIGS / "ood_6to8_eval9to10.yaml")
+    leq8 = cfglib.load(cls, CONFIGS / "extreme_ood_6to8_eval9to10.yaml")
     assert leq8.data.train_orders == [6, 7, 8]
     assert leq8.eval.index_filter == {"orders": [9, 10]}
     spec = leq6.eval_spec("/ckpt/x.pt")

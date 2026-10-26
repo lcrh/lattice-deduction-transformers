@@ -1,7 +1,0 @@
-# Snowflake order transfer: train on orders 6-8, evaluate on unseen orders 9-10.
-# Everything else as paper.yaml.
-data:
-  train_orders: [6, 7, 8]
-
-eval:
-  index_filter: {orders: [9, 10]}

@@ -33,14 +33,16 @@ def test_shared_configs_share_checkpoints():
     t1 = _by_key(_runs("table1_sudoku"))
     port = _by_key(_runs("portfolio"))
     fig2 = _by_key(_runs("fig2_sudoku_compute"))
+    ablation = _by_key(_runs("appendix_d_soundness"))
     for s in (0, 1, 2):
-        ckpt = t1[f"M1/steps4k/seed{s}"].checkpoint
-        assert fig2[f"M2/steps_4000/seed{s}"].checkpoint == ckpt
+        ckpt = ablation[f"A0/default/seed{s}"].checkpoint
+        assert fig2[f"M2/steps_2000/seed{s}"].checkpoint == ckpt
         noaug = t1[f"M1/steps4k_train_noaug/seed{s}"]
         assert port[f"X1/same_data/seed{s}"].checkpoint == noaug.checkpoint
         assert port[f"X1/same_data/seed{s}"].spec.index_list == "sudoku_holdout"
     assert port["X1/diff_data_43/seed0"].checkpoint != port["X1/same_data/seed0"].checkpoint
-    assert t1["M1/steps1k/seed0"].checkpoint != t1["M1/steps1k/seed1"].checkpoint
+    assert (t1["M1/steps1k_train_noaug/seed0"].checkpoint
+            != t1["M1/steps1k_train_noaug/seed1"].checkpoint)
 
 
 def test_eval_only_entries_reuse_training_checkpoints():
@@ -217,15 +219,15 @@ def test_plan_trains_missing_runs_and_evaluates_existing_checkpoints():
     runs = _runs("table1_sudoku")
     states = {r.key: "not started" for r in runs}
     plan = {p.run.key: (p.cmd, p.reason) for p in launch.plan_launches(runs, states)}
-    cmd, _ = plan["M1/steps4k/seed0"]
+    cmd, _ = plan["M1/steps4k_train_noaug/seed0"]
     assert cmd[:6] == ["uv", "run", "modal", "run", "--detach", "-n"]
     assert "experiments/sudoku/run.py" in cmd and "--no-wait" in cmd
     assert "--no-evaluate" not in cmd
-    assert "--no-evaluate" in plan["M1/steps8k_ckpt/seed1"][0]     # train-only entry
+    assert "--no-evaluate" in plan["M1/steps8k_train_noaug_ckpt/seed1"][0]     # train-only entry
     # A checkpoint that exists is only evaluated.
     t1 = _runs("table1_sudoku")
     states = {r.key: "trained" for r in t1}
-    planned = {p.run.key: p for p in launch.plan_launches(t1, states)}["M1/steps4k/seed0"]
+    planned = {p.run.key: p for p in launch.plan_launches(t1, states)}["M1/steps4k_train_noaug/seed0"]
     cmd, why = planned.cmd, planned.reason
     assert "experiments/evaluate.py" in cmd and why == "evaluate existing checkpoint"
     assert cmd[cmd.index("--checkpoint") + 1].startswith("/checkpoints/sudoku/")
@@ -261,9 +263,9 @@ def test_collect_writes_csv_and_reported_rows(tmp_path, monkeypatch):
 
 
 def test_plan_waits_for_shared_targets_in_flight_under_another_key():
-    t1 = _by_key(_runs("table1_sudoku"))
+    fig2 = _by_key(_runs("fig2_sudoku_compute"))
     a0 = _by_key(_runs("appendix_d_soundness"))
-    m1, default = t1["M1/steps2k/seed0"], a0["A0/default/seed0"]
+    m1, default = fig2["M2/steps_2000/seed0"], a0["A0/default/seed0"]
     assert m1.checkpoint == default.checkpoint          # same training settings, one checkpoint
     record = dataclasses.replace(_ledger_record(m1.key, 1.0, call="fc-m1"),
                                  checkpoint=m1.checkpoint)

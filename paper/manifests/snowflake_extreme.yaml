@@ -1,6 +1,5 @@
-# Snowflake-Extreme, orders 4-8: LDT against direct prediction, each trained
-# on the original dataset and on Snowflake-Extreme, and each evaluated on
-# both test sets. Original-dataset training entries are the Table 2 runs.
+# Snowflake Sudoku, hard puzzles of orders 4-8: LDT against direct prediction
+# (Table 2, in distribution, and the appendix's training-set size table).
 exp_id: A12
 benchmark: snowflake
 config: configs/snowflake/extreme.yaml
@@ -9,17 +8,12 @@ seeds: [0, 1, 2]
 table:
   per_order: [4, 5, 6, 7, 8]
 entries:
-  # Trained on Snowflake-Extreme.
   - name: ldt
     label: "LDT"
   - name: ldt_one_shot
     label: "LDT, one shot"
     eval_of: ldt
     set: &one_shot {solve.one_shot: true, eval.dropout_p: 0.0}
-  - name: ldt_on_original
-    label: "LDT, original test set"
-    eval_of: ldt
-    set: {eval.index_list: snowflake_test}
   # Same model and data, trained only with cross-entropy against the
   # solution from the puzzle as given, evaluated in one shot.
   - name: direct
@@ -37,10 +31,6 @@ entries:
       data.error_hint_weight: 0.0
       solve.one_shot: true
       eval.dropout_p: 0.0
-  - name: direct_on_original
-    label: "Direct prediction, original test set"
-    eval_of: direct
-    set: {eval.index_list: snowflake_test}
 
   # Twice the training steps.
   - name: ldt_16k
@@ -54,30 +44,7 @@ entries:
     label: "Direct prediction, 16K steps"
     set: {<<: *direct, train.steps: 16000}
 
-  # Trained on the original dataset (the Table 2 checkpoints).
-  - name: orig_ldt
-    label: "LDT (original data), original test set"
-    config: configs/snowflake/paper.yaml
-  - name: orig_ldt_on_extreme
-    label: "LDT (original data)"
-    eval_of: orig_ldt
-    set: {eval.index_list: snowflake_extreme_test}
-  - name: orig_ldt_one_shot_on_extreme
-    label: "LDT (original data), one shot"
-    eval_of: orig_ldt
-    set: {<<: *one_shot, eval.index_list: snowflake_extreme_test}
-  - name: orig_direct
-    label: "Direct prediction (original data), original test set"
-    config: configs/snowflake/paper.yaml
-    set: *direct
-  - name: orig_direct_on_extreme
-    label: "Direct prediction (original data)"
-    eval_of: orig_direct
-    set: {eval.index_list: snowflake_extreme_test}
-
-  # Training-set size: 1,000 puzzles (fewer distinct puzzles than the
-  # original 2,000-puzzle pool, which holds 928) and every orders 4-8
-  # puzzle (3,957).
+  # Training-set size: 1,000 puzzles and every orders 4-8 puzzle (3,957).
   - name: ldt_n
     label: "LDT"
     sweep: {data.n_puzzles: [1000, 4000]}
@@ -95,22 +62,3 @@ entries:
     label: "Direct prediction"
     sweep: {data.n_puzzles: [1000, 4000]}
     set: *direct
-
-  # The whole original orders 4-8 training split: about as many distinct
-  # puzzles as all of Snowflake-Extreme orders 4-8, plus their easier copies.
-  - name: orig_ldt_all
-    label: "LDT (original data, all)"
-    config: configs/snowflake/paper.yaml
-    set: {data.n_puzzles: null}
-  - name: orig_ldt_all_on_extreme
-    label: "LDT (original data, all)"
-    eval_of: orig_ldt_all
-    set: {eval.index_list: snowflake_extreme_test}
-  - name: orig_direct_all
-    label: "Direct prediction (original data, all)"
-    config: configs/snowflake/paper.yaml
-    set: {<<: *direct, data.n_puzzles: null}
-  - name: orig_direct_all_on_extreme
-    label: "Direct prediction (original data, all)"
-    eval_of: orig_direct_all
-    set: {eval.index_list: snowflake_extreme_test}

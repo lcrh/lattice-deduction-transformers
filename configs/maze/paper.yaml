@@ -22,7 +22,7 @@ train:
   seed: 0
   conflict_loss_weight: 0.1
   step:
-    threshold: 0.1         # as in the original Maze-Hard training runs
+    threshold: 0.1
     cls_threshold: 0.5
     temp_decide: 1.5
     augment: true
@@ -30,7 +30,7 @@ train:
 
 solve:
   step:
-    threshold: 0.5
+    threshold: 0.1
     cls_threshold: 0.53    # calibrated on held-out mazes
     temp_decide: 1.5
     augment: true
