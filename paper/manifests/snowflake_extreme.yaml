@@ -74,3 +74,24 @@ entries:
     label: "Direct prediction (original data)"
     eval_of: orig_direct
     set: {eval.index_list: snowflake_extreme_test}
+
+  # Training-set size: 1,000 puzzles (fewer distinct puzzles than the
+  # original 2,000-puzzle pool, which holds 928) and every orders 4-8
+  # puzzle (3,957).
+  - name: ldt_n
+    label: "LDT"
+    sweep: {data.n_puzzles: [1000, 4000]}
+  - name: ldt_n_1000_one_shot
+    label: "LDT, one shot"
+    eval_of: ldt_n_1000
+    x: 1000
+    set: *one_shot
+  - name: ldt_n_4000_one_shot
+    label: "LDT, one shot"
+    eval_of: ldt_n_4000
+    x: 4000
+    set: *one_shot
+  - name: direct_n
+    label: "Direct prediction"
+    sweep: {data.n_puzzles: [1000, 4000]}
+    set: *direct
