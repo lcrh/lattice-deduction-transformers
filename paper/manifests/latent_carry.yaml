@@ -1,4 +1,4 @@
-# Appendix E: carrying a latent between solve steps (TRM-style). Carry needs
+# Appendix F: carrying a latent between solve steps (TRM-style). Carry needs
 # a fixed frame, so every arm here, including the reference, runs without
 # per-step augmentation.
 exp_id: A8

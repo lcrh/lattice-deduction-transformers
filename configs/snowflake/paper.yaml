@@ -1,7 +1,6 @@
-# Snowflake Sudoku (gen_data.py, orders 4-10), trained and evaluated on
-# orders 4-8; the SnowflakeExperiment defaults. Recipe from the P11-P13
-# sweeps on the validation split: constraint-group inputs, 2,000 puzzles,
-# 8K steps.
+# Snowflake Sudoku, trained and evaluated on orders 4-8; the
+# SnowflakeExperiment defaults: constraint-group inputs, 2,000 puzzles, 8K
+# steps. extreme.yaml (the paper's hard puzzles) builds on it.
 # Grid shape and operator vocab / augmentation are fixed by the config class.
 model:
   dim: 128

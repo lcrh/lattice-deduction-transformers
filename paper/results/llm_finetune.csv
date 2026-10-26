@@ -1,0 +1,8 @@
+manifest,exp_id,entry,key,kind,label,group,x,seed,eval_seed,benchmark,config,set,checkpoint,train_hash,eval_hash,run_dir,status,result_path
+llm_finetune,B4,qwen_natural,B4/qwen_natural/seed0,command,"Qwen3.5-0.8B SFT, natural puzzles",,,,0,baselines,,{},,,,,done,baselines/qwen_sft/results/natural.json
+llm_finetune,B4,qwen_blanks1,B4/qwen_blanks1/seed0,command,"Qwen3.5-0.8B SFT, 1 blank",,,,0,baselines,,{},,,,,done,baselines/qwen_sft/results/blanks1.json
+llm_finetune,B4,qwen_blanks2,B4/qwen_blanks2/seed0,command,"Qwen3.5-0.8B SFT, 2 blanks",,,,0,baselines,,{},,,,,done,baselines/qwen_sft/results/blanks2.json
+llm_finetune,B4,qwen_blanks4,B4/qwen_blanks4/seed0,command,"Qwen3.5-0.8B SFT, 4 blanks",,,,0,baselines,,{},,,,,done,baselines/qwen_sft/results/blanks4.json
+llm_finetune,B4,qwen_blanks8,B4/qwen_blanks8/seed0,command,"Qwen3.5-0.8B SFT, 8 blanks",,,,0,baselines,,{},,,,,done,baselines/qwen_sft/results/blanks8.json
+llm_finetune,B4,qwen_blanks16,B4/qwen_blanks16/seed0,command,"Qwen3.5-0.8B SFT, 16 blanks",,,,0,baselines,,{},,,,,done,baselines/qwen_sft/results/blanks16.json
+llm_finetune,B4,qwen_blanks32,B4/qwen_blanks32/seed0,command,"Qwen3.5-0.8B SFT, 32 blanks",,,,0,baselines,,{},,,,,done,baselines/qwen_sft/results/blanks32.json

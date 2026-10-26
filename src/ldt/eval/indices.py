@@ -74,7 +74,7 @@ SPECS: dict[str, IndexListSpec] = {
         length=None,
         sha256="31a7a6ad8ad29ea1c818d39ab870a4b562dc0d70ec8f9c9c963383d4272b0250",
     ),
-    # Snowflake splits.  TODO: pin once generated (gen_data.py prints the values).
+    # Snowflake splits that also keep puzzles with givens added back (the base config's list).
     "snowflake_test": IndexListSpec(
         task="snowflake", split="test", split_size=4292, seed=20261020,
         length=None,

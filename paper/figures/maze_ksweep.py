@@ -1,9 +1,9 @@
-"""Figure 3: Maze accuracy and search cost against the number K of supervised shortest paths.
+"""Figure 6(b): Maze accuracy and search cost against the number K of supervised shortest paths.
 
 15x15 synthetic mazes; solve rate (mean over seeds with the seed range) and
 model calls per solved maze.
 
-    uv run python -m paper.figures.fig3_maze_ksweep [--copy-to DIR]
+    uv run python -m paper.figures.maze_ksweep [--copy-to DIR]
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ def plot(c: dict) -> bytes:
 
 
 def main() -> None:
-    args = cli("Figure 3 (Maze K sweep).", default_manifest="fig3_maze_ksweep")
+    args = cli("Figure 6(b) (Maze K sweep).", default_manifest="maze_ksweep")
     path = write_output("maze_k_sweep.pdf", plot(k_curve(read_results(args.manifest, args.results))),
                         args.out, args.copy_to)
     print(f"wrote {path}")

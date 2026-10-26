@@ -1,4 +1,4 @@
-# Appendix A: is recurrence needed? One-factor deviations from the 2K-step
+# Appendix C (ablations): is recurrence needed? One-factor deviations from the 2K-step
 # default (configs/sudoku/ablation.yaml), each scored on the same ordering of
 # test puzzles (up to 4,096). Arms with 4x compute or the full training split use 2 seeds.
 exp_id: A1

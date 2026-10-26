@@ -1,4 +1,4 @@
-"""Appendix ablation tables (manifests appendix_a ... appendix_h).
+"""Appendix tables: ablations, search policies, deduction and latent carry.
 
 One row per entry: accuracy (mean +- std over seeds), the paired difference
 from the reference entry (same seed, same puzzles, pooled over seeds),
@@ -6,7 +6,7 @@ calls/solve, wrong answers, timeouts and the unsound-elimination rate. The
 manifest's `table` hints name the reference entry, optional row groups, and
 for Snowflake order transfer the per-order columns.
 
-    uv run python -m paper.tables.appendix appendix_a_recurrence [--copy-to DIR]
+    uv run python -m paper.tables.appendix ablation_recurrence [--copy-to DIR]
 """
 
 from __future__ import annotations

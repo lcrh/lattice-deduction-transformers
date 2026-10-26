@@ -7,13 +7,12 @@ own deterministic, randomly grown connected layout, translated into the
 covering grid. Orders 4-10 by default, so order-transfer experiments can hold
 out the larger orders.
 
-100 CPU workers each generate a parquet shard (orders × count_per_shard base
-puzzles × up to `variants` given-count variants) on the
-`ldt-data` volume. A consolidation function reads all shards,
-deterministically reorders by (n, code), assigns final ids, and hash-splits
-rows into test / val / train (10% / 5% / rest). Files are
-`/data/snowflake_<split>.parquet`; each file's parquet metadata records the
-generator settings and a content hash.
+300 CPU workers each generate a parquet shard (orders × count_per_shard base
+puzzles) on the `ldt-data` volume. A consolidation function reads all
+shards, deterministically reorders by (n, code), assigns final ids, and
+hash-splits rows into test / val / train (10% / 5% / rest). Files are
+`/data/snowflake_extreme_<split>.parquet`; each file's parquet metadata
+records the generator settings and a content hash.
 
 Schema (per row):
   - id        : int64
@@ -25,13 +24,13 @@ Schema (per row):
   - rating    : int32   (guesses a singles-propagation solver needs; see `rating`)
   - topology  : string  (JSON-encoded {n_cells, hex_coords, cell_positions, constraints})
 
-Snowflake-Extreme (`--extreme`) keeps only minimal puzzles rated at least 1,
-i.e. that naked and hidden singles alone do not solve, in files
-`snowflake_extreme_<split>.parquet`.
+The entrypoint generates the hard puzzles (Snowflake-Extreme): minimal
+puzzles rated at least 1, i.e. that naked and hidden singles alone do not
+solve. `gen_shard` can also keep puzzles with givens added back
+(`variants` > 1) and easier puzzles (`min_rating` 0).
 
 Usage:
-    uv run modal run --detach experiments/snowflake/gen_data.py      # orders 4-10
-    uv run modal run --detach experiments/snowflake/gen_data.py --extreme --n-shards 300
+    uv run modal run --detach experiments/snowflake/gen_data.py
 
 After generation, the entrypoint prints the index-list entries to pin in
 src/ldt/eval/indices.py.
@@ -440,19 +439,17 @@ def consolidate(generator: dict, test_frac: float = 0.1, val_frac: float = 0.05,
 
 @app.local_entrypoint()
 def main(
-    n_shards: int = 100,
+    n_shards: int = 300,
     n_min: int = 4,
     n_max: int = 10,
     count_per_shard: int = 10,
-    variants: int = 6,
     seed_base: int = 42,
     test_frac: float = 0.1,
     val_frac: float = 0.05,
     split_seed: int = 0,
-    extreme: bool = False,
 ):
-    # Snowflake-Extreme: minimal puzzles that singles propagation cannot solve.
-    variants, min_rating, prefix = (1, 1, "extreme_") if extreme else (variants, 0, "")
+    # Hard puzzles: minimal (no givens added back) and not solved by singles alone.
+    variants, min_rating, prefix = 1, 1, "extreme_"
     print(f"Spawning {n_shards} shard workers ("
           f"n in [{n_min}, {n_max}], count_per_shard={count_per_shard}, "
           f"variants={variants}). Each shard targets ~"

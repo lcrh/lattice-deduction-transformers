@@ -1,4 +1,4 @@
-# Appendix G: search policies. S1: cell x digit policy on a 2K- and a
+# Appendix D: search policies. S1: cell x digit policy on a 2K- and a
 # 1K-step model; S2: training with the eval digit policy; S3: where a chain
 # restarts after a conflict. All eval-only except the 1K model and the
 # argmax-trained model.

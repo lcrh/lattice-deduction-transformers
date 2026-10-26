@@ -1,4 +1,4 @@
-"""Figure 2: Sudoku-Extreme test-time compute against training compute.
+"""Figure 4: Sudoku-Extreme test-time compute against training compute.
 
 (a) Percentiles of sequential forward passes per solved puzzle (the
     drained-chain estimate `forwards_seq`: cost if one chain ran at a time)
@@ -10,7 +10,7 @@
     manifest: their 1,000-round test evals, with timeouts replaced by their
     10,000-round evals on the hard set. Mean over models, range shaded.
 
-    uv run python -m paper.figures.fig2_sudoku_compute [--copy-to DIR]
+    uv run python -m paper.figures.sudoku_compute [--copy-to DIR]
 """
 
 from __future__ import annotations
@@ -146,7 +146,7 @@ def portfolio_budget(results: Path) -> dict[str, np.ndarray]:
 
 
 def main() -> None:
-    args = cli("Figure 2 (Sudoku compute).", default_manifest="fig2_sudoku_compute")
+    args = cli("Figure 4 (Sudoku compute).", default_manifest="sudoku_compute")
     records = read_results(args.manifest, args.results)
     curves = percentile_curves(records)
     hist_x = table_hints(args.manifest).get("histogram_x", [max(curves)])

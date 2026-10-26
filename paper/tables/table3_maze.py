@@ -74,7 +74,7 @@ def build(records: list[dict], baselines: list[dict], maze_step: MazeStep = "las
                "seeds. LDT: each seed's best checkpoint (step snapshots and the final checkpoint, "
                "$\\theta_{\\text{elim}} = 0.1$), mean $\\pm$ std over seeds. "
                f"Baselines: {selection}. Steps: the reported checkpoint of each run.")
-    return Table(columns=columns, rows=body, caption=caption, label="tab:maze")
+    return Table(columns=columns, rows=body, caption=caption, label="tab:maze-hard")
 
 
 def main() -> None:

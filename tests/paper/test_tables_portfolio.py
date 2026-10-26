@@ -47,7 +47,7 @@ def test_appendix_table_has_reference_groups_and_deltas(tmp_path):
     records += [_result_record(tmp_path, "loops_1", s, ["timeout"] * 5 + ["correct"] * 5,
                         label="1 loop", group="loops") for s in (0, 1)]
     hints = {"reference": "default", "groups": {"loops": "Loop count"}}
-    tex = appendix.build("appendix_a_recurrence", records, hints, root=tmp_path).to_latex()
+    tex = appendix.build("ablation_recurrence", records, hints, root=tmp_path).to_latex()
     assert "Default & 2 & 100.0 $\\pm$ 0.0 & (ref.)" in tex
     assert "\\emph{Loop count}" in tex
     assert "1 loop & 2 & 50.0 $\\pm$ 0.0 & -50.0 [" in tex
@@ -186,7 +186,7 @@ def test_ldt_forward_flops():
 
 
 def test_figures_and_main_tables_render(tmp_path):
-    from paper.figures import fig2_sudoku_compute as fig2, fig3_maze_ksweep as fig3
+    from paper.figures import maze_ksweep, sudoku_compute
     from paper.tables import table1_sudoku, table3_maze
 
     records = [_result_record(tmp_path, f"steps_{x}", s, ["correct"] * 9 + ["timeout"], x=x,
@@ -194,15 +194,15 @@ def test_figures_and_main_tables_render(tmp_path):
                        train_post_compile_seconds=540.0, train_batch=512,
                        calls_correct_mean=5.0)
                for x in (500, 4000) for s in (0, 1)]
-    curves = fig2.percentile_curves(records, root=tmp_path)
+    curves = sudoku_compute.percentile_curves(records, root=tmp_path)
     assert list(curves) == [500, 4000]
     assert curves[4000]["examples"] == 4000 * 512
-    densities = {4000: fig2.solved_forwards(records[-1], tmp_path)}
-    budget = fig2.budget_curves([{"correct": Counter({0: 5, 3: 4}), "wrong": Counter({7: 1}),
+    densities = {4000: sudoku_compute.solved_forwards(records[-1], tmp_path)}
+    budget = sudoku_compute.budget_curves([{"correct": Counter({0: 5, 3: 4}), "wrong": Counter({7: 1}),
                                   "timeout": Counter({-1: 2})}])
     assert budget["solved"][0, 0] == 5 / 12 and budget["wrong"][0, -1] == 1 / 12
-    assert fig2.plot(curves, densities, budget)[:4] == b"%PDF"
-    assert fig3.plot(fig3.k_curve(records))[:4] == b"%PDF"
+    assert sudoku_compute.plot(curves, densities, budget)[:4] == b"%PDF"
+    assert maze_ksweep.plot(maze_ksweep.k_curve(records))[:4] == b"%PDF"
 
     baseline = {"label": "TRM-MLP (released)",
                 "result": {"n": 10000, "exact_accuracy": 0.79, "wrong": 2100}}

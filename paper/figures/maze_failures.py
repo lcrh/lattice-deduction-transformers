@@ -1,5 +1,5 @@
 """Maze-Hard failure analysis: the wrong answers of the checkpoints Table 3
-reports (each seed's best at theta_elim 0.1, manifest `table3_maze`), with a
+reports (each seed's best checkpoint, manifest `table3_maze`), with a
 true shortest path drawn over each.
 
 For every wrong answer it prints whether the path connects S to G, its length

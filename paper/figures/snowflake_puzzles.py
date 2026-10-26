@@ -1,14 +1,15 @@
-"""Snowflake Sudoku figure: an order-3 and an order-4 puzzle, and the order-4
+"""Snowflake Sudoku figure: puzzles of orders 3, 4 and 5, and the order-5
 puzzle in the covering grid, as TikZ files.
 
 Hexagons are flat-topped at axial coordinates (q, r); a cell is one of the six
 triangles of a hexagon, named by its direction. Constraint groups are the six
 cells of each hexagon and the six cells around each point where three hexagons
-meet. Both puzzles are minimal, have a unique solution, and are solved by naked
+meet. All puzzles are minimal, have a unique solution, and are solved by naked
 and hidden singles alone.
 
-The order-4 layout is test puzzle 056-4-14 of the Snowflake dataset, with
-givens re-minimized for singles; the order-3 puzzle is built by hand.
+The order-4 and order-5 layouts are those of puzzles 056-4-14 and 0OQ-5-14 of
+the Snowflake generator, with givens re-minimized for singles; the order-3
+puzzle is built by hand.
 
     uv run python -m paper.figures.snowflake_puzzles [--copy-to DIR]
 """
@@ -21,7 +22,7 @@ from paper.tables.common import cli, write_output
 
 DIRS = ["E", "NE", "NW", "W", "SW", "SE"]
 COVER = range(-2, 3)          # covering grid: q, r in [-2, 2]
-UNIT = 0.69                   # cm per hexagon radius, shared by both puzzles
+UNIT = 0.69                   # cm per hexagon radius, shared by all puzzles
 
 # Givens per hexagon, as {direction: digit}; omitted cells are blank.
 ORDER3 = {(0, 0): {"E": 2, "NW": 3, "SW": 1, "SE": 5},
@@ -31,6 +32,11 @@ ORDER4 = {(0, 0): {"NE": 3, "E": 4},
           (-1, 0): {"SE": 1, "SW": 2},
           (-1, 1): {"E": 3, "SE": 4, "SW": 6, "W": 1},
           (0, -1): {"NE": 6, "SE": 4, "SW": 1, "W": 2}}
+ORDER5 = {(-1, 1): {"SE": 2, "SW": 3, "W": 6},
+          (0, 0): {"NE": 4},
+          (-1, 0): {"SE": 1, "SW": 2},
+          (0, 1): {"E": 6, "SE": 1, "SW": 5, "NW": 3},
+          (0, -1): {"NE": 1, "E": 6, "W": 3, "NW": 4}}
 
 
 def centre(q, r):
@@ -100,7 +106,8 @@ def main() -> None:
     args = cli("Snowflake Sudoku puzzle figure.", default_manifest="snowflake_extreme")
     for name, tikz in (("snowflake_order3.tikz", puzzle_tikz(ORDER3)),
                        ("snowflake_order4.tikz", puzzle_tikz(ORDER4)),
-                       ("snowflake_cover.tikz", cover_tikz(set(ORDER4)))):
+                       ("snowflake_order5.tikz", puzzle_tikz(ORDER5)),
+                       ("snowflake_cover.tikz", cover_tikz(set(ORDER5)))):
         print(f"wrote {write_output(name, tikz, args.out, args.copy_to)}")
 
 

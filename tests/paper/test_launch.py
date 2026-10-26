@@ -32,11 +32,11 @@ def _by_key(runs):
 def test_shared_configs_share_checkpoints():
     t1 = _by_key(_runs("table1_sudoku"))
     port = _by_key(_runs("portfolio"))
-    fig2 = _by_key(_runs("fig2_sudoku_compute"))
-    ablation = _by_key(_runs("appendix_d_soundness"))
+    compute = _by_key(_runs("sudoku_compute"))
+    ablation = _by_key(_runs("ablation_soundness"))
     for s in (0, 1, 2):
         ckpt = ablation[f"A0/default/seed{s}"].checkpoint
-        assert fig2[f"M2/steps_2000/seed{s}"].checkpoint == ckpt
+        assert compute[f"M2/steps_2000/seed{s}"].checkpoint == ckpt
         noaug = t1[f"M1/steps4k_train_noaug/seed{s}"]
         assert port[f"X1/same_data/seed{s}"].checkpoint == noaug.checkpoint
         assert port[f"X1/same_data/seed{s}"].spec.index_list == "sudoku_holdout"
@@ -46,7 +46,7 @@ def test_shared_configs_share_checkpoints():
 
 
 def test_eval_only_entries_reuse_training_checkpoints():
-    runs = _by_key(_runs("appendix_d_soundness"))
+    runs = _by_key(_runs("ablation_soundness"))
     for s in (0, 1, 2):
         arm, train = runs[f"A7/sym_matched/seed{s}"], runs[f"A7/sym/seed{s}"]
         assert arm.kind == "eval" and arm.train_key == train.key
@@ -56,19 +56,19 @@ def test_eval_only_entries_reuse_training_checkpoints():
 
 
 def test_sweep_and_grid_expansion():
-    names = {r.entry for r in _runs("appendix_g_search")}
+    names = {r.entry for r in _runs("search")}
     assert {"s1_2k_uniform_sample", "s1_2k_max_entropy_rank_k", "s3_2k_negate_last"} <= names
-    xs = {r.entry: r.x for r in _runs("fig3_maze_ksweep")}
+    xs = {r.entry: r.x for r in _runs("maze_ksweep")}
     assert xs["k_512"] == 512
 
 
 def test_appendix_run_counts():
     counts = {name: sum(r.kind != "eval" for r in _runs(name)) for name in (
-        "appendix_a_recurrence", "appendix_b_supervision", "appendix_c_lambda_ce",
-        "appendix_d_soundness", "appendix_e_latent_carry", "appendix_g_search")}
-    assert counts == {"appendix_a_recurrence": 48, "appendix_b_supervision": 6,
-                      "appendix_c_lambda_ce": 9, "appendix_d_soundness": 15,
-                      "appendix_e_latent_carry": 12, "appendix_g_search": 9}
+        "ablation_recurrence", "ablation_supervision", "ablation_lambda_ce",
+        "ablation_soundness", "latent_carry", "search")}
+    assert counts == {"ablation_recurrence": 48, "ablation_supervision": 6,
+                      "ablation_lambda_ce": 9, "ablation_soundness": 15,
+                      "latent_carry": 12, "search": 9}
 
 
 def _write_manifest(tmp_path, body):
@@ -104,7 +104,7 @@ def test_entries_need_an_exp_id(tmp_path):
 
 def test_eval_overrides_reproduce_the_local_spec():
     """The remote spec built from the tokens equals the locally resolved one."""
-    runs = _by_key(_runs("appendix_d_soundness"))
+    runs = _by_key(_runs("ablation_soundness"))
     arm = runs["A7/sym_matched/seed1"]
     # Pretend the checkpoint was trained under a different eval block.
     stored = cfglib.to_dict(runs["A7/sym/seed1"].exp)
@@ -132,7 +132,7 @@ def test_app_names_are_sanitized_and_keep_hashes():
 
 
 def test_every_run_name_is_unique_within_a_manifest():
-    for name in ("appendix_g_search", "portfolio", "fig3_maze_ksweep"):
+    for name in ("search", "portfolio", "maze_ksweep"):
         runs = _runs(name)
         assert len({r.key for r in runs}) == len(runs)
         named = [r.app_name() for r in runs if r.kind != "eval" or r.spec is not None]
@@ -188,7 +188,7 @@ def _summary(n, correct, wrong=0, timeout=None):
 
 
 def test_status_of_each_run_state():
-    runs = _by_key(_runs("appendix_d_soundness"))
+    runs = _by_key(_runs("ablation_soundness"))
     done_run, trained_run = runs["A0/default/seed0"], runs["A7/sym/seed0"]
     running, stopped = runs["A7/ratio2/seed0"], runs["A7/ratio32/seed0"]
     partial = runs["A7/nocls/seed0"]
@@ -236,7 +236,7 @@ def test_plan_trains_missing_runs_and_evaluates_existing_checkpoints():
 # --- collect -----------------------------------------------------------------
 
 def test_collect_writes_csv_and_reported_rows(tmp_path, monkeypatch):
-    runs = [r for r in _runs("appendix_b_supervision") if r.seed == 0]
+    runs = [r for r in _runs("ablation_supervision") if r.seed == 0]
     run = runs[0]
     rows = [{"idx": 100 + p, "pos": p, "status": "correct" if p % 3 else "timeout",
              "calls": p} for p in range(6)]
@@ -250,7 +250,7 @@ def test_collect_writes_csv_and_reported_rows(tmp_path, monkeypatch):
     view = FakeVolumeView(files)
     monkeypatch.setattr(launch, "REPO", tmp_path)
     states = launch.statuses(runs, view, [], None)
-    out = launch.collect("appendix_b_supervision", runs, view, states, tmp_path, with_rows=True)
+    out = launch.collect("ablation_supervision", runs, view, states, tmp_path, with_rows=True)
     with out.open() as fh:
         recs = {r["key"]: r for r in csv.DictReader(fh)}
     rec = recs[run.key]
@@ -263,9 +263,9 @@ def test_collect_writes_csv_and_reported_rows(tmp_path, monkeypatch):
 
 
 def test_plan_waits_for_shared_targets_in_flight_under_another_key():
-    fig2 = _by_key(_runs("fig2_sudoku_compute"))
-    a0 = _by_key(_runs("appendix_d_soundness"))
-    m1, default = fig2["M2/steps_2000/seed0"], a0["A0/default/seed0"]
+    compute = _by_key(_runs("sudoku_compute"))
+    a0 = _by_key(_runs("ablation_soundness"))
+    m1, default = compute["M2/steps_2000/seed0"], a0["A0/default/seed0"]
     assert m1.checkpoint == default.checkpoint          # same training settings, one checkpoint
     record = dataclasses.replace(_ledger_record(m1.key, 1.0, call="fc-m1"),
                                  checkpoint=m1.checkpoint)
@@ -284,7 +284,7 @@ def test_plan_waits_for_shared_targets_in_flight_under_another_key():
 
 
 def test_stopped_runs_are_relaunched():
-    runs = _runs("appendix_b_supervision")
+    runs = _runs("ablation_supervision")
     states = {r.key: "stopped" for r in runs}
     plan = launch.plan_launches(runs, states)
     assert all(p.cmd is not None for p in plan if p.run.kind != "eval")
@@ -304,13 +304,13 @@ def test_launch_submits_up_to_the_running_cap(monkeypatch, capsys):
     monkeypatch.setattr(launch.subprocess, "run",
                         lambda cmd, cwd=None: submitted.append(cmd) or
                         subprocess.CompletedProcess(cmd, 0))
-    launch.main(["launch", "appendix_b_supervision", "--max-running", "8"])
+    launch.main(["launch", "ablation_supervision", "--max-running", "8"])
     assert len(submitted) == 3                      # 8 - 5 live ldt apps; other apps ignored
     out = capsys.readouterr().out
     assert "submitting 3 of" in out and "deferred" in out
     submitted.clear()
     monkeypatch.setattr(launch, "live_apps", lambda: _live(9))
-    launch.main(["launch", "appendix_b_supervision"])
+    launch.main(["launch", "ablation_supervision"])
     assert submitted == []                          # over the default cap: nothing new
 
 

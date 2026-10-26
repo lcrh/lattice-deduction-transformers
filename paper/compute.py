@@ -12,7 +12,7 @@ and step, backpropagating through the last recursion cycle only (see
 measurements. Measured training hours are the post-compile training loop
 (`post_compile_secs`), excluding the compile step and monitoring solves.
 
-    uv run python -m paper.compute table1_sudoku table3_maze appendix_a_recurrence
+    uv run python -m paper.compute table1_sudoku table3_maze ablation_recurrence
 """
 
 from __future__ import annotations

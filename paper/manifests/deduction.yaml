@@ -1,4 +1,4 @@
-# Appendix F: the deduction operator at inference, on the default
+# Appendix E: the deduction operator at inference, on the default
 # checkpoints (eval-only): loop count, deduction passes per round, and the
 # elimination / conflict thresholds.
 exp_id: A9

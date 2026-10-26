@@ -1,4 +1,4 @@
-# Figure 3: accuracy against the number K of supervised shortest paths,
+# Figure 6(b): accuracy against the number K of supervised shortest paths,
 # 15x15 synthetic mazes, 9 seeds.
 exp_id: M5
 benchmark: maze

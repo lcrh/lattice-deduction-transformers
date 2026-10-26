@@ -1,4 +1,4 @@
-# Appendix D: what enforces soundness. BCE asymmetry (positive/negative
+# Appendix C (ablations): what enforces soundness. BCE asymmetry (positive/negative
 # weight ratio; default 4.0/0.5 = 8x) and the conflict head. The *_matched
 # entries re-evaluate the same checkpoints with the elimination threshold
 # matched to the ratio, theta = 1/(1+ratio), to separate training pressure

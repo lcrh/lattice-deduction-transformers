@@ -1,6 +1,6 @@
 """Appendix I: fine-tuned Qwen3.5-0.8B, pass@k at each run's final evaluated epoch.
 
-    uv run python -m paper.tables.appendix_llm [--copy-to DIR]
+    uv run python -m paper.tables.llm_finetune [--copy-to DIR]
 """
 
 from __future__ import annotations
@@ -24,16 +24,16 @@ def build(records: list[dict]) -> Table:
                      *(pct(last.get(f"pass_at_{k}")) for k in PASS_KS)])
     return Table(
         columns=["Training puzzles", "Epoch", *(f"pass@{k} (\\%)" for k in PASS_KS)],
-        rows=body, label="tab:llm-sft",
-        caption=("Qwen3.5-0.8B fully fine-tuned on the same 1,000 training puzzles, evaluated "
+        rows=body, label="tab:llm-finetune",
+        caption=("Qwen3.5-0.8B fully fine-tuned on 1,000 Sudoku-Extreme training puzzles, evaluated "
                  "on the first 256 puzzles of the Sudoku-Extreme test ordering (or their "
                  "$k$-blank versions), 32 samples per puzzle; unbiased pass@$k$."))
 
 
 def main() -> None:
-    args = cli("Appendix I (fine-tuned LLM).", default_manifest="appendix_i_llm")
+    args = cli("Appendix I (fine-tuned LLM).", default_manifest="llm_finetune")
     table = build(read_results(args.manifest, args.results))
-    print(f"wrote {write_output('appendix_i_llm.tex', table.to_latex(), args.out, args.copy_to)}")
+    print(f"wrote {write_output('llm_finetune.tex', table.to_latex(), args.out, args.copy_to)}")
 
 
 if __name__ == "__main__":

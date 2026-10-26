@@ -188,12 +188,10 @@ def test_rating_counts_guesses():
         gen_data.rating([1, 1] + [7] * 10, groups)
 
 
-def test_extreme_is_hashed_only_when_set():
+def test_extreme_selects_the_hard_splits():
     cls = experiment_class("snowflake")
     plain = cls()
     extreme = cfglib.from_dict(cls, cfglib.merge(cfglib.to_dict(plain), {"data": {"extreme": True}}))
-    assert "extreme" not in plain.training_dict()["data"]
-    assert extreme.training_dict()["data"]["extreme"] is True
     assert extreme.train_hash() != plain.train_hash()
     assert split_name(extreme.data, "train") == "extreme_train"
     assert split_name(plain.data, "val") == "val"

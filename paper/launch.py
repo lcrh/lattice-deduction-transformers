@@ -376,7 +376,7 @@ def main(argv: list[str] | None = None) -> None:
                        help="use the last saved volume listing; no network")
     sub.choices["launch"].add_argument("--dry-run", action="store_true",
                                        help="print the plan and commands; uses the saved "
-                                            "volume listing")
+                                            "volume listing (with --offline, no network)")
     sub.choices["launch"].add_argument("--limit", type=int, default=None,
                                        help="launch at most this many runs")
     sub.choices["launch"].add_argument("--max-running", type=int, default=MAX_RUNNING,
@@ -415,11 +415,11 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "collect":
         print(f"wrote {collect(args.manifest, runs, view, states, with_rows=args.rows)}")
     elif args.cmd == "launch":
-        if live is None:
+        if live is None and not args.dry_run:
             sys.exit("launch needs the live app list to enforce --max-running; drop --offline")
         plan = plan_launches(runs, states, in_flight(runs, ledger, live))
         launchable = [launch for launch in plan if launch.cmd is not None]
-        n_running = running_ldt_apps(live)
+        n_running = running_ldt_apps(live or {})
         budget = max(0, args.max_running - n_running)
         if args.limit is not None:
             budget = min(budget, args.limit)

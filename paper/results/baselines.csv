@@ -1,7 +1,7 @@
 manifest,exp_id,entry,key,kind,label,group,x,seed,eval_seed,benchmark,config,set,checkpoint,train_hash,eval_hash,run_dir,status,result_path
 baselines,B1,hrm_sudoku,B1/hrm_sudoku/seed0,command,HRM (released checkpoint),sudoku,,,0,baselines,,{},,,,,done,baselines/hrm_trm/results/hrm_sudoku.json
 baselines,B2,trm_mlp_sudoku,B2/trm_mlp_sudoku/seed0,command,TRM-MLP (alphaXiv checkpoint),sudoku,,,0,baselines,,{},,,,,done,baselines/hrm_trm/results/trm_mlp_sudoku.json
-baselines,B4,sotaku_sudoku,B4/sotaku_sudoku/seed0,command,Sotaku v2 (released weights),sudoku,,,0,baselines,,{},,,,,done,baselines/sotaku/results/sotaku_v2_sudoku.json
+baselines,B5,sotaku_sudoku,B5/sotaku_sudoku/seed0,command,Sotaku v2 (released weights),sudoku,,,0,baselines,,{},,,,,done,baselines/sotaku/results/sotaku_v2_sudoku.json
 baselines,B2,trm_att_sudoku,B2/trm_att_sudoku/seed0,command,TRM-attention (alphaXiv checkpoint),sudoku,,,0,baselines,,{},,,,,done,baselines/hrm_trm/results/trm_att_sudoku.json
 baselines,B3,hrm_maze,B3/hrm_maze/seed0,command,"HRM (B200 retrain, augmented)",maze,,,0,baselines,,{},,,,,done,baselines/hrm_trm/results/hrm_aug_sweep.json
 baselines,B3,trm_maze,B3/trm_maze/seed0,command,TRM (B200 retrain),maze,,,0,baselines,,{},,,,,done,baselines/hrm_trm/results/trm_noaug_sweep_lcycles4.json

@@ -80,7 +80,7 @@ class TableHints(TypedDict, total=False):
     per_order: list[int]        # Snowflake: one accuracy column per order
     caption: str
     maze_step: int | Literal["best", "last"]    # which baseline checkpoint to report
-    histogram_x: int            # Figure 2: training steps of the histogram panel
+    histogram_x: int            # Figure 4: training steps of the histogram panel
 
 
 def volume_path(path: str | Path) -> str:
