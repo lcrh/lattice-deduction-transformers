@@ -1,4 +1,5 @@
-# Table 2: Snowflake Sudoku, orders 4-8.
+# Snowflake Sudoku, orders 4-8, on the easier dataset that keeps puzzles with
+# givens added back (appendix; the LLM baselines of April 2026 used it).
 exp_id: M3
 benchmark: snowflake
 config: configs/snowflake/paper.yaml

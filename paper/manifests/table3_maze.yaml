@@ -22,3 +22,15 @@ entries:
     label: "LDT, K=512, theta_elim 0.1 at eval"
     eval_of: k512
     set: {solve.step.threshold: 0.1}
+  # Training is unstable, so Table 3 reports each seed's best checkpoint at
+  # theta_elim 0.1: the step snapshots below or the final checkpoint above.
+  - name: k1_snap
+    label: "LDT, K=1, step snapshot"
+    eval_of: k1
+    snapshots: [10000, 12000, 14000, 16000, 18000]
+    set: {solve.step.threshold: 0.1}
+  - name: k512_snap
+    label: "LDT, K=512, step snapshot"
+    eval_of: k512
+    snapshots: [10000, 12000, 14000, 16000, 18000]
+    set: {solve.step.threshold: 0.1}

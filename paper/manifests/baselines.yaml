@@ -23,6 +23,12 @@ entries:
     command: [baselines/hrm_trm/trm_eval/modal_eval.py::sudoku, --n, "10000", --variant, mlp,
               --out, baselines/hrm_trm/results/trm_mlp_sudoku.json]
     result: baselines/hrm_trm/results/trm_mlp_sudoku.json
+  - name: sotaku_sudoku
+    exp_id: B4
+    label: "Sotaku v2 (released weights)"
+    group: sudoku
+    command: [baselines/sotaku/modal_eval.py, --n, "10000"]
+    result: baselines/sotaku/results/sotaku_v2_sudoku.json
   - name: trm_att_sudoku
     exp_id: B2
     label: "TRM-attention (alphaXiv checkpoint)"

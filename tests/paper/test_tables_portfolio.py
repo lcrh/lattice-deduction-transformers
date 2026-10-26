@@ -24,7 +24,7 @@ def _result_record(tmp_path, entry, seed, statuses, **kw):
     correct = statuses.count("correct")
     return {"entry": entry, "key": f"A1/{entry}/seed{seed}", "seed": seed, "status": "done",
             "label": kw.pop("label", entry), "group": kw.pop("group", ""), "n": n,
-            "accuracy": correct / n, "wrong": statuses.count("wrong"),
+            "correct": correct, "accuracy": correct / n, "wrong": statuses.count("wrong"),
             "timeout": statuses.count("timeout"), "calls_mean": 3.0, "calls_per_solve": 4.0,
             "unsound_rate": 0.001,
             "stop_reason": "fixed_n",
@@ -204,16 +204,18 @@ def test_figures_and_main_tables_render(tmp_path):
     assert fig2.plot(curves, densities, budget)[:4] == b"%PDF"
     assert fig3.plot(fig3.k_curve(records))[:4] == b"%PDF"
 
-    baseline = {"label": "TRM", "result": {"n": 10000, "exact_accuracy": 0.79, "wrong": 2100,
-                                           "exact_accuracy_ci": [0.78, 0.80],
-                                           "gpu_seconds": 50.0}}
-    missing = dict(records[0], key="A1/steps_500/seed2", seed=2, status="not started", n=None)
-    tex = table1_sudoku.build(records + [missing], [baseline]).to_latex()
-    assert "TRM & -- & 10,000 & 79.0 [78.0, 80.0] & 2,100/10,000" in tex
-    assert "steps\\_500 & 2/3 &" in tex                        # a seed is missing
+    baseline = {"label": "TRM-MLP (released)",
+                "result": {"n": 10000, "exact_accuracy": 0.79, "wrong": 2100}}
+    rows = [dict(r, entry="steps4k_train_noaug") for r in records if r["entry"] == "steps_4000"]
+    tex = table1_sudoku.build(rows, [baseline]).to_latex()
+    assert "TRM-MLP (released) & 79.00 & 21.00000" in tex
+    assert "LDT, 4K train steps & 90.000 & 0.00000" in tex      # pooled over seeds
 
-    maze = [dict(r, label="LDT, K=1") for r in records if r["entry"] == "steps_500"]
+    # Maze: each seed's best of its final checkpoint and step snapshots.
+    maze = [dict(r, entry="k1_elim0p1", train_steps=20000) for r in records if r["entry"] == "steps_500"]
+    maze += [_result_record(tmp_path, "k1_snap_step10000", s, ["correct"] * 10) for s in (0, 1)]
     sweep = [{"step": 10, "n": 1000, "exact": 700, "lenient": 800},
              {"step": 20, "n": 1000, "exact": 720, "lenient": 810}]
-    tex = table3_maze.build(maze, [{"label": "HRM", "result": sweep}], "last", root=tmp_path)
-    assert "HRM (step 20) & 1 & 81.0 & 72.0 & 190 & 0" in tex.to_latex()
+    tex = table3_maze.build(maze, [{"label": "HRM", "result": sweep}], "last", root=tmp_path).to_latex()
+    assert "HRM & 1 & 81.0 & 72.0 & 190 & 0 & 20" in tex
+    assert "LDT, K=1 & 2 &" in tex and "& 10,000, 10,000" in tex

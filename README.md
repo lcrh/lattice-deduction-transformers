@@ -4,30 +4,39 @@ Reproduction code for **Lattice Deduction Transformers** —
 Liam Davis, Leopold Haller, Alberto Alfarano, Mark Santolucito.
 [arXiv:2605.08605](https://arxiv.org/abs/2605.08605).
 
-This repo contains the training / inference / data-generation code for every
-experiment whose numbers appear in the paper. The three benchmarks are
-self-contained subdirectories under `experiments/`:
-
-| Benchmark | Subdir | Paper result |
-|---|---|---|
-| Sudoku-Extreme | `experiments/sudoku/` | Table 1 (LDT rows) + Figure 2 |
-| Snowflake Sudoku | `experiments/snowflake/` | Table 2 |
-| Maze-Hard (30×30) | `experiments/maze/` | Table 3 + Figure 3 (K-sweep) |
-
-The shared package `src/ldt/` holds the looped-transformer model,
-the dataset loaders, and the Modal image / checkpoint utilities used by all
-three.
+This repo contains the training, inference and data-generation code for every
+experiment whose numbers appear in the paper, and the scripts that rebuild each
+table and figure from the collected results. The three benchmarks are
+self-contained subdirectories under `experiments/` (`sudoku/`, `snowflake/`,
+`maze/`); the shared package `src/ldt/` holds the looped-transformer model,
+the dataset loaders, the shared evaluator and the Modal utilities.
 
 All training and inference runs are launched on [Modal](https://modal.com/)
 B200 GPUs. There is no local-GPU codepath.
 
-> **Status (reconstruction).** This is a curated reconstruction of the
-> codebase used for the paper's experiments — the original development
-> tree carried many exploratory branches, sweeps, and dead ends; this
-> repo is the minimal subset needed to reproduce the reported numbers.
-> We are currently in the process of validating the results end-to-end
-> against the original runs, and will update this note as that work
-> completes.
+### Paper results at a glance
+
+Every table and figure in the main text comes from one or more manifests in
+`paper/manifests/` (the runs) and one script (the table or figure):
+
+| Paper | Manifests | Script (`uv run python -m ...`) |
+|---|---|---|
+| Figure 1(b): Sudoku-Extreme compute frontier | `table1_sudoku`, `portfolio`, `baselines` | `paper.figures.fig1_frontier` |
+| Table 1: Sudoku-Extreme | `table1_sudoku`, `portfolio`, `baselines` | `paper.tables.table1_sudoku` |
+| Figure 4: Sudoku train/test compute | `fig2_sudoku_compute`, `portfolio` | `paper.figures.fig2_sudoku_compute` |
+| Figure 5: Snowflake puzzles | — (drawn from the generator's geometry) | `paper.figures.snowflake_puzzles` |
+| Table 2: Snowflake, hard puzzles | `snowflake_extreme`, `snowflake_extreme_ood` | `paper.tables.table2_snowflake` |
+| Table 3: Maze-Hard | `table3_maze`, `baselines` | `paper.tables.table3_maze` |
+| Figure 6(b): Maze K-sweep | `fig3_maze_ksweep` | `paper.figures.fig3_maze_ksweep` |
+
+Portfolio statistics in the text (Section 4.1) come from `paper.portfolio`
+(`simulate` on the held-out set, `test` on the test split); the appendix's
+portfolio-size figure (measured and derived failure rate) from
+`paper.figures.portfolio_size`. The appendix
+tables come from the `appendix_*` manifests (`paper.tables.appendix`), the
+easier Snowflake dataset from `snowflake_easy`, and the compute estimates from
+`paper.compute`. Every script writes to `paper/out/`; `--copy-to DIR` also
+copies its output into the paper's `figs/` directory.
 
 ---
 
@@ -95,7 +104,7 @@ Training never sees evaluation puzzles; Sudoku-Extreme training pools also
 exclude 10,000 held-out train puzzles (`sudoku_val`), which are reserved for
 choosing defaults and for in-training monitoring.
 
-### Paper manifests: one command per table
+### Paper manifests: launching, status and collection
 
 `paper/manifests/` lists every run behind each table and figure (one YAML
 file each; eval presets in `paper/manifests/_eval.yaml`). Each entry carries
@@ -124,24 +133,20 @@ figures are built from the collected CSVs by `paper/tables/*.py` and
 `paper/figures/*.py`; `paper/portfolio.py` analyzes the model-portfolio
 runs and `paper/compute.py` the compute accounting.
 
-### Sudoku-Extreme (Table 1, Figure 2)
+### Sudoku-Extreme (Table 1, Figure 4)
 
-`configs/sudoku/paper.yaml` is the 4K-step recipe (1,000 training puzzles).
-The other rows and the step sweep of Figure 2 are overrides of it.
+`configs/sudoku/paper.yaml` is the 4K-step recipe (1,000 training puzzles,
+dataset-level augmentation, per-step augmentation at evaluation only). The
+manifest `table1_sudoku` holds every row as an override of it; the reported
+rows are `steps{1k,2k,4k}_train_noaug` and `noaug4k_evalaug`. `portfolio`
+trains 15 seeds of the 4K recipe (seeds 0-2 share Table 1's checkpoints),
+reruns their 1,000-round timeouts at 10,000 rounds, and evaluates them on
+100,000 held-out training puzzles to choose a portfolio rule.
 
 ```bash
-# 4K steps, every test puzzle
-uv run modal run --detach experiments/sudoku/run.py --config configs/sudoku/paper.yaml \
-    --set "eval.stop=full eval.workers=100"
-
-# 1K and 2K steps
-uv run modal run --detach experiments/sudoku/run.py --config configs/sudoku/paper.yaml \
-    --set "train.steps=1000"
-
-# No augmentation
-uv run modal run --detach experiments/sudoku/run.py --config configs/sudoku/paper.yaml \
-    --set "train.step.augment=false solve.step.augment=false \
-           data.augment_digit_perm=false data.augment_dihedral=false"
+uv run python -m paper.launch launch table1_sudoku
+uv run python -m paper.launch launch portfolio
+uv run python -m paper.launch launch baselines        # HRM, TRM, Sotaku v2 released checkpoints
 ```
 
 `configs/sudoku/ablation.yaml` is the base for the appendix ablations (2K
@@ -159,34 +164,26 @@ steps, `ablation` stop rule). Each ablation is one override of it:
 Eval-only ablations of an existing checkpoint go through
 `experiments/evaluate.py --set "solve...."`.
 
-> **Note.** As reported, these runs match the Sudoku-Extreme solve rate in
-> Table 1 (100%). We have since realized, however, that the reported figure
-> came from an evaluation that inadvertently skipped a full pass over the
-> test set. On a complete evaluation the true solve rate is ~99.96%, and we
-> are in the process of correcting the paper. See
-> [this thread](https://x.com/biosemiote/status/2061848053741687016) for
-> context.
-
-### Snowflake Sudoku (Table 2, order-transfer appendix)
+### Snowflake Sudoku (Table 2)
 
 The Snowflake puzzles are generated with CVC5 via
 [snowflakesudoku](https://github.com/lcrh/snowflakesudoku) (an MIT-licensed
 fork of [santolucito/snowflakesudoku](https://github.com/santolucito/snowflakesudoku);
 pinned commit, cloned at Modal-image build time). Every base puzzle gets its
-own randomly grown connected layout, orders 4–10. Table 2 trains and evaluates
-on orders 4–8; the order-transfer configs hold out larger orders.
+own randomly grown connected layout, orders 4-10. Table 2 uses the hard
+puzzles (`--extreme`): minimal puzzles that naked and hidden singles cannot
+solve. It trains and evaluates on orders 4-8 (`snowflake_extreme`), and the
+order-transfer entries train on 4-6 or 6-8 and evaluate on the larger orders
+(`snowflake_extreme_ood`).
 
 ```bash
-# One-time: generate the dataset (CVC5, ~100 CPU workers, parallel). Writes
-# snowflake_{train,val,test}.parquet and prints index-list values to pin.
+# One-time: generate both datasets (CVC5, CPU workers). Each prints the
+# index-list values to pin in src/ldt/eval/indices.py.
 uv run modal run --detach experiments/snowflake/gen_data.py
+uv run modal run --detach experiments/snowflake/gen_data.py --extreme --n-shards 300
 
-# Table 2: train on orders 4-8, evaluate on the order 4-8 test puzzles
-uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/paper.yaml
-
-# Order transfer: train on 4-6, evaluate on 7-10; train on 6-8, evaluate on 9-10
-uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/ood_4to6_eval7to10.yaml
-uv run modal run --detach experiments/snowflake/run.py --config configs/snowflake/ood_6to8_eval9to10.yaml
+uv run python -m paper.launch launch snowflake_extreme
+uv run python -m paper.launch launch snowflake_extreme_ood
 ```
 
 Eval rows record each puzzle's order, so per-order accuracy comes from the
@@ -195,40 +192,32 @@ rows.
 ### Maze-Hard (Table 3, K=1 and K=512)
 
 `configs/maze/paper.yaml` is the K=1 recipe: 30×30, dim 192 with 2D RoPE,
-20K steps. The evaluation CLS threshold 0.53 was calibrated on held-out
-mazes (0.6 elsewhere), and eval-time dropout is off. A puzzle counts as
-solved when the predicted path is a valid shortest path; each result row
-also records whether it matches the reference path.
-
-> **Note.** The HRM and TRM baselines we compare against on Maze-Hard run
-> ~7pp higher than the figures in their original papers. This is an
-> evaluation-criteria mismatch: the HRM/TRM papers report *exact match*
-> against the single shortest path emitted by their (deterministic) A\*
-> solver, whereas a 30×30 maze admits many equally-optimal paths, and a
-> *lenient* "any valid optimal path" criterion scores ~7pp higher. We are
-> reconciling this and will update the paper. See
-> [`baselines/hrm_trm/README.md`](baselines/hrm_trm/README.md) for the full independent HRM/TRM
-> reproduction — the lenient metric, released-checkpoint evals, and a
-> with/without-augmentation training study.
+20K steps; `paper_k512.yaml` supervises against 512 sampled shortest paths. The
+evaluation CLS threshold 0.53 was calibrated on held-out mazes, and eval-time
+dropout is off. A maze counts as solved when the predicted path is any
+shortest path; each result row also records whether it matches the reference
+path. Training is unstable, so runs keep a snapshot every 1,000 steps and
+Table 3 reports each seed's best checkpoint at θ_elim = 0.1, over the step
+snapshots (`*_snap_step<N>` entries) and the final checkpoint (`*_elim0p1`).
+HRM and TRM are our B200 retrains, each with and without augmentation; Table 3
+reports each one's better run (see [`baselines/README.md`](baselines/README.md)).
 
 ```bash
-uv run modal run --detach experiments/maze/run.py --config configs/maze/paper.yaml
-
 # K=512: pregenerate the K-path cache on a CPU container first
 uv run modal run --detach experiments/maze/pregen.py --dataset maze_hard --k-solutions 512
-uv run modal run --detach experiments/maze/run.py --config configs/maze/paper_k512.yaml
+uv run python -m paper.launch launch table3_maze
 ```
 
 Maze runs write a resume snapshot every 1,000 steps; relaunching the same
 config resumes from it.
 
-### Maze K-sweep figure (Figure 3, 15×15 synthetic)
+### Maze K-sweep (Figure 6(b), 15×15 synthetic)
 
-Each K is averaged over 4 seeds; evaluation is on a seed-200 pool of 1,000
-fresh 15×15 mazes.
+Each K in {1, 8, 32, 64, 128, 256, 512} is trained with 9 seeds and evaluated
+on 1,000 fresh 15×15 mazes.
 
 ```bash
-uv run python -m paper.launch launch fig3_maze_ksweep   # K in {1, 8, ..., 512} x 4 seeds
+uv run python -m paper.launch launch fig3_maze_ksweep
 ```
 
 ---
@@ -257,8 +246,8 @@ experiments/
                       with a pregen cache) + trainer.
   <benchmark>/config.py     typed experiment config (defaults = paper recipe)
   <benchmark>/eval_task.py  adapter for the shared evaluator
-baselines/            HRM/TRM reproduction and evals, fine-tuned Qwen baseline
-                      (see baselines/README.md)
+baselines/            HRM/TRM reproduction and evals, Sotaku v2 eval, fine-tuned
+                      Qwen baseline (see baselines/README.md)
 paper/                Manifests (runs per table/figure), launcher, tables,
                       figures, portfolio and compute analysis
 tools/                inspect_wrong.py: print puzzles a run got wrong

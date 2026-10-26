@@ -27,6 +27,9 @@ Entry keys:
                 <name>_<v1>_<v2>
     eval_of     name of a training entry: evaluate its checkpoints with this
                 entry's eval/solve overrides instead of training
+    snapshots   with eval_of: training steps whose `.step<N>.pt` snapshots to
+                evaluate instead of the final checkpoint; one entry per step,
+                named <name>_step<N>, with `x` = N
     eval_seeds  eval seeds (independent search attempts), default [0]
     indices_file, split
                 evaluate an explicit puzzle list (one index per line)
@@ -63,7 +66,7 @@ EVAL_ROOT = f"{CHECKPOINT_MOUNT}/eval"      # ldt.eval.modal_app.EVAL_ROOT
 
 _ENTRY_KEYS = {"name", "exp_id", "config", "eval", "seeds", "set", "sweep", "grid", "eval_of",
                "eval_seeds", "indices_file", "split", "train_only", "command", "result",
-               "label", "group", "x"}
+               "snapshots", "snapshot", "label", "group", "x"}
 _MANIFEST_KEYS = {"exp_id", "benchmark", "config", "eval", "seeds", "set", "table", "entries"}
 
 RunKind = Literal["train+eval", "train", "eval", "command"]
@@ -161,7 +164,13 @@ def _name_part(value) -> str:
 
 
 def _expand(entry: dict) -> list[dict]:
-    """Sweep/grid entries -> plain entries."""
+    """Sweep/grid/snapshot entries -> plain entries."""
+    if "snapshots" in entry:
+        if "eval_of" not in entry:
+            raise ValueError(f"entry {entry['name']}: snapshots needs eval_of")
+        return [{**{k: v for k, v in entry.items() if k != "snapshots"},
+                 "name": f"{entry['name']}_step{step}", "snapshot": step,
+                 "x": entry.get("x", step)} for step in entry["snapshots"]]
     if "sweep" in entry and "grid" in entry:
         raise ValueError(f"entry {entry['name']}: use sweep or grid, not both")
     axes = entry.get("sweep") or entry.get("grid")
@@ -255,6 +264,8 @@ def load_manifest(name: str, manifest_dir: Path = MANIFEST_DIR,
                              "provenance.exp_id": exp_id, "provenance.entry": key}
                 exp = _resolve(benchmark, config, overrides)
                 ckpt = str(exp.checkpoint_path(CHECKPOINT_MOUNT))
+                if "snapshot" in e:
+                    ckpt = snapshot_path(ckpt, e["snapshot"])
                 spec = None
                 if has_spec:
                     spec = exp.eval_spec(ckpt, explicit_indices=indices,
@@ -276,6 +287,11 @@ def load_manifest(name: str, manifest_dir: Path = MANIFEST_DIR,
                     train_runs[(e["name"], seed)] = run
                 runs.append(run)
     return runs
+
+
+def snapshot_path(checkpoint: str, step: int) -> str:
+    """Path of the snapshot a trainer keeps at `step` (`train.keep_step_snapshots`)."""
+    return str(Path(checkpoint).with_suffix(f".step{step:07d}.pt"))
 
 
 def eval_overrides(run: Run) -> list[str]:
