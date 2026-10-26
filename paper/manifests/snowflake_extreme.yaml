@@ -95,3 +95,22 @@ entries:
     label: "Direct prediction"
     sweep: {data.n_puzzles: [1000, 4000]}
     set: *direct
+
+  # The whole original orders 4-8 training split: about as many distinct
+  # puzzles as all of Snowflake-Extreme orders 4-8, plus their easier copies.
+  - name: orig_ldt_all
+    label: "LDT (original data, all)"
+    config: configs/snowflake/paper.yaml
+    set: {data.n_puzzles: null}
+  - name: orig_ldt_all_on_extreme
+    label: "LDT (original data, all)"
+    eval_of: orig_ldt_all
+    set: {eval.index_list: snowflake_extreme_test}
+  - name: orig_direct_all
+    label: "Direct prediction (original data, all)"
+    config: configs/snowflake/paper.yaml
+    set: {<<: *direct, data.n_puzzles: null}
+  - name: orig_direct_all_on_extreme
+    label: "Direct prediction (original data, all)"
+    eval_of: orig_direct_all
+    set: {eval.index_list: snowflake_extreme_test}
