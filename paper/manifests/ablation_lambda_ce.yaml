@@ -12,5 +12,5 @@ entries:
     exp_id: A0
     label: "lambda_CE = 0.2 (default)"
   - name: ce
-    eval: ablation_10k     # same accuracy, fewer calls at 4K: check at 10K
+    eval: ablation_10k     # 10,240 puzzles, to compare calls per solve
     sweep: {train.softmax_loss_weight: [0.0, 1.0]}

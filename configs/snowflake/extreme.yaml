@@ -1,4 +1,4 @@
-# Snowflake-Extreme (gen_data.py --extreme): minimal puzzles that naked and
+# Snowflake-Extreme (gen_data.py), the hard puzzles: minimal puzzles that naked and
 # hidden singles alone do not solve. Trained and evaluated on orders 4-8.
 # Everything else as paper.yaml.
 data:

@@ -27,7 +27,6 @@ import json
 from pathlib import Path
 
 import modal
-import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -192,7 +191,7 @@ def entrypoint(
     cache_key = _pregen_cache_key(cfg)
     spec_dict = _pregen_cache_spec(cfg)
 
-    print(f"Pregen plan (parquet shards):")
+    print("Pregen plan (parquet shards):")
     print(f"  dataset={dataset}  grid={H}x{W}  n_puzzles={n_puzzles}  K={k_solutions}")
     print(f"  seed={seed}  workers={workers}  hard={hard}")
     print(f"  cache_key={cache_key}")
@@ -213,7 +212,7 @@ def entrypoint(
 
     if dataset == "maze_hard":
         workers = 1
-        print(f"  (maze_hard: forcing workers=1; HF set has fixed N)")
+        print("  (maze_hard: forcing workers=1; HF set has fixed N)")
 
     result = driver.remote(spec, n_puzzles, workers, cache_key, spec_dict)
     print(f"\n[entrypoint] driver returned: {result}", flush=True)

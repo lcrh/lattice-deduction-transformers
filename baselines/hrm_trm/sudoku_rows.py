@@ -60,7 +60,7 @@ def check_alignment(input_tokens: np.ndarray, cache_path: str) -> bool | None:
 def subset_test_split(test_dir: str, indices: list[int], expected_n: int = N_TEST) -> np.ndarray:
     """Cut an upstream test split down to `indices`, in order.
 
-    Returns the full-split inputs from before the rewrite, for the alignment check.
+    Returns the full-split inputs, before the cut, for the alignment check.
     """
     inputs = np.load(os.path.join(test_dir, "all__inputs.npy"))
     labels = np.load(os.path.join(test_dir, "all__labels.npy"))

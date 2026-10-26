@@ -121,8 +121,7 @@ class Experiment:
 
     def solve_dict(self) -> dict:
         d = cfglib.to_dict(self.solve)
-        # `one_shot` is hashed only when set, so evaluations from before the
-        # option existed keep their spec hashes.
+        # `one_shot` enters the spec (and its hash) only when set.
         if not d.get("one_shot"):
             d.pop("one_shot", None)
         return d

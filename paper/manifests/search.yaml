@@ -50,7 +50,7 @@ entries:
     eval_of: default
     sweep: {solve.backtrack: [last, geometric, uniform_depth]}
   - name: s3_2k_negate
-    eval: ablation_10k     # same accuracy, fewer calls at 4K: check at 10K
+    eval: ablation_10k     # 10,240 puzzles, to compare calls per solve
     group: s3
     eval_of: default
     set: {solve.backtrack_negate: true}

@@ -99,7 +99,7 @@ def maze_tasks():
 def lines(text):
     text = text.strip("\n")
     if text.startswith("```"):
-        text = "\n".join(l for l in text.split("\n") if not l.startswith("```"))
+        text = "\n".join(line for line in text.split("\n") if not line.startswith("```"))
     return text.split("\n")
 
 
@@ -108,17 +108,17 @@ def score(task, text):
     if text is None:
         return False
     if task["bench"] == "sudoku":
-        return "".join(l.strip() for l in lines(text)) == task["answer"]
+        return "".join(line.strip() for line in lines(text)) == task["answer"]
     if task["bench"] == "snowflake":
         got = {}
-        for l in lines(text):
-            if ":" in l:
-                c, v = l.strip().split(":", 1)
+        for line in lines(text):
+            if ":" in line:
+                c, v = line.strip().split(":", 1)
                 if c.isdigit() and v.strip().isdigit():
                     got[int(c)] = int(v)
         return [got.get(c) for c in range(len(task["answer"]))] == list(task["answer"])
     q = task["question"]
-    rows = [l.rstrip("\r") for l in lines(text)]
+    rows = [line.rstrip("\r") for line in lines(text)]
     if len(rows) != 30 or any(len(r) != 30 for r in rows):
         return False
     a = "".join(rows)

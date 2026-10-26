@@ -14,7 +14,7 @@ entries:
   - name: default
     exp_id: A0
     label: "8x asymmetry, conflict head (default)"
-    eval: ablation_10k     # soundness comparison: 5 vs 0 wrong at 4K puzzles was inconclusive
+    eval: ablation_10k     # 10,240 puzzles, to compare wrong-answer counts
   - name: sym
     label: "1x (symmetric)"
     set: {train.bce_pos_mult: 0.5}
@@ -22,7 +22,7 @@ entries:
     label: "2x"
     set: {train.bce_pos_mult: 1.0}
   - name: ratio32
-    eval: ablation_10k     # same accuracy, fewer calls at 4K: check at 10K
+    eval: ablation_10k     # 10,240 puzzles, to compare calls per solve
     label: "32x"
     set: {train.bce_pos_mult: 16.0}
   - name: nocls

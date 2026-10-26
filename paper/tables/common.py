@@ -53,11 +53,6 @@ def seeds_cell(recs: list[dict]) -> str:
     return str(n_done)
 
 
-def seeds_text(records: list[dict]) -> str:
-    """Caption text for the number of finished seeds per entry, e.g. "3" or "2--3"."""
-    return n_range([len(v) for v in by_entry(done(records)).values()])
-
-
 def mean(values: list[float]) -> float:
     return mean_std(values)[0]
 

@@ -1,7 +1,7 @@
 """Unified dataset wrapper for maze.
 
-Picks between `MazeHardDataset` (HuggingFace 30×30 maze-hard) and
-`SyntheticMazeDataset` (on-the-fly generated mazes at any grid size)
+Picks between the HuggingFace 30×30 Maze-Hard puzzles (`ldt.data.maze_hard`)
+and `SyntheticMazeDataset` (on-the-fly generated mazes at any grid size)
 based on `MazeConfig.dataset`. Exposes:
 
   - `H, W` — spatial grid dims (30×30 for maze_hard; configurable for
@@ -22,7 +22,7 @@ import json
 import random
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
 from typing import Literal, NamedTuple
@@ -36,14 +36,11 @@ from ldt.data.maze_hard import (
     GRID_H as MAZE_HARD_H,
     GRID_W as MAZE_HARD_W,
     N_CHANNELS,
-    MazeHardConfig,
-    MazeHardDataset,
     _download_and_cache as _maze_hard_download_and_cache,
 )
 from ldt.data.maze_synthetic import (
     SyntheticMazeConfig,
     SyntheticMazeDataset,
-    _augment_d4_with_swap,
     generate_maze,
     hard_min_path_len,
 )
@@ -75,8 +72,8 @@ class MazeConfig:
     # Square grid side length. `None` defers to the dataset's natural size
     # (30 for maze_hard, 10 for synthetic). Setting an explicit `grid_size`
     # alongside `dataset='maze_hard'` errors — that dataset is fixed at
-    # 30x30 by the HF source. For now we only support square synthetic
-    # grids — `grid_size` is used for both h and w.
+    # 30x30 by the HF source. Synthetic grids are square: `grid_size` is
+    # used for both h and w.
     grid_size: int | None = None
     wall_frac_lo: float = 0.30
     wall_frac_hi: float = 0.50
@@ -222,7 +219,7 @@ def _build_synthetic_canonical_pool(
 def _load_maze_hard_canonical_pool(
     cfg: MazeConfig,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Maze-Hard puzzles from the HF cache, with the same seeded subset as MazeHardDataset."""
+    """Maze-Hard puzzles from the HF cache, with a seeded subset of `n_puzzles`."""
     cache_path = _maze_hard_download_and_cache(cfg.cache_dir, cfg.split)
     data = torch.load(cache_path, map_location="cpu", weights_only=True)
     x_full = data["x"].numpy().astype(np.float32)  # [N_total, 900, 5]
@@ -298,13 +295,12 @@ def _build_or_load_pregen(
         pool_y = data["y"]
         pool_solutions = data["solutions"]
         n = pool_x.shape[0]
-        # Sanity: cache might be stale if K was bumped post-build. Validate
-        # K dim before handing off.
+        # Rebuild if the cache does not have K solutions per puzzle.
         if pool_solutions.shape[1] != K:
             print(f"  [pregen] cache K dim mismatch ({pool_solutions.shape[1]} "
                   f"!= {K}); rebuilding", flush=True)
         elif pool_x.shape[0] != pool_y.shape[0] or pool_y.shape[0] != n:
-            print(f"  [pregen] cache row-count mismatch; rebuilding", flush=True)
+            print("  [pregen] cache row-count mismatch; rebuilding", flush=True)
         else:
             print(f"    n={n}  K={K}  shape={tuple(pool_solutions.shape)}",
                   flush=True)
@@ -472,7 +468,9 @@ class MazeDataset:
                 except Exception as e:
                     print(f"  [shard load error] {self._shard_paths[shard_idx]}: {e}", flush=True)
                     continue
-                buf_x.append(sx); buf_y.append(sy); buf_sols.append(ss)
+                buf_x.append(sx)
+                buf_y.append(sy)
+                buf_sols.append(ss)
                 buf_n += sx.shape[0]
             if self._stop.is_set():
                 return
@@ -529,7 +527,10 @@ class MazeDataset:
                 buf_sols = [sols_all[leftover_idx]]
                 buf_n = len(leftover_idx)
             else:
-                buf_x = []; buf_y = []; buf_sols = []; buf_n = 0
+                buf_x = []
+                buf_y = []
+                buf_sols = []
+                buf_n = 0
             del x_all, y_all, sols_all  # free big concat tensor
 
     # ---- finite-pool path (with pregen cache) -------------------------------
@@ -823,7 +824,8 @@ def _bfs_distances(walls: np.ndarray, start: tuple[int, int]) -> np.ndarray:
     queue: list[tuple[int, int]] = [start]
     head = 0
     while head < len(queue):
-        r, c = queue[head]; head += 1
+        r, c = queue[head]
+        head += 1
         d = dist[r, c]
         for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             nr, nc = r + dr, c + dc

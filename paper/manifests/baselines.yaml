@@ -1,5 +1,5 @@
-# HRM/TRM baselines: existing checkpoints only, evaluated with the scripts in
-# baselines/hrm_trm (see baselines/README.md for provenance). These run in the
+# HRM, TRM and Sotaku v2 baselines, evaluated with the scripts in
+# baselines/ (see baselines/README.md for provenance). These run in the
 # upstream code's own images, not through the shared evaluator, so each entry
 # is a `modal run` command whose result is a local JSON file. Sudoku: first
 # 10,000 puzzles of sudoku_test_perm. Maze: every checkpoint of a run
@@ -37,7 +37,7 @@ entries:
               --out, baselines/hrm_trm/results/trm_att_sudoku.json]
     result: baselines/hrm_trm/results/trm_att_sudoku.json
   # Each method's better run: HRM with 8x dihedral augmentation, TRM without
-  # (baselines/hrm_trm/README.md, Maze-Hard findings).
+  # (baselines/README.md).
   - name: hrm_maze
     exp_id: B3
     label: "HRM (B200 retrain, augmented)"

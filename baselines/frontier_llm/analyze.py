@@ -22,12 +22,12 @@ BENCHES = ("sudoku", "snowflake", "maze")
 def grid_cells(task, text):
     """Digits per cell from a Sudoku or Snowflake answer, or None if malformed."""
     if task["bench"] == "sudoku":
-        s = "".join(l.strip() for l in run.lines(text))
+        s = "".join(line.strip() for line in run.lines(text))
         return [int(c) for c in s] if len(s) == 81 and s.isdigit() else None
     got = {}
-    for l in run.lines(text):
-        if ":" in l:
-            c, v = l.strip().split(":", 1)
+    for line in run.lines(text):
+        if ":" in line:
+            c, v = line.strip().split(":", 1)
             if c.isdigit() and v.strip().isdigit():
                 got[int(c)] = int(v)
     n = len(task["answer"])
@@ -64,7 +64,7 @@ def failure(task, r):
             return "violates a constraint"
         return "valid grid, wrong solution"
     q = task["question"]
-    rows = [l.rstrip("\r") for l in run.lines(r["text"])]
+    rows = [line.rstrip("\r") for line in run.lines(r["text"])]
     if len(rows) != 30 or any(len(x) != 30 for x in rows):
         return "malformed output"
     a = "".join(rows)

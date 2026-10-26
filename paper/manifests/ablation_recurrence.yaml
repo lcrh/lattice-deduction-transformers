@@ -20,7 +20,7 @@ entries:
     label: "4 layers x 16 loops (default)"
     group: loops
   - name: loops
-    eval: ablation_10k     # same accuracy, fewer calls at 4K: check at 10K
+    eval: ablation_10k     # 10,240 puzzles, to compare calls per solve
     group: loops
     sweep: {model.n_loops: [1, 2, 4, 8, 32]}
   - name: shape8x92

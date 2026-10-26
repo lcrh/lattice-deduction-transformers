@@ -135,10 +135,14 @@ def generate_maze(
         # S and G singletons (override free+path on x and free on y).
         sx, sy = s
         gx, gy = g
-        x[sx, sy] = 0.0; x[sx, sy, CH_START] = 1.0
-        x[gx, gy] = 0.0; x[gx, gy, CH_GOAL] = 1.0
-        y[sx, sy] = 0.0; y[sx, sy, CH_START] = 1.0
-        y[gx, gy] = 0.0; y[gx, gy, CH_GOAL] = 1.0
+        x[sx, sy] = 0.0
+        x[sx, sy, CH_START] = 1.0
+        x[gx, gy] = 0.0
+        x[gx, gy, CH_GOAL] = 1.0
+        y[sx, sy] = 0.0
+        y[sx, sy, CH_START] = 1.0
+        y[gx, gy] = 0.0
+        y[gx, gy, CH_GOAL] = 1.0
         return x.reshape(n_cells, N_CHANNELS), y.reshape(n_cells, N_CHANNELS)
 
     return None
@@ -157,7 +161,8 @@ def _augment_d4_with_swap(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Same D4 + S/G swap policy as maze_hard, generalized to (h, w)."""
     if swap and bool(rng.integers(0, 2)):
-        x = x.copy(); y = y.copy()
+        x = x.copy()
+        y = y.copy()
         x[:, [CH_START, CH_GOAL]] = x[:, [CH_GOAL, CH_START]]
         y[:, [CH_START, CH_GOAL]] = y[:, [CH_GOAL, CH_START]]
     if not dihedral:
@@ -187,7 +192,7 @@ class SyntheticMazeConfig:
     # to HRM-style: max( max(h,w), round(0.122 × h × w) ). The 12.2%-of-
     # total-cells ratio matches `sapientinc/maze-30x30-hard-1k`'s 110/900
     # cutoff and scales quadratically in n. When `hard=False`, the floor is
-    # the Searchformer-original max(h, w). An explicit `min_path_len`
+    # Searchformer's max(h, w). An explicit `min_path_len`
     # always overrides both.
     hard: bool = True
     min_path_len: int | None = None
@@ -206,7 +211,7 @@ class SyntheticMazeConfig:
 
 
 class SyntheticMazeDataset:
-    """Streaming synthetic maze dataset matching the `MazeHardDataset` contract.
+    """Streaming synthetic maze dataset.
 
     `next_batch()` returns (x, y, is_sat) on CPU:
         x: [B, h*w, 5] float32 — powerset/lattice initial state
@@ -264,7 +269,8 @@ class SyntheticMazeDataset:
                 self._pos = 0
             x, y = self._pool[self._order[self._pos]]
             self._pos += 1
-            x = x.copy(); y = y.copy()
+            x = x.copy()
+            y = y.copy()
         else:
             m = generate_maze(self.cfg.grid_h, self.cfg.grid_w, self.rng,
                                self.cfg.wall_frac_lo, self.cfg.wall_frac_hi,
@@ -285,7 +291,9 @@ class SyntheticMazeDataset:
             bx, by, bs = [], [], []
             for _ in range(self.cfg.batch_size):
                 x, y, is_sat = self._next_sample()
-                bx.append(x); by.append(y); bs.append(is_sat)
+                bx.append(x)
+                by.append(y)
+                bs.append(is_sat)
             tx = torch.from_numpy(np.stack(bx))
             ty = torch.from_numpy(np.stack(by))
             tsat = torch.tensor(bs, dtype=torch.bool)

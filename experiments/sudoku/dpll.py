@@ -162,6 +162,7 @@ def dpll_step(
     max_passes = cfg.max_passes
     cur_state = state
     deduce_union = None
+    prev_status = None
     pass_masks: list[torch.Tensor] = []
     # Multi-pass: a row is frozen once a pass finds it solved or in conflict.
     done = torch.zeros(B, dtype=torch.bool, device=device)

@@ -186,7 +186,7 @@ def select_pool(puzzles: list[dict], cfg: "SnowflakeConfig") -> np.ndarray:
 @dataclass
 class SnowflakeConfig:
     data_dir: str = "data"
-    extreme: bool = False               # Snowflake-Extreme splits (gen_data.py --extreme)
+    extreme: bool = False               # Snowflake-Extreme (hard) splits, from gen_data.py
     n_puzzles: int | None = None        # subset size, None = all
     train_orders: list[int] | None = None   # keep only these orders (None = all)
     translate_aug: bool = False         # random whole-hex translation per sample

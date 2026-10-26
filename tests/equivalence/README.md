@@ -1,7 +1,7 @@
 # Equivalence fixtures
 
-`fixtures/*.pt` hold reference outputs captured on CPU from the code at
-commit 28dbc3b (the shared evaluator, before the config refactor):
+`fixtures/*.pt` hold reference outputs captured on CPU with seeded tiny
+models and synthetic data:
 
 - `dpll.pt`: `dpll_step` outputs for Sudoku-, Snowflake- and Maze-shaped
   inputs, with and without per-step augmentation, from a seeded tiny model

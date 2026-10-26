@@ -19,7 +19,7 @@ entries:
     label: "Default operator"
     eval: ablation_10k     # paired reference for the 10K conflict-threshold rows
   - name: eval_loops
-    eval: ablation_10k     # same accuracy, fewer calls at 4K: check at 10K
+    eval: ablation_10k     # 10,240 puzzles, to compare calls per solve
     group: loops
     eval_of: default
     sweep: {solve.step.n_loops: [1, 2, 4, 8, 32]}
@@ -34,5 +34,5 @@ entries:
   - name: cls
     group: cls
     eval_of: default
-    eval: ablation_10k     # cls 0.7: 5 vs 0 wrong at 4K puzzles was inconclusive
+    eval: ablation_10k     # 10,240 puzzles, to compare wrong-answer counts
     sweep: {solve.step.cls_threshold: [0.5, 0.7, 0.8]}

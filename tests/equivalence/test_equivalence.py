@@ -1,8 +1,7 @@
-"""The refactored code reproduces the pre-refactor outputs bit for bit.
+"""The code reproduces the reference outputs in fixtures/ bit for bit.
 
-Fixtures were captured on CPU from the code at commit 28dbc3b (before the
-config refactor) with seeded tiny models and synthetic data; see
-tests/equivalence/README.md.
+Fixtures were captured on CPU with seeded tiny models and synthetic data;
+see tests/equivalence/README.md.
 """
 
 

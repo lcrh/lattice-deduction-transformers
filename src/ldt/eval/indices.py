@@ -85,7 +85,7 @@ SPECS: dict[str, IndexListSpec] = {
         length=None,
         sha256="e4547df0f6af336ee555cc061019d386c16687b9c1eee79c1f47fc9e2ab2b591",
     ),
-    # Snowflake-Extreme splits (gen_data.py --extreme).
+    # Snowflake-Extreme (hard) splits (gen_data.py).
     "snowflake_extreme_test": IndexListSpec(
         task="snowflake", split="extreme_test", split_size=951, seed=20261025,
         length=None,

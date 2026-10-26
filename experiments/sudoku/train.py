@@ -281,7 +281,8 @@ def train(exp: SudokuExperiment, ckpt_path: str | Path,
         bx, by = [], []
         while sum(t.shape[0] for t in bx) < n:
             x_b, y_b, _ = dataset.next_batch()
-            bx.append(x_b); by.append(y_b)
+            bx.append(x_b)
+            by.append(y_b)
         x = torch.cat(bx, dim=0)[:n].to(device).float()
         y = torch.cat(by, dim=0)[:n].to(device).float()
         solutions = y.unsqueeze(1)  # [n, K=1, S, C]
