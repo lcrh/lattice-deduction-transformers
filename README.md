@@ -37,11 +37,12 @@ appendix tables come from these manifests and scripts:
 | Appendix | Manifests | Script (`uv run python -m ...`) |
 |---|---|---|
 | C: ablations | `ablation_recurrence`, `ablation_supervision`, `ablation_lambda_ce`, `ablation_soundness` | `paper.tables.appendix <manifest>` |
+| C: training-input mix | `ablation_training_inputs`, `portfolio` | `paper.tables.training_inputs` |
 | D: search policies | `search` | `paper.tables.appendix search` |
 | E: inference-time deduction | `deduction` | `paper.tables.appendix deduction` |
 | F: latent carry | `latent_carry` | `paper.tables.appendix latent_carry` |
 | G: Maze-Hard failures | `table3_maze` | `paper.figures.maze_failures` |
-| H: Snowflake order transfer and training-set size | `snowflake_extreme_ood`, `snowflake_extreme` | `paper.tables.appendix <manifest>` (per-order accuracy) |
+| H: Snowflake order transfer and training-set size | `snowflake_extreme_ood`, `snowflake_extreme` | `paper.tables.snowflake_appendix` |
 | I: fine-tuned LLM | `llm_finetune` | `paper.tables.llm_finetune` |
 | N: compute accounting | `table1_sudoku`, `table3_maze`, ... | `paper.compute <manifests>` |
 
