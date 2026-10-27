@@ -42,6 +42,8 @@ class StepConfig:
     # Which candidate to commit to: softmax sample at `temp_decide`, argmax, or
     # the k-th best for the k-th chain of a puzzle (rank_k).
     digit_policy: DigitPolicy = "sample"
+    # Logits the step reads: the last internal iteration's, or their mean over iterations.
+    readout: Literal["final", "mean"] = "final"
 
     def __post_init__(self):
         if self.cell_policy not in CELL_POLICIES:
@@ -173,7 +175,7 @@ def dpll_step(
         gm_aug = frame.mask(given_mask)
         ip_aug = frame.mask(in_puzzle_mask)
 
-        out = model(state_aug, use_final=True, **model_kw)
+        out = model(state_aug, use_final=cfg.readout == "final", **model_kw)
         sm_logits = out["softmax"]
 
         deduce_mask_aug = (torch.sigmoid(out["bce"]) < cfg.threshold) & (state_aug > 0.5)

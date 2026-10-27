@@ -70,6 +70,12 @@ class RunResult(TypedDict):
     eval_run_dir: str | None
 
 
+def _drop_default_readout(d: dict) -> None:
+    """`step.readout` enters a hash only when it is not the default "final"."""
+    if d.get("step", {}).get("readout") == "final":
+        del d["step"]["readout"]
+
+
 @dataclasses.dataclass
 class Experiment:
     """One run: model, data, training, solver and eval settings plus provenance."""
@@ -101,6 +107,7 @@ class Experiment:
             d[section].pop(key, None)
         for key in _UNHASHED_DATA:
             d["data"].pop(key, None)
+        _drop_default_readout(d["train"])
         return d
 
     def train_hash(self) -> str:
@@ -124,6 +131,7 @@ class Experiment:
         # `one_shot` enters the spec (and its hash) only when set.
         if not d.get("one_shot"):
             d.pop("one_shot", None)
+        _drop_default_readout(d)
         return d
 
     def eval_spec(self, checkpoint: str, **kw) -> EvalSpec:
