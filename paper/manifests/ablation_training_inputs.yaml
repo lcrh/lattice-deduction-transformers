@@ -1,0 +1,17 @@
+# Training inputs: how fresh pool entries are built. The reference is Table 1's
+# 4K-step model (table1_sudoku, steps4k_train_noaug): 20% raw puzzles, 55% with
+# correct digits filled into some blanks, 25% with some filled digits wrong.
+# These arms train the same recipe with only raw puzzles (every conflict comes
+# from the model's own decisions) and with raw puzzles and correct hints only.
+exp_id: A11
+benchmark: sudoku
+config: configs/sudoku/paper.yaml
+eval: sequential
+seeds: [0, 1, 2]
+entries:
+  - name: raw_only
+    label: "Raw puzzles only"
+    set: {data.zero_hint_weight: 1.0, data.correct_hint_weight: 0.0, data.error_hint_weight: 0.0}
+  - name: no_error_hints
+    label: "Raw puzzles and correct hints"
+    set: {data.zero_hint_weight: 0.2, data.correct_hint_weight: 0.8, data.error_hint_weight: 0.0}
