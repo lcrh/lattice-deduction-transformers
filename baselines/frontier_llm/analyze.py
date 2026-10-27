@@ -1,8 +1,8 @@
-"""Summarize results.json: solve rate, output tokens and cost per puzzle, and a
-failure category for every unsolved answer.
+"""Summarize results/results.json: solve rate, output tokens and cost per puzzle,
+and a failure category for every unsolved answer.
 
-usage (from the lattice_deduction_transformers repo):
-    uv run --with pyarrow python <this file>
+usage (from the repo root):
+    uv run python baselines/frontier_llm/analyze.py
 """
 import collections
 import importlib.util
@@ -15,7 +15,7 @@ spec = importlib.util.spec_from_file_location("run", HERE / "run.py")
 run = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(run)
 
-TASKS = {(t["bench"], t["idx"]): t for t in run.sudoku_tasks() + run.snowflake_tasks() + run.maze_tasks()}
+TASKS = {(t["bench"], t["idx"]): t for t in run.load_tasks()}
 BENCHES = ("sudoku", "snowflake", "maze")
 
 
@@ -95,7 +95,7 @@ def failure(task, r):
 
 
 if __name__ == "__main__":
-    results = json.load(open(HERE / "results.json"))
+    results = json.loads(run.RESULTS.read_text())
     by = collections.defaultdict(list)
     for r in results:
         by[(r["model"], r["bench"])].append(r)

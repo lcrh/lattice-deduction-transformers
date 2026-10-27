@@ -89,11 +89,14 @@ puzzle, with unbiased pass@k; the summaries are in `qwen_sft/results/`.
 ## Frontier LLMs (Appendix J)
 
 `frontier_llm/run.py` sends the appendix prompts to the models in its
-`MODELS` list through OpenRouter (`OPENROUTER_API_KEY`), for the first 50
-puzzles of each benchmark's test ordering, and writes
-`frontier_llm/results.json`; `frontier_llm/analyze.py` prints the solve
-rate, output tokens and cost per puzzle and classifies every unsolved
-answer. Both run locally (see their docstrings).
+`MODELS` list through OpenRouter (`OPENROUTER_API_KEY`), with reasoning effort
+"high", at most 100,000 output tokens and one hour per call. The puzzles, the
+first 50 of each benchmark's test ordering, are in `frontier_llm/puzzles.json`
+(`run.py export` rebuilds it from the datasets). Answers, token counts and
+costs are in `frontier_llm/results/results.json`; `frontier_llm/analyze.py`
+prints the solve rate, output tokens and cost per puzzle and classifies every
+unsolved answer. The April 2026 zero-shot results in the same appendix are
+reported as run at the time; their scripts are not part of this repository.
 
 ## Per-puzzle rows
 

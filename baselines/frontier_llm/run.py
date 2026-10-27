@@ -1,9 +1,16 @@
 """Zero-shot frontier LLMs on the first 50 puzzles of each pinned test ordering,
-with the appendix prompts, via OpenRouter. Writes results.json next to this file.
+with the appendix prompts, via OpenRouter (key in OPENROUTER_API_KEY).
 
-usage (from the lattice_deduction_transformers repo):
-    uv run --with pyarrow python <this file>
+The puzzles are in puzzles.json, so a run needs no dataset; `export` rebuilds
+that file from the Sudoku-Extreme and Maze-Hard test splits (Hugging Face) and
+the Snowflake test split written by experiments/snowflake/gen_data.py.
+Answers go to results/results.json; puzzles already answered there are skipped.
+
+usage (from the repo root):
+    uv run python baselines/frontier_llm/run.py
+    uv run --with pyarrow python baselines/frontier_llm/run.py export --snowflake-test PATH
 """
+import argparse
 import concurrent.futures as cf
 import csv
 import glob
@@ -14,15 +21,12 @@ import urllib.request
 from collections import deque
 from pathlib import Path
 
-import pyarrow.parquet as pq
-
-from ldt.eval.indices import load
-
 HERE = Path(__file__).parent
+PUZZLES = HERE / "puzzles.json"
+RESULTS = HERE / "results" / "results.json"
 N = 50
 MODELS = ["anthropic/claude-opus-5.5", "openai/gpt-6-astra", "openai/gpt-6.1-sol"]
 HF = Path.home() / ".cache/huggingface/hub"
-SF_TEST = HERE.parent / "sf/snowflake_extreme_test.parquet"
 
 SUDOKU_SYSTEM = """You are a Sudoku solver. You will be given a 9 x 9 Sudoku puzzle. Solve it and respond ONLY with the completed 9 x 9 grid, one row per line, digits only, no spaces or other characters. Example response format:
 534678912
@@ -57,19 +61,25 @@ def hf_test(name):
 
 
 def sudoku_tasks():
+    from ldt.eval.indices import load
+
     rows = hf_test("sudoku-extreme")
     out = []
     for i in load("sudoku_test_perm").indices[:N]:
         q = rows[i]["question"].replace(".", "0")
         text = "\n".join(q[r * 9:(r + 1) * 9] for r in range(9))
-        out.append(dict(bench="sudoku", idx=int(i), system=SUDOKU_SYSTEM,
+        out.append(dict(bench="sudoku", idx=int(i),
                         user=f"Solve this Sudoku:\n{text}", answer=rows[i]["answer"]))
     return out
 
 
-def snowflake_tasks():
-    rows = pq.read_table(SF_TEST).to_pylist()
+def snowflake_tasks(test_parquet: str):
+    import pyarrow.parquet as pq
+
+    rows = pq.read_table(test_parquet).to_pylist()
     out = []
+    from ldt.eval.indices import load
+
     for i in load("snowflake_extreme_test").indices[:N]:
         r = rows[i]
         t = json.loads(r["topology"])
@@ -78,7 +88,7 @@ def snowflake_tasks():
         text = (f"Puzzle (n={r['n']}, {t['n_cells']} cells):\n\n"
                 f"Constraint groups (each group must contain distinct digits):\n{groups}\n\n"
                 f"Cell values (? = solve this):\n{cells}")
-        out.append(dict(bench="snowflake", idx=int(i), order=r["n"], system=SNOWFLAKE_SYSTEM,
+        out.append(dict(bench="snowflake", idx=int(i), order=r["n"],
                         user=f"Solve this Snowflake Sudoku:\n{text}",
                         answer=r["solution"], puzzle=r["puzzle"],
                         groups=[c["cells"] for c in t["constraints"]]))
@@ -86,14 +96,23 @@ def snowflake_tasks():
 
 
 def maze_tasks():
+    from ldt.eval.indices import load
+
     rows = hf_test("maze-30x30-hard-1k")
     out = []
     for i in load("maze_test").indices[:N]:
         q = rows[i]["question"]
         text = "\n".join(q[r * 30:(r + 1) * 30] for r in range(30))
-        out.append(dict(bench="maze", idx=int(i), system=MAZE_SYSTEM,
+        out.append(dict(bench="maze", idx=int(i),
                         user=f"Solve this maze:\n{text}", question=q))
     return out
+
+
+SYSTEM = {"sudoku": SUDOKU_SYSTEM, "snowflake": SNOWFLAKE_SYSTEM, "maze": MAZE_SYSTEM}
+
+
+def load_tasks() -> list[dict]:
+    return json.loads(PUZZLES.read_text())
 
 
 def lines(text):
@@ -149,7 +168,7 @@ def score(task, text):
 
 def ask(model, task):
     body = json.dumps({"model": model, "reasoning": {"effort": "high"}, "max_tokens": 100_000,
-                       "messages": [{"role": "system", "content": task["system"]},
+                       "messages": [{"role": "system", "content": SYSTEM[task["bench"]]},
                                     {"role": "user", "content": task["user"]}]}).encode()
     req = urllib.request.Request("https://openrouter.ai/api/v1/chat/completions", data=body,
                                  headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
@@ -168,14 +187,14 @@ def ask(model, task):
     return dict(text=None, error=err, seconds=time.time() - t0)
 
 
-if __name__ == "__main__":
-    tasks = sudoku_tasks() + snowflake_tasks() + maze_tasks()
-    # Keep earlier answers of the evaluated models; skip those puzzles.
-    old = json.load(open(HERE / "results.json")) if (HERE / "results.json").exists() else []
+def evaluate() -> None:
+    tasks = load_tasks()
+    old = json.loads(RESULTS.read_text()) if RESULTS.exists() else []
     results = [r for r in old if r["model"] in MODELS and r.get("text") is not None]
     done = {(r["model"], r["bench"], r["idx"]) for r in results}
     jobs = [(m, t) for m in MODELS for t in tasks if (m, t["bench"], t["idx"]) not in done]
     print(f"{len(results)} earlier results kept, {len(jobs)} new calls", flush=True)
+    RESULTS.parent.mkdir(exist_ok=True)
     with cf.ThreadPoolExecutor(max_workers=50) as ex:
         futs = {ex.submit(ask, m, t): (m, t) for m, t in jobs}
         for f in cf.as_completed(futs):
@@ -186,7 +205,20 @@ if __name__ == "__main__":
                                 correct=ok, **r))
             print(f"{m:28s} {t['bench']:9s} {t['idx']:7d} {'OK ' if ok else 'no '} "
                   f"{r.get('finish')} {r.get('seconds', 0):6.0f}s {r.get('error', '')}", flush=True)
-            json.dump(results, open(HERE / "results.json", "w"), indent=1)
+            RESULTS.write_text(json.dumps(results, indent=1))
     for m in MODELS:
         print(m, {b: sum(r["correct"] for r in results if r["model"] == m and r["bench"] == b)
                   for b in ("sudoku", "snowflake", "maze")})
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("command", nargs="?", default="evaluate", choices=["evaluate", "export"])
+    ap.add_argument("--snowflake-test", help="snowflake_extreme_test.parquet (export only)")
+    args = ap.parse_args()
+    if args.command == "export":
+        tasks = sudoku_tasks() + snowflake_tasks(args.snowflake_test) + maze_tasks()
+        PUZZLES.write_text(json.dumps(tasks, indent=1))
+        print(f"wrote {len(tasks)} puzzles to {PUZZLES}")
+    else:
+        evaluate()
