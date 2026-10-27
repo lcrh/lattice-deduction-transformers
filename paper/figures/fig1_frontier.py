@@ -32,7 +32,7 @@ points = [("HRM (55.4%)", 1466, 0.22, 55.4, False, "s"),
           ("TRM (79.5%)", 2136, 0.41, 79.5, False, "s"),
           ("Sotaku v2", 1265, 0.14, 98.96, False, "s"),
           ("EqR", 1640, 210, 99.8, False, "s"),
-          ("LDT, no train aug.", 18.7, 0.85, 97.68, True, "o"),
+          ("LDT, no train aug.", 18.7, 0.85, 96.54, True, "o"),
           ("LDT", 18.7, 1.5, 99.999, True, "o"),
           # agree-2 runs about 2.04 models per puzzle (held-out simulation); accuracy is
           # the mean of three 5-model portfolios (0, 2 and 3 failures).

@@ -3,7 +3,7 @@
 Rows, in the paper's order:
   baselines   released checkpoints on the first 10,000 puzzles of
               `sudoku_test_perm` (manifest `baselines`); EqR as reported
-  LDT rows    manifest `table1_sudoku`; accuracy and wrong answers pooled over
+  LDT rows    manifest `table1_sudoku`; accuracy and wrong answers, mean over
               seeds
   10,000 search rounds
               the 4K-step models (seeds 0-2, manifest `portfolio`, which shares
@@ -38,9 +38,10 @@ def acc_cells(acc: float, wrong: float | None, digits: int = 3) -> list[str]:
     return [f"{acc:.{digits}f}", "--" if wrong is None else f"{wrong:.5f}"]
 
 
-def pooled(recs: list[dict]) -> tuple[float, float]:
-    n = sum(r["n"] for r in recs)
-    return 100 * sum(r["correct"] for r in recs) / n, 100 * sum(r["wrong"] for r in recs) / n
+def seed_mean(recs: list[dict]) -> tuple[float, float]:
+    """Accuracy and wrong-answer rate (%), averaged over seeds."""
+    return (100 * sum(r["accuracy"] for r in recs) / len(recs),
+            100 * sum(r["wrong"] / r["n"] for r in recs) / len(recs))
 
 
 def portfolio_cells(ev: Evals, n: int, portfolios: list[list[int]], rule: str) -> list[str]:
@@ -65,7 +66,7 @@ def build(records: list[dict], baselines: list[dict],
     for label, entry in LDT_ROWS:
         recs = done(entries.get(entry, []))
         if recs:
-            body.append([label, *acc_cells(*pooled(recs))])
+            body.append([label, *acc_cells(*seed_mean(recs))])
     if portfolio is not None:
         ev, n = portfolio
         body.append(["\\quad 10,000 search rounds", *portfolio_cells(ev, n, [[0], [1], [2]], "first")])
@@ -75,10 +76,10 @@ def build(records: list[dict], baselines: list[dict],
                      *portfolio_cells(ev, n, [list(range(15))], "agree3")])
     recs = done(entries.get(NO_AUG[1], []))
     if recs:
-        body.append([NO_AUG[0], *acc_cells(*pooled(recs), 2)])
+        body.append([NO_AUG[0], *acc_cells(*seed_mean(recs), 2)])
     caption = ("Sudoku-Extreme test accuracy and wrong answers (\\%). Baselines: released "
                "checkpoints on the first 10,000 puzzles of the test ordering. LDT: accuracy and "
-               "wrong answers pooled over the 3 seeds; portfolios use up to 10,000 rounds per model.")
+               "wrong answers, mean over the 3 seeds; portfolios use up to 10,000 rounds per model.")
     return Table(columns=["Model", "Acc. \\%", "Wrong \\%"], rows=body, caption=caption,
                  label="tab:Sudoku-extreme")
 

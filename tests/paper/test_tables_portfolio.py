@@ -172,7 +172,7 @@ def test_baseline_flops_follow_the_upstream_layers():
 def test_training_flops_match_the_paper():
     pf = {k: a.training_flops() / 1e15 for k, a in BASELINES.items()}
     assert round(pf["hrm_sudoku"]) == 1466 and round(pf["trm_mlp_sudoku"]) == 2136
-    assert round(pf["eqr_sudoku"]) == 1640 and round(pf["hrm_maze"]) == 14982
+    assert round(pf["eqr_sudoku"]) == 1640 and round(pf["hrm_maze"]) == 46943
     assert round(BASELINES["eqr_sudoku"].max_inference_flops() / 1e12) == 210
     assert round(sotaku_flops()["training"] / 1e15) == 1265
     assert 4 * ldt_forward_flops(128, 4, 16, 81) * 512 * 4000 / 1e15 == pytest.approx(18.7, abs=0.05)

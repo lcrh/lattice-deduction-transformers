@@ -124,7 +124,7 @@ BASELINES = {
                               train_steps=19_530, train_batch=768),
     "hrm_maze": RecursiveArch("HRM (maze)", dim=512, tokens=900 + 1, expansion=4,
                               applications=_HRM_APPLICATIONS, act_steps=16,
-                              train_factor=_HRM_TRAIN_FACTOR, train_steps=39_060,
+                              train_factor=_HRM_TRAIN_FACTOR, train_steps=122_388,
                               train_batch=768),
 }
 
