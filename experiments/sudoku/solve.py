@@ -509,7 +509,8 @@ def solve(model, puzzle, ground_truth, given_mask, cfg: SolveConfig, *,
                     (chain_attempt_idx[lo:hi] < win_idx) & ~chain_done[lo:hi]
                 ).any().item()
                 drain_age = int(slot_round[slot].item()) - int(slot_drain_start[slot].item())
-                if (not pending) or drain_age >= cfg.seq_drain_max_rounds:
+                out_of_rounds = int(slot_round[slot].item()) >= cfg.max_rounds
+                if (not pending) or drain_age >= cfg.seq_drain_max_rounds or out_of_rounds:
                     cnt = int(slot_attempt_dur_count[slot].item())
                     sm = int(slot_attempt_dur_sum[slot].item())
                     if correct_out[p]:
