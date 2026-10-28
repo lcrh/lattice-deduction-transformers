@@ -1,0 +1,11 @@
+# Base for Sudoku-Extreme ablations: paper.yaml at 2K steps, every arm scored
+# on the same ordering of sudoku_test_perm, up to 4,096 puzzles (the `ablation` preset).
+# An arm is this file plus one --set override, e.g. --set "model.n_loops=4".
+train:
+  steps: 2000
+  step:
+    augment: true          # ablations train with per-step augmentation
+
+eval:
+  index_list: sudoku_test_perm
+  stop: ablation

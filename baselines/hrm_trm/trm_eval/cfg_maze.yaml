@@ -1,0 +1,15 @@
+# TRM Maze-Hard 30x30 architecture, matching the training recipe
+# (fork README "Maze-Hard 30x30 (attention)" and TRAIN_ARGS in modal_train.py:
+# L_cycles=4, not the arch default of 6). Layered on the fork's default config
+# for eval with run_eval_only.py. Loop counts do not change parameter shapes,
+# so evaluating with the wrong value would load silently.
+defaults:
+  - cfg_pretrain
+  - _self_
+
+evaluators: []
+
+arch:
+  L_layers: 2
+  H_cycles: 3
+  L_cycles: 4

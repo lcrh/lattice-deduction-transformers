@@ -1,0 +1,12 @@
+# Cross-entropy weight lambda_ce at the 4K-step budget, on 4,000 held-out
+# train puzzles per seed (`select` preset, sudoku_val), never on the test
+# split: the default 0.2 against 1.0.
+exp_id: P6
+benchmark: sudoku
+config: configs/sudoku/paper.yaml
+eval: select
+seeds: [0, 1, 2]
+set: {train.step.augment: true}
+entries:
+  - name: lambda_ce
+    sweep: {train.softmax_loss_weight: [0.2, 1.0]}

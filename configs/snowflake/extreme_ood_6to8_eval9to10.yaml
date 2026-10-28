@@ -1,0 +1,9 @@
+# Snowflake-Extreme order transfer: train on orders 6-8, evaluate on unseen
+# orders 9-10. Everything else as paper.yaml.
+data:
+  extreme: true
+  train_orders: [6, 7, 8]
+
+eval:
+  index_list: snowflake_extreme_test
+  index_filter: {orders: [9, 10]}

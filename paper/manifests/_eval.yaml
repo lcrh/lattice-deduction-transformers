@@ -1,0 +1,42 @@
+# Eval presets. A manifest entry names one with `eval:`; its keys
+# are config overrides applied after the entry's own `set`. Workers and the
+# in-flight window only change cost and wall-clock time, never results.
+presets:
+  # Sudoku test split, walked in a fixed random order until the error rate
+  # is pinned down (K=100 failures, or +-0.1pp once n >= 1000). Table 1 rows below
+  # 4K steps, Figure 4.
+  sequential:
+    eval.index_list: sudoku_test_perm
+    eval.stop: sequential
+  # Every Sudoku test puzzle. Table 1 4K and 8K rows, portfolio test evals.
+  full:
+    eval.index_list: sudoku_test_perm
+    eval.stop: full
+    eval.workers: 20
+    eval.max_in_flight: 40
+  # Appendix ablations: the same fixed ordering, sequential (100 failures, or
+  # +-0.1pp once n >= 1000), at most 4,096 puzzles (8 blocks). For more
+  # precision on an entry, set `eval: ablation_10k` on it and relaunch: it
+  # continues from the blocks already on disk, up to 10,240 (20 blocks).
+  ablation:
+    eval.index_list: sudoku_test_perm
+    eval.stop: ablation
+  ablation_10k:
+    eval.index_list: sudoku_test_perm
+    eval.stop: ablation_10k
+  # Held-out train puzzles (sudoku_val), sequential, at most 4,000. Tuning
+  # defaults (tuning_* manifests); never touches the test split.
+  select:
+    eval.index_list: sudoku_val
+    eval.stop: select
+  # 100,000 held-out train puzzles that no portfolio model trained on, every
+  # puzzle at the full round budget. Choosing the portfolio recipe only.
+  holdout:
+    eval.index_list: sudoku_holdout
+    eval.stop: full
+  # An explicit puzzle list (entry `indices_file`), every puzzle.
+  explicit:
+    eval.stop: full
+  # Snowflake / Maze: the config's own test list, every puzzle.
+  whole:
+    eval.stop: full

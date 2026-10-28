@@ -19,7 +19,17 @@ dependencies = [
     "modal>=1.3.3",
     "numpy>=2.2.6",
     "pyarrow>=23.0.1",
+    "pyyaml>=6.0",
     "torch>=2.0.0",
+]
+
+[project.optional-dependencies]
+# Fine-tuned LLM baseline (baselines/qwen_sft).
+llm = [
+    "accelerate>=1.14.0",
+    "pillow>=12.3.0",
+    "torchvision>=0.27.0",
+    "transformers>=5.0.0",
 ]
 
 [build-system]
@@ -27,4 +37,17 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/lattice_diffusion"]
+packages = ["src/ldt"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = [".claude"]

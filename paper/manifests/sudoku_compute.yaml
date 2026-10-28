@@ -1,0 +1,15 @@
+# Figure 4: test-time compute against training compute, measured as the
+# drained-chain sequential forwards per solved puzzle. These models are
+# trained with per-step augmentation; the evals record the sequential-forward
+# estimate, which changes the solver's batch schedule.
+exp_id: M2
+benchmark: sudoku
+config: configs/sudoku/paper.yaml
+eval: sequential
+seeds: [0, 1, 2]
+set: {solve.estimate_sequential: true, train.step.augment: true}
+table:
+  histogram_x: [1000, 2000, 4000]
+entries:
+  - name: steps
+    sweep: {train.steps: [500, 1000, 1500, 2000, 3000, 4000]}

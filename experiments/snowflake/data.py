@@ -8,23 +8,29 @@ The covering grid is derived from the union of all hex positions that
 appear in the snowflake-sudoku topology module for n=1..19. Each
 hexagonal cell's `(q, r, direction)` maps to a fixed `(row, col)` in
 the covering grid. This is enough slots to embed every puzzle up to
-n=19; training uses only the 30k generated for n=4..8 but the
-representation is shared.
+n=19; the generator translates its grown layouts into the same box. The
+representation is shared across orders, which is what makes
+order-transfer experiments possible.
 
 A `SnowflakeDataset` generates samples with the same three sample types
 as the Sudoku dataset (zero_hints, correct_hints, error_hints) so the
 CLS conflict head gets UNSAT training signal from corrupted givens.
-No augmentation.
+Optional data-side augmentation: random whole-hex translation within the
+covering grid (`translate_aug`). Optional inputs: randomized multi-hot
+constraint-group channels (`constraint_group_embed`).
+
+Splits are parquet files `snowflake_<split>.parquet` in the data directory
+(see `split_file`); the Snowflake-Extreme splits are `extreme_train`,
+`extreme_val` and `extreme_test`.
 """
 
 from __future__ import annotations
 
 import json
-import random
+import queue
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from queue import Queue
 
 import numpy as np
 import torch
@@ -44,12 +50,34 @@ GRID_ROWS = 3 * (R_MAX - R_MIN + 1)   # 15
 GRID_COLS = 2 * (Q_MAX - Q_MIN + 1)   # 10
 SEQ_LEN = GRID_ROWS * GRID_COLS       # 150
 VOCAB = 6
+BLANK = 7       # puzzle value of an empty cell
+# Order 19 has at most 19 hex groups + 24 meeting-point groups. Group IDs are
+# sampled from this whole range for every order, so every channel is used.
+MAX_CONSTRAINT_GROUPS = 43
+
+
+def split_file(data_dir: str, split: str) -> Path:
+    """Parquet file of `split` ("train", "val" or "test")."""
+    return Path(data_dir) / f"snowflake_{split}.parquet"
+
+
+def split_name(cfg: "SnowflakeConfig", split: str) -> str:
+    """`split` of the dataset `cfg` trains on."""
+    return f"extreme_{split}" if cfg.extreme else split
+
+
+def cell_index(cp: dict) -> int:
+    """Covering-grid index of a topology `cell_positions` entry."""
+    return cell_to_grid_idx(cp["q"], cp["r"], cp["direction"])
 
 
 def cell_to_grid_idx(q: int, r: int, direction: str) -> int:
     dr, dc = DIR_OFFSET[direction]
     row = 3 * (r - R_MIN) + dr
     col = 2 * (q - Q_MIN) + dc
+    if not (0 <= row < GRID_ROWS and 0 <= col < GRID_COLS):
+        raise ValueError(f"cell (q={q}, r={r}, {direction}) lies outside the "
+                         f"{GRID_ROWS}x{GRID_COLS} covering grid")
     return row * GRID_COLS + col
 
 
@@ -73,17 +101,82 @@ def puzzle_to_state(puzzle_rec: dict) -> tuple[np.ndarray, np.ndarray, np.ndarra
 
     for cell_id_str, cp in cell_positions.items():
         cell_id = int(cell_id_str)
-        idx = cell_to_grid_idx(cp["q"], cp["r"], cp["direction"])
+        idx = cell_index(cp)
         mask[idx] = True
         # Ground-truth one-hot (digits 1..6 → indices 0..5).
         y[idx, solution[cell_id] - 1] = 1.0
         # Input powerset: given → one-hot; blank (value=7) → all-ones.
         val = puzzle[cell_id]
-        if val == 7:
+        if val == BLANK:
             x[idx, :] = 1.0
         else:
             x[idx, val - 1] = 1.0
     return x, y, mask
+
+
+def constraint_group_features(puzzle_rec: dict, rng: np.random.Generator) -> np.ndarray:
+    """[SEQ_LEN, MAX_CONSTRAINT_GROUPS] multi-hot constraint membership.
+
+    Each constraint group gets a distinct ID drawn at random from the whole
+    ID range, resampled on every call, so the model can use shared membership
+    but cannot tie an ID to a location.
+    """
+    topology = puzzle_rec["topology"]
+    constraints = topology["constraints"]
+    if len(constraints) > MAX_CONSTRAINT_GROUPS:
+        raise ValueError(f"puzzle has {len(constraints)} constraint groups, "
+                         f"more than {MAX_CONSTRAINT_GROUPS}")
+    ids = rng.choice(MAX_CONSTRAINT_GROUPS, size=len(constraints), replace=False)
+    features = np.zeros((SEQ_LEN, MAX_CONSTRAINT_GROUPS), dtype=np.float32)
+    positions = topology["cell_positions"]
+    for group, group_id in zip(constraints, ids):
+        for cell_id in group["cells"]:
+            features[cell_index(positions[str(cell_id)]), group_id] = 1.0
+    return features
+
+
+def random_translate(arrays: list[np.ndarray], mask: np.ndarray,
+                     rng: np.random.Generator) -> tuple[list[np.ndarray], np.ndarray]:
+    """Shift a puzzle by a random whole number of hexes within the covering grid.
+
+    A hex is a 3 x 2 block of slots, so the shift keeps which cells share
+    constraints. `arrays` ([SEQ_LEN, ...]) move together with `mask`.
+    """
+    occupied = np.where(mask)[0]
+    if occupied.size == 0:
+        return arrays, mask
+    rows, cols = occupied // GRID_COLS, occupied % GRID_COLS
+    dr = int(rng.integers(-(rows.min() // 3), (GRID_ROWS - 1 - rows.max()) // 3 + 1))
+    dq = int(rng.integers(-(cols.min() // 2), (GRID_COLS - 1 - cols.max()) // 2 + 1))
+    if dr == 0 and dq == 0:
+        return arrays, mask
+    new_idx = (rows + 3 * dr) * GRID_COLS + (cols + 2 * dq)
+    moved = []
+    for a in arrays:
+        out = np.zeros_like(a)
+        out[new_idx] = a[occupied]
+        moved.append(out)
+    new_mask = np.zeros_like(mask)
+    new_mask[new_idx] = True
+    return moved, new_mask
+
+
+def puzzle_orders(puzzles: list[dict]) -> np.ndarray:
+    return np.array([int(p["n"]) for p in puzzles], dtype=np.int64)
+
+
+def select_pool(puzzles: list[dict], cfg: "SnowflakeConfig") -> np.ndarray:
+    """Row indices a dataset with `cfg` trains on: `train_orders`, then a seeded `n_puzzles` subset."""
+    orders = puzzle_orders(puzzles)
+    rng = np.random.default_rng(cfg.seed)
+    pool = np.arange(len(puzzles))
+    if cfg.train_orders is not None:
+        pool = pool[np.isin(orders, cfg.train_orders)]
+    if cfg.n_puzzles is not None and cfg.n_puzzles < len(pool):
+        pool = pool[rng.choice(len(pool), cfg.n_puzzles, replace=False)]
+    if len(pool) == 0:
+        raise ValueError(f"no puzzles match train_orders={cfg.train_orders}")
+    return pool
 
 
 # -----------------------------------------------------------------------------
@@ -92,8 +185,12 @@ def puzzle_to_state(puzzle_rec: dict) -> tuple[np.ndarray, np.ndarray, np.ndarra
 
 @dataclass
 class SnowflakeConfig:
-    data_path: str = "data/snowflake_train.parquet"
+    data_dir: str = "data"
+    extreme: bool = False               # Snowflake-Extreme (hard) splits, from gen_data.py
     n_puzzles: int | None = None        # subset size, None = all
+    train_orders: list[int] | None = None   # keep only these orders (None = all)
+    translate_aug: bool = False         # random whole-hex translation per sample
+    constraint_group_embed: bool = False    # append constraint-group channels
     seed: int = 42
     batch_size: int = 512
     # Mirror the sudoku-extreme sample-type weights so CLS gets UNSAT signal.
@@ -107,11 +204,7 @@ class SnowflakeConfig:
 
 
 def _apply_sample_type(x, y, mask, sample_type, cfg, rng):
-    """Variant of the sudoku-extreme _make_sample adapted for snowflake.
-
-    Operates in-place on x, y. Returns is_sat (True/False) and the (possibly
-    modified) y target.
-    """
+    """Apply a sample type to x in place; returns (is_sat, target)."""
     if sample_type == "zero_hints":
         return True, y
 
@@ -144,50 +237,41 @@ def _apply_sample_type(x, y, mask, sample_type, cfg, rng):
             wrong_digit = rng.choice([d for d in range(VOCAB) if d != correct_digit])
             x[idx] = 0.0
             x[idx, wrong_digit] = 1.0
-        # Target becomes Bot (all zeros) for the IN-PUZZLE cells.
-        y_bot = np.zeros_like(y)
-        # Out-of-puzzle cells stay zero (as they are). No change needed.
-        return False, y_bot
+        return False, np.zeros_like(y)      # unsatisfiable: empty target
 
     raise ValueError(f"unknown sample_type {sample_type!r}")
 
 
-def _load_puzzles(data_path: str) -> list[dict]:
-    """Load puzzle records from a JSON file or a parquet file/dir.
+def load_puzzles(path: str | Path) -> list[dict]:
+    """Rows of a generator parquet file, with the JSON topology decoded."""
+    import pyarrow.parquet as pq
+    rows = pq.read_table(str(path)).to_pylist()
+    for r in rows:
+        r["topology"] = json.loads(r["topology"])
+    return rows
 
-    Parquet rows must have columns (id, n, code, puzzle, solution, givens,
-    topology) where `topology` is a JSON-encoded string of the nested
-    topology dict. This matches `experiments/snowflake/gen_data.py`'s
-    output. Plain JSON lists with the same row schema are also supported.
+
+def load_states(puzzles: list[dict], indices, rng: np.random.Generator | None = None,
+                ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Zero-hint (x, y, in_puzzle_mask, groups) tensors for `puzzles[i]`, i in `indices`.
+
+    `groups` (constraint-group channels) is built only when `rng` is given.
     """
-    p = Path(data_path)
-    if p.suffix == ".parquet" or p.is_dir():
-        import pyarrow.parquet as pq
-        # Single-file or directory-of-shards.
-        if p.is_dir():
-            files = sorted(p.glob("*.parquet"))
-            tables = [pq.read_table(str(f)) for f in files]
-            import pyarrow as pa
-            table = pa.concat_tables(tables)
-        else:
-            table = pq.read_table(str(p))
-        rows = table.to_pylist()
-        # Decode the JSON-string topology column.
-        for r in rows:
-            r["topology"] = json.loads(r["topology"])
-        return rows
-    with open(data_path) as f:
-        return json.load(f)
+    xs, ys, ms = zip(*(puzzle_to_state(puzzles[int(i)]) for i in indices))
+    groups = None
+    if rng is not None:
+        groups = torch.from_numpy(np.stack(
+            [constraint_group_features(puzzles[int(i)], rng) for i in indices]))
+    return (torch.from_numpy(np.stack(xs)), torch.from_numpy(np.stack(ys)),
+            torch.from_numpy(np.stack(ms)), groups)
 
 
 class SnowflakeDataset:
     def __init__(self, cfg: SnowflakeConfig):
         self.cfg = cfg
-        self.puzzles = _load_puzzles(cfg.data_path)
-        if cfg.n_puzzles is not None and cfg.n_puzzles < len(self.puzzles):
-            rng_init = np.random.default_rng(cfg.seed)
-            idx = rng_init.choice(len(self.puzzles), cfg.n_puzzles, replace=False)
-            self.puzzles = [self.puzzles[i] for i in idx]
+        puzzles = load_puzzles(split_file(cfg.data_dir, split_name(cfg, "train")))
+        self.pool_indices = select_pool(puzzles, cfg)
+        self.puzzles = [puzzles[i] for i in self.pool_indices]
         self.n_puzzles = len(self.puzzles)
 
         self.rng = np.random.default_rng(cfg.seed)
@@ -198,7 +282,7 @@ class SnowflakeDataset:
         self._order = self.rng.permutation(self.n_puzzles)
         self._pos = 0
 
-        self._queue: Queue = Queue(maxsize=cfg.prefetch_batches)
+        self._queue: queue.Queue = queue.Queue(maxsize=cfg.prefetch_batches)
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._prefetch_loop, daemon=True)
         self._thread.start()
@@ -211,27 +295,37 @@ class SnowflakeDataset:
         self._pos += 1
         rec = self.puzzles[idx]
         x, y, mask = puzzle_to_state(rec)
+        arrays = [x, y]
+        if self.cfg.constraint_group_embed:
+            arrays.append(constraint_group_features(rec, self.rng))
+        if self.cfg.translate_aug:
+            arrays, mask = random_translate(arrays, mask, self.rng)
+        x, y = arrays[0], arrays[1]
+        groups = arrays[2] if self.cfg.constraint_group_embed else None
         stype = self.rng.choice(self.type_names, p=self.type_probs)
         is_sat, y = _apply_sample_type(x, y, mask, stype, self.cfg, self.rng)
-        return x, y, mask, is_sat
+        return x, y, mask, is_sat, groups
 
     def _prefetch_loop(self):
         while not self._stop.is_set():
-            bx, by, bm, bs = [], [], [], []
+            bx, by, bm, bs, bg = [], [], [], [], []
             for _ in range(self.cfg.batch_size):
-                x, y, mask, is_sat = self._next_sample()
-                bx.append(x); by.append(y); bm.append(mask); bs.append(is_sat)
+                x, y, mask, is_sat, groups = self._next_sample()
+                for buf, v in zip((bx, by, bm, bs, bg), (x, y, mask, is_sat, groups)):
+                    buf.append(v)
             tx = torch.from_numpy(np.stack(bx))
             ty = torch.from_numpy(np.stack(by))
             tm = torch.from_numpy(np.stack(bm))
             ts = torch.tensor(bs, dtype=torch.bool)
+            tg = torch.from_numpy(np.stack(bg)) if self.cfg.constraint_group_embed else None
             try:
-                self._queue.put((tx, ty, tm, ts), timeout=1.0)
-            except Exception:
+                self._queue.put((tx, ty, tm, ts, tg), timeout=1.0)
+            except queue.Full:
                 if self._stop.is_set():
                     break
 
     def next_batch(self):
+        """(x, y, in_puzzle_mask, is_sat, groups); groups is None unless constraint_group_embed."""
         return self._queue.get()
 
     def close(self):

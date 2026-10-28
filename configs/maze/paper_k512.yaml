@@ -1,0 +1,17 @@
+# Maze-Hard 30x30 with 512 sampled shortest paths supervised per puzzle;
+# otherwise as paper.yaml. Pregenerate the path cache first:
+#   uv run modal run --detach experiments/maze/pregen.py --dataset maze_hard --k-solutions 512
+model:
+  dim: 192
+  use_rope: true
+
+data:
+  dataset: maze_hard
+  k_solutions: 512
+  prefetch_batches: 8      # the K-path sampler is slow; prefetch deeper
+
+eval:
+  index_list: maze_test
+  stop: full
+  dropout_p: 0.0
+  block_size: 50

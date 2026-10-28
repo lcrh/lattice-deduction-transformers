@@ -1,0 +1,44 @@
+# Snowflake order transfer on hard puzzles, LDT against direct prediction:
+# train on small orders, test on larger ones (Table 2 and the appendix's
+# order-transfer table).
+exp_id: A13
+benchmark: snowflake
+eval: whole
+seeds: [0, 1, 2]
+table:
+  per_order: [7, 8, 9, 10]
+entries:
+  - name: ldt_4to6
+    label: "LDT, train 4-6"
+    config: configs/snowflake/extreme_ood_4to6_eval7to10.yaml
+  - name: ldt_4to6_one_shot
+    label: "LDT, train 4-6, one shot"
+    eval_of: ldt_4to6
+    set: &one_shot {solve.one_shot: true, eval.dropout_p: 0.0}
+  - name: direct_4to6
+    label: "Direct prediction, train 4-6"
+    config: configs/snowflake/extreme_ood_4to6_eval7to10.yaml
+    set: &direct
+      model.cls_token: false
+      train.bce_pos_mult: 0.0
+      train.bce_neg_mult: 0.0
+      train.conflict_loss_weight: 0.0
+      train.softmax_loss_weight: 1.0
+      train.max_age: 0
+      train.monitor_every: 0
+      data.zero_hint_weight: 1.0
+      data.correct_hint_weight: 0.0
+      data.error_hint_weight: 0.0
+      solve.one_shot: true
+      eval.dropout_p: 0.0
+  - name: ldt_6to8
+    label: "LDT, train 6-8"
+    config: configs/snowflake/extreme_ood_6to8_eval9to10.yaml
+  - name: ldt_6to8_one_shot
+    label: "LDT, train 6-8, one shot"
+    eval_of: ldt_6to8
+    set: *one_shot
+  - name: direct_6to8
+    label: "Direct prediction, train 6-8"
+    config: configs/snowflake/extreme_ood_6to8_eval9to10.yaml
+    set: *direct

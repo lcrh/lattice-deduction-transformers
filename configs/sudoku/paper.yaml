@@ -1,0 +1,65 @@
+# Sudoku-Extreme at 4K steps; the SudokuExperiment defaults
+# (tests/test_configs.py checks that they agree).
+model:
+  dim: 128
+  num_layers: 4
+  n_heads: 4
+  n_loops: 16
+  dropout: 0.1
+  attn_dropout: 0.1
+  ffn_dropout: 0.1
+  cls_token: true          # conflict head; trained iff train.conflict_loss_weight > 0
+  pre_norm: true
+  use_rope: false
+  carry: "off"             # latent carried between solve steps: off | h | z | zero_z
+
+data:
+  n_puzzles: 1000          # training puzzles, drawn with `seed` (sudoku_val excluded)
+  seed: 42
+  zero_hint_weight: 0.20
+  correct_hint_weight: 0.55
+  error_hint_weight: 0.25
+  augment_digit_perm: true
+  augment_dihedral: true
+
+train:
+  steps: 4000
+  batch_size: 512
+  lr: 0.003
+  weight_decay: 0.1
+  warmup_fraction: 0.1
+  seed: 0
+  bce_pos_mult: 4.0
+  bce_neg_mult: 0.5
+  softmax_loss_weight: 0.2
+  conflict_loss_weight: 0.1
+  supervise: all           # deep supervision: all iterations, or final only
+  max_age: 100
+  step:                    # operator that advances pool states during training
+    threshold: 0.10
+    cls_threshold: 0.5
+    temp_decide: 1.5
+    augment: false         # per-step augmentation at evaluation only
+    cell_policy: uniform
+    digit_policy: sample
+
+solve:                     # operator and search at evaluation
+  step:
+    threshold: 0.10
+    cls_threshold: 0.6
+    temp_decide: 1.5
+    augment: true
+    deduce_passes: 1       # forward+eliminate passes per round (or "fixpoint")
+    n_loops: null          # model loops at inference (null = as trained)
+    cell_policy: uniform   # uniform | mrv | min_entropy | max_entropy
+    digit_policy: argmax   # sample | argmax | rank_k
+  backtrack: root          # root | last | geometric | uniform_depth
+  backtrack_negate: false
+  max_rounds: 1000
+  n_chains: 64
+  batch_size: 512
+
+eval:
+  index_list: sudoku_test_perm
+  stop: sequential
+  dropout_p: 0.05

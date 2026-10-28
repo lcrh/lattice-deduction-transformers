@@ -1,0 +1,24 @@
+# Table 3: Maze-Hard 30x30, K=1 and K=512 supervised paths, 3 seeds each.
+exp_id: M4
+benchmark: maze
+eval: whole
+seeds: [0, 1, 2]
+# Keep a checkpoint every 1,000 steps: training is unstable, and Table 3
+# reports each seed's best checkpoint, over the step snapshots below and the
+# final checkpoint.
+set: {train.keep_step_snapshots: true}
+entries:
+  - name: k1
+    label: "LDT, K=1"
+    config: configs/maze/paper.yaml
+  - name: k512
+    label: "LDT, K=512"
+    config: configs/maze/paper_k512.yaml
+  - name: k1_snap
+    label: "LDT, K=1, step snapshot"
+    eval_of: k1
+    snapshots: [10000, 12000, 14000, 16000, 18000]
+  - name: k512_snap
+    label: "LDT, K=512, step snapshot"
+    eval_of: k512
+    snapshots: [10000, 12000, 14000, 16000, 18000]

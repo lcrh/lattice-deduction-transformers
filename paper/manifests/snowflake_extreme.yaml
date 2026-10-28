@@ -1,0 +1,64 @@
+# Snowflake Sudoku, hard puzzles of orders 4-8: LDT against direct prediction
+# (Table 2, in distribution, and the appendix's training-set size table).
+exp_id: A12
+benchmark: snowflake
+config: configs/snowflake/extreme.yaml
+eval: whole
+seeds: [0, 1, 2]
+table:
+  per_order: [4, 5, 6, 7, 8]
+entries:
+  - name: ldt
+    label: "LDT"
+  - name: ldt_one_shot
+    label: "LDT, one shot"
+    eval_of: ldt
+    set: &one_shot {solve.one_shot: true, eval.dropout_p: 0.0}
+  # Same model and data, trained only with cross-entropy against the
+  # solution from the puzzle as given, evaluated in one shot.
+  - name: direct
+    label: "Direct prediction"
+    set: &direct
+      model.cls_token: false
+      train.bce_pos_mult: 0.0
+      train.bce_neg_mult: 0.0
+      train.conflict_loss_weight: 0.0
+      train.softmax_loss_weight: 1.0
+      train.max_age: 0
+      train.monitor_every: 0
+      data.zero_hint_weight: 1.0
+      data.correct_hint_weight: 0.0
+      data.error_hint_weight: 0.0
+      solve.one_shot: true
+      eval.dropout_p: 0.0
+
+  # Twice the training steps.
+  - name: ldt_16k
+    label: "LDT, 16K steps"
+    set: {train.steps: 16000}
+  - name: ldt_16k_one_shot
+    label: "LDT, 16K steps, one shot"
+    eval_of: ldt_16k
+    set: *one_shot
+  - name: direct_16k
+    label: "Direct prediction, 16K steps"
+    set: {<<: *direct, train.steps: 16000}
+
+  # Training-set size: 1,000 puzzles and every orders 4-8 puzzle (3,957).
+  - name: ldt_n
+    label: "LDT"
+    sweep: {data.n_puzzles: [1000, 4000]}
+  - name: ldt_n_1000_one_shot
+    label: "LDT, one shot"
+    eval_of: ldt_n_1000
+    x: 1000
+    set: *one_shot
+  - name: ldt_n_4000_one_shot
+    label: "LDT, one shot"
+    eval_of: ldt_n_4000
+    x: 4000
+    set: *one_shot
+  - name: direct_n
+    label: "Direct prediction"
+    sweep: {data.n_puzzles: [1000, 4000]}
+    set: *direct

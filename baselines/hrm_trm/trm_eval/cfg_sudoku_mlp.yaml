@@ -1,0 +1,14 @@
+# TRM-MLP Sudoku-Extreme architecture (TRM fork README, "MLP-Tiny variant"),
+# layered on the fork's default config for eval with run_eval_only.py.
+defaults:
+  - cfg_pretrain
+  - _self_
+
+evaluators: []
+
+arch:
+  mlp_t: True
+  pos_encodings: none
+  L_layers: 2
+  H_cycles: 3
+  L_cycles: 6

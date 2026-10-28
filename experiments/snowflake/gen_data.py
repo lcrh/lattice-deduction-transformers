@@ -1,13 +1,18 @@
 """Modal-parallel snowflake puzzle generator.
 
-Uses the `snowflake` package from https://github.com/santolucito/snowflakesudoku
-(MIT-licensed) for hex-topology construction; CVC5 for SAT solving.
+Uses the `snowflake` package from https://github.com/lcrh/snowflakesudoku
+(an MIT-licensed fork of santolucito/snowflakesudoku, pinned below) for
+hex-topology construction; CVC5 for SAT solving. Every base puzzle gets its
+own deterministic, randomly grown connected layout, translated into the
+covering grid. Orders 4-10 by default, so order-transfer experiments can hold
+out the larger orders.
 
-100 CPU workers each generate ~300 puzzles (5 n-values × 10 base × 6 variants),
-write a parquet shard to the `lattice-diffusion-data` volume at
-`/data/snowflake_shards/shard_{id:03d}.parquet`. A consolidation function
-then reads all shards, deterministically reorders by (n, code), assigns
-final ids, and splits 90/10 into train/test parquet files.
+300 CPU workers each generate a parquet shard (orders × count_per_shard base
+puzzles) on the `ldt-data` volume. A consolidation function reads all
+shards, deterministically reorders by (n, code), assigns final ids, and
+hash-splits rows into test / val / train (10% / 5% / rest). Files are
+`/data/snowflake_extreme_<split>.parquet`; each file's parquet metadata
+records the generator settings and a content hash.
 
 Schema (per row):
   - id        : int64
@@ -16,15 +21,25 @@ Schema (per row):
   - puzzle    : list<int8>  (per-cell input: 1-6 = given digit, 7 = blank)
   - solution  : list<int8>  (per-cell GT digit, 1-6)
   - givens    : int32   (count of non-7 entries in `puzzle`)
+  - rating    : int32   (guesses a singles-propagation solver needs; see `rating`)
   - topology  : string  (JSON-encoded {n_cells, hex_coords, cell_positions, constraints})
+
+The entrypoint generates the hard puzzles (Snowflake-Extreme): minimal
+puzzles rated at least 1, i.e. that naked and hidden singles alone do not
+solve. `gen_shard` can also keep puzzles with givens added back
+(`variants` > 1) and easier puzzles (`min_rating` 0).
 
 Usage:
     uv run modal run --detach experiments/snowflake/gen_data.py
-    uv run modal run --detach experiments/snowflake/gen_data.py --n-shards 100 --count-per-shard 10
+
+After generation, the entrypoint prints the index-list entries to pin in
+src/ldt/eval/indices.py.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import json
 import random
 import string
@@ -35,23 +50,91 @@ from pathlib import Path
 import modal
 
 
-# Build a CPU-only image with cvc5 + snowflakesudoku helper repo.
+# Build a CPU-only image with cvc5 + the pinned snowflakesudoku fork.
 SNOWFLAKE_REPO_DIR = "/opt/snowflakesudoku"
+SNOWFLAKE_REPO_URL = "https://github.com/lcrh/snowflakesudoku"
+SNOWFLAKE_REPO_COMMIT = "78394dfa8ce77c5429fe411547c866e704a18d68"
 gen_image = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install("git")
     .pip_install("cvc5==1.3.3", "pyarrow==23.0.1", "numpy>=1.24")
     .run_commands(
-        f"git clone https://github.com/santolucito/snowflakesudoku {SNOWFLAKE_REPO_DIR}",
+        f"git clone {SNOWFLAKE_REPO_URL} {SNOWFLAKE_REPO_DIR} && "
+        f"git -C {SNOWFLAKE_REPO_DIR} checkout {SNOWFLAKE_REPO_COMMIT}",
     )
 )
+# Covering-grid bounds; must match experiments/snowflake/data.py.
+COVER_Q_MIN, COVER_Q_MAX = -2, 2
+COVER_R_MIN, COVER_R_MAX = -2, 2
+BLANK = 7
 
-data_volume = modal.Volume.from_name("lattice-diffusion-data", create_if_missing=True)
+data_volume = modal.Volume.from_name("ldt-data", create_if_missing=True)
 DATA_MOUNT = "/data"
 
 app = modal.App("snowflake-data-gen")
 
-SHARDS_DIR = "snowflake_shards"  # subdir on the volume
+
+def split_file(split: str) -> str:
+    """Mirrors experiments/snowflake/data.py:split_file (this image has no torch)."""
+    return f"snowflake_{split}.parquet"
+
+
+def shards_dir(prefix: str) -> str:
+    return f"snowflake_{prefix}shards"
+
+
+def _propagate(dom: list[set[int]], groups: list[list[int]]) -> bool:
+    """Naked and hidden singles to a fixed point; False on a contradiction."""
+    changed = True
+    while changed:
+        changed = False
+        for g in groups:
+            for i in g:
+                if len(dom[i]) == 1:
+                    for j in g:
+                        if j != i and dom[i] <= dom[j]:
+                            dom[j] = dom[j] - dom[i]
+                            if not dom[j]:
+                                return False
+                            changed = True
+            for v in range(1, 7):
+                where = [j for j in g if v in dom[j]]
+                if not where:
+                    return False
+                if len(where) == 1 and len(dom[where[0]]) > 1:
+                    dom[where[0]] = {v}
+                    changed = True
+    return True
+
+
+def rating(puzzle: list[int], constraints: list[list[int]]) -> int:
+    """Guesses a singles-propagation solver makes before it finds the solution.
+
+    Branches on the first cell with the fewest candidates, digits in
+    increasing order; 0 means singles alone solve the puzzle. Every
+    constraint group holds 6 cells, so hidden singles are sound.
+    """
+    guesses = 0
+
+    def solve(dom):
+        nonlocal guesses
+        if not _propagate(dom, constraints):
+            return False
+        open_cells = [i for i, d in enumerate(dom) if len(d) > 1]
+        if not open_cells:
+            return True
+        i = min(open_cells, key=lambda k: len(dom[k]))
+        for v in sorted(dom[i]):
+            guesses += 1
+            branch = [set(d) for d in dom]
+            branch[i] = {v}
+            if solve(branch):
+                return True
+        return False
+
+    if not solve([set(range(1, 7)) if v == BLANK else {v} for v in puzzle]):
+        raise ValueError("puzzle has no solution")
+    return guesses
 
 
 @app.function(image=gen_image, cpu=1.0, timeout=3600,
@@ -63,8 +146,13 @@ def gen_shard(
     count_per_shard: int = 10,
     variants: int = 6,
     seed_base: int = 42,
+    min_rating: int = 0,
+    prefix: str = "",
 ) -> dict:
-    """Generate one parquet shard. Returns a small status dict for logging."""
+    """Generate one parquet shard. Returns a small status dict for logging.
+
+    Puzzles rated below `min_rating` are dropped.
+    """
     import cvc5
     from cvc5 import Kind
     import pyarrow as pa
@@ -72,7 +160,8 @@ def gen_shard(
 
     sys.path.insert(0, SNOWFLAKE_REPO_DIR)
     from snowflake.parametric_topology import (
-        build_snowflake, HEX_COORDS_BY_N, get_cell_positions,
+        build_snowflake, HEX_COORDS_BY_N, get_cell_positions, get_hex_coords,
+        translate_hex_coords,
     )
 
     # ---- inline snowflake puzzle generation ----
@@ -171,16 +260,30 @@ def gen_shard(
         chars = string.ascii_uppercase + string.digits
         return "".join(rng.choice(chars) for _ in range(3))
 
-    # Pre-cache topology per n.
-    topo = {}
-    for n in range(n_min, n_max + 1):
-        constraints, n_cells = build_snowflake(n)
-        topo[n] = {
-            "n_cells": n_cells,
-            "constraints": constraints,
-            "hex_coords": HEX_COORDS_BY_N[n],
-            "cell_positions": get_cell_positions(n),
-        }
+    def grown_topology(n: int, seed: int) -> dict:
+        # A grown layout can be too long for the covering grid; resample with
+        # derived seeds until one fits. The topology seed is namespaced away
+        # from the puzzle RNG seed so geometry and digits are not coupled.
+        for attempt in range(64):
+            topology_seed = ((seed ^ 0xA5A5A5A5) + attempt * 7919) & 0x7FFFFFFF
+            try:
+                coords = translate_hex_coords(
+                    get_hex_coords(n, topology_seed=topology_seed),
+                    q_min=COVER_Q_MIN, q_max=COVER_Q_MAX, r_min=COVER_R_MIN, r_max=COVER_R_MAX)
+            except ValueError:
+                continue
+            constraints, n_cells = build_snowflake(n, coords)
+            return {
+                "n_cells": n_cells,
+                "constraints": constraints,
+                "hex_coords": coords,
+                "cell_positions": get_cell_positions(n, coords),
+            }
+        raise RuntimeError(f"no varied layout of order {n} fits the covering grid")
+
+    if n_max > max(HEX_COORDS_BY_N):
+        raise ValueError(f"n_max={n_max} exceeds the largest supported order "
+                         f"{max(HEX_COORDS_BY_N)}")
 
     # Per-shard seed: distinct across shards so puzzles don't duplicate.
     base_seed = seed_base + shard_id * 100_000
@@ -188,8 +291,9 @@ def gen_shard(
     t0 = time.time()
     for n in range(n_min, n_max + 1):
         for base_idx in range(count_per_shard):
-            rng = random.Random(base_seed + n * 1000 + base_idx * 100)
-            t = topo[n]
+            task_seed = base_seed + n * 1000 + base_idx * 100
+            rng = random.Random(task_seed)
+            t = grown_topology(n, task_seed)
             solution = _random_distinct_solution(t["n_cells"], t["constraints"], rng)
             if solution is None:
                 continue
@@ -197,6 +301,9 @@ def gen_shard(
             vlist = puzzle_variants(solution, t["n_cells"], min_givens, removed, rng, variants)
             code = three_char_code(rng)
             for var_idx, (pv, givens) in enumerate(vlist):
+                r = rating(pv, t["constraints"])
+                if r < min_rating:
+                    continue
                 tag = f"{code}-{n}-{givens}" + (f"v{var_idx}" if var_idx > 0 else "")
                 records.append({
                     "id": -1,  # assigned in consolidation
@@ -205,6 +312,7 @@ def gen_shard(
                     "puzzle": pv,
                     "solution": solution,
                     "givens": givens,
+                    "rating": r,
                     "topology": json.dumps({
                         "n_cells": t["n_cells"],
                         "hex_coords": [{"q": q, "r": r} for q, r in t["hex_coords"]],
@@ -218,8 +326,8 @@ def gen_shard(
           flush=True)
 
     # Write parquet shard.
-    shards_dir = Path(DATA_MOUNT) / SHARDS_DIR
-    shards_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(DATA_MOUNT) / shards_dir(prefix)
+    out_dir.mkdir(parents=True, exist_ok=True)
     table = pa.table({
         "id":       pa.array([r["id"] for r in records], type=pa.int64()),
         "n":        pa.array([r["n"] for r in records], type=pa.int32()),
@@ -227,133 +335,129 @@ def gen_shard(
         "puzzle":   pa.array([r["puzzle"] for r in records], type=pa.list_(pa.int8())),
         "solution": pa.array([r["solution"] for r in records], type=pa.list_(pa.int8())),
         "givens":   pa.array([r["givens"] for r in records], type=pa.int32()),
+        "rating":   pa.array([r["rating"] for r in records], type=pa.int32()),
         "topology": pa.array([r["topology"] for r in records], type=pa.string()),
     })
-    out_path = shards_dir / f"shard_{shard_id:03d}.parquet"
+    out_path = out_dir / f"shard_{shard_id:03d}.parquet"
     pq.write_table(table, str(out_path), compression="zstd")
     data_volume.commit()
     return {"shard_id": shard_id, "n_records": len(records), "elapsed_s": elapsed,
             "path": str(out_path)}
 
 
+def assign_split(key: bytes, test_frac: float, val_frac: float, seed: int) -> str:
+    """Split from a row's split key: test is buckets [0, test_frac), val the next val_frac."""
+    salt = f"snowflake-split-seed{seed}".encode()
+    bucket = int.from_bytes(hashlib.sha256(salt + key).digest()[:4], "big") % 1000
+    test_hi = int(round(test_frac * 1000))
+    val_hi = test_hi + int(round(val_frac * 1000))
+    return "test" if bucket < test_hi else ("val" if bucket < val_hi else "train")
+
+
+def fingerprint(row: dict) -> bytes:
+    """Dedup key: puzzle, solution and layout."""
+    return bytes(bytearray(row["puzzle"])) + b"|" + split_key(row)
+
+
+def split_key(row: dict) -> bytes:
+    """Split key: solution and layout, so every given-count variant of a puzzle shares a split."""
+    return bytes(bytearray(row["solution"])) + b"|" + row["topology"].encode()
+
+
+def content_sha256(rows: list[dict]) -> str:
+    """Hash of a split's rows (ids and fingerprints, in file order)."""
+    h = hashlib.sha256()
+    for r in rows:
+        h.update(str(r["id"]).encode() + b":" + fingerprint(r) + b"\n")
+    return h.hexdigest()
+
+
+def split_rows(rows: list[dict], test_frac: float, val_frac: float,
+               seed: int) -> tuple[dict[str, list[dict]], int]:
+    """Dedup, order by (n, code), assign ids and split; returns (splits, duplicates dropped)."""
+    rows = sorted(rows, key=lambda r: (r["n"], r["code"]))
+    seen: set[bytes] = set()
+    deduped = []
+    for r in rows:
+        fp = fingerprint(r)
+        if fp not in seen:
+            seen.add(fp)
+            deduped.append(r)
+    splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
+    for i, r in enumerate(deduped):
+        r["id"] = i
+        splits[assign_split(split_key(r), test_frac, val_frac, seed)].append(r)
+    return splits, len(rows) - len(deduped)
+
+
 @app.function(image=gen_image, cpu=2.0, timeout=600,
               volumes={DATA_MOUNT: data_volume})
-def consolidate(test_frac: float = 0.1, seed: int = 0,
-                out_suffix: str = "") -> dict:
-    """Read all parquet shards, dedupe by (puzzle, solution) fingerprint,
-    sort by (n, code), assign final ids, then hash-split disjointly into
-    train/test parquet files at
-    /data/snowflake_train{out_suffix}.parquet and /data/snowflake_test{out_suffix}.parquet.
+def consolidate(generator: dict, test_frac: float = 0.1, val_frac: float = 0.05,
+                seed: int = 0, prefix: str = "") -> dict:
+    """Merge the shards into one parquet file per split (see split_rows).
 
-    Hash-split: each fingerprint deterministically maps to train or test
-    via `sha256(fingerprint)` mod 1000 < test_frac*1000`. This is robust
-    to any future duplicate that slips through (it would map to the same
-    side both times) and is independent of split-time randomness.
+    Each file's metadata records the generator settings and a content hash.
     """
-    import hashlib
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    shards_dir = Path(DATA_MOUNT) / SHARDS_DIR
-    shard_files = sorted(shards_dir.glob("shard_*.parquet"))
-    print(f"reading {len(shard_files)} shards from {shards_dir}", flush=True)
+    in_dir = Path(DATA_MOUNT) / shards_dir(prefix)
+    shard_files = sorted(in_dir.glob("shard_*.parquet"))
+    print(f"reading {len(shard_files)} shards from {in_dir}", flush=True)
     if not shard_files:
-        raise RuntimeError(f"no shards found in {shards_dir}")
+        raise RuntimeError(f"no shards found in {in_dir}")
+    rows = pa.concat_tables([pq.read_table(str(p)) for p in shard_files]).to_pylist()
+    splits, n_dropped = split_rows(rows, test_frac, val_frac, seed)
+    print(f"  {len(rows)} rows, {n_dropped} duplicates dropped; "
+          + ", ".join(f"{k}={len(v)}" for k, v in splits.items()), flush=True)
 
-    table = pa.concat_tables([pq.read_table(str(p)) for p in shard_files])
-    print(f"  total rows before dedup: {table.num_rows}", flush=True)
-
-    # Dedup by (puzzle bytes, solution bytes). Within a duplicate group we
-    # keep the first row encountered after sort-by-(n, code).
-    df = table.to_pylist()
-    df.sort(key=lambda r: (r["n"], r["code"]))
-    seen: set[bytes] = set()
-    deduped: list[dict] = []
-    for r in df:
-        fp = bytes(bytearray(r["puzzle"])) + b"|" + bytes(bytearray(r["solution"]))
-        if fp in seen:
-            continue
-        seen.add(fp)
-        deduped.append(r)
-    n_dropped = len(df) - len(deduped)
-    print(f"  dedup: {n_dropped} rows dropped, {len(deduped)} unique fingerprints", flush=True)
-
-    # Hash-based deterministic split. Same fingerprint -> same side, always.
-    test_threshold = int(round(test_frac * 1000))
-    train_rows: list[dict] = []
-    test_rows: list[dict] = []
-    salt = f"snowflake-split-seed{seed}".encode()
-    for i, r in enumerate(deduped):
-        r["id"] = i
-        fp = bytes(bytearray(r["puzzle"])) + b"|" + bytes(bytearray(r["solution"]))
-        h = hashlib.sha256(salt + fp).digest()
-        bucket = int.from_bytes(h[:4], "big") % 1000
-        if bucket < test_threshold:
-            test_rows.append(r)
-        else:
-            train_rows.append(r)
-    print(f"  hash-split: {len(train_rows)} train / {len(test_rows)} test", flush=True)
-
-    def _to_table(rows):
-        return pa.table({
+    def _to_table(rows, meta):
+        table = pa.table({
             "id":       pa.array([r["id"] for r in rows], type=pa.int64()),
             "n":        pa.array([r["n"] for r in rows], type=pa.int32()),
             "code":     pa.array([r["code"] for r in rows], type=pa.string()),
             "puzzle":   pa.array([r["puzzle"] for r in rows], type=pa.list_(pa.int8())),
             "solution": pa.array([r["solution"] for r in rows], type=pa.list_(pa.int8())),
             "givens":   pa.array([r["givens"] for r in rows], type=pa.int32()),
+            "rating":   pa.array([r["rating"] for r in rows], type=pa.int32()),
             "topology": pa.array([r["topology"] for r in rows], type=pa.string()),
         })
+        return table.replace_schema_metadata({b"snowflake": json.dumps(meta).encode()})
 
-    train_table = _to_table(train_rows)
-    test_table = _to_table(test_rows)
-
-    train_path = Path(DATA_MOUNT) / f"snowflake_train{out_suffix}.parquet"
-    test_path = Path(DATA_MOUNT) / f"snowflake_test{out_suffix}.parquet"
-    pq.write_table(train_table, str(train_path), compression="zstd")
-    pq.write_table(test_table, str(test_path), compression="zstd")
+    out = {"n_rows": len(rows), "n_dropped_dups": n_dropped, "splits": {}}
+    for split, split_rows_ in splits.items():
+        meta = {**generator, "split": split,
+                "split_rule": {"test_frac": test_frac, "val_frac": val_frac, "seed": seed},
+                "generator_repo": SNOWFLAKE_REPO_URL, "generator_commit": SNOWFLAKE_REPO_COMMIT,
+                "n_rows": len(split_rows_), "content_sha256": content_sha256(split_rows_)}
+        path = Path(DATA_MOUNT) / split_file(prefix + split)
+        pq.write_table(_to_table(split_rows_, meta), str(path), compression="zstd")
+        out["splits"][split] = {"path": str(path), "n_rows": len(split_rows_),
+                                "content_sha256": meta["content_sha256"]}
     data_volume.commit()
-
-    # Sanity: assert disjoint by fingerprint.
-    train_fp = {bytes(bytearray(r["puzzle"])) + b"|" + bytes(bytearray(r["solution"]))
-                for r in train_rows}
-    test_fp = {bytes(bytearray(r["puzzle"])) + b"|" + bytes(bytearray(r["solution"]))
-               for r in test_rows}
-    overlap = len(train_fp & test_fp)
-    print(f"  sanity: train ∩ test fingerprints = {overlap} (should be 0)", flush=True)
-    if overlap != 0:
-        raise RuntimeError(f"BUG: dedup+hash-split produced {overlap} overlap")
-
-    return {
-        "n_rows_before_dedup": len(df),
-        "n_unique": len(deduped),
-        "n_dropped_dups": n_dropped,
-        "n_train": train_table.num_rows,
-        "n_test": test_table.num_rows,
-        "train_path": str(train_path),
-        "test_path": str(test_path),
-    }
+    return out
 
 
 @app.local_entrypoint()
 def main(
-    n_shards: int = 100,
+    n_shards: int = 300,
     n_min: int = 4,
-    n_max: int = 8,
+    n_max: int = 10,
     count_per_shard: int = 10,
-    variants: int = 6,
     seed_base: int = 42,
     test_frac: float = 0.1,
+    val_frac: float = 0.05,
     split_seed: int = 0,
-    out_suffix: str = "",
 ):
-    print(f"Spawning {n_shards} shard workers in parallel "
-          f"(n in [{n_min}, {n_max}], count_per_shard={count_per_shard}, "
+    # Hard puzzles: minimal (no givens added back) and not solved by singles alone.
+    variants, min_rating, prefix = 1, 1, "extreme_"
+    print(f"Spawning {n_shards} shard workers ("
+          f"n in [{n_min}, {n_max}], count_per_shard={count_per_shard}, "
           f"variants={variants}). Each shard targets ~"
           f"{(n_max - n_min + 1) * count_per_shard * variants} puzzles.",
           flush=True)
     args = [
-        (i, n_min, n_max, count_per_shard, variants, seed_base)
+        (i, n_min, n_max, count_per_shard, variants, seed_base, min_rating, prefix)
         for i in range(n_shards)
     ]
     total = 0
@@ -365,13 +469,30 @@ def main(
     print(f"\nGenerated {total} puzzles across {n_shards} shards. Consolidating…",
           flush=True)
 
-    summary = consolidate.remote(
-        test_frac=test_frac, seed=split_seed, out_suffix=out_suffix,
-    )
-    print(f"\nConsolidation: {summary['n_rows_before_dedup']} rows → "
-          f"{summary['n_unique']} unique → "
-          f"{summary['n_train']} train / {summary['n_test']} test  "
-          f"(dropped {summary['n_dropped_dups']} duplicates)",
-          flush=True)
-    print(f"  train: {summary['train_path']}", flush=True)
-    print(f"  test:  {summary['test_path']}", flush=True)
+    generator = {"n_shards": n_shards, "n_min": n_min, "n_max": n_max,
+                 "count_per_shard": count_per_shard, "variants": variants,
+                 "seed_base": seed_base, "min_rating": min_rating}
+    summary = consolidate.remote(generator, test_frac=test_frac, val_frac=val_frac,
+                                 seed=split_seed, prefix=prefix)
+    print(f"\nConsolidation: {summary['n_rows']} rows, "
+          f"{summary['n_dropped_dups']} duplicates dropped", flush=True)
+    for split, info in summary["splits"].items():
+        print(f"  {split}: {info['n_rows']} rows → {info['path']}  "
+              f"(content sha256 {info['content_sha256'][:16]}…)", flush=True)
+    print_index_pins({k: v["n_rows"] for k, v in summary["splits"].items()}, prefix)
+
+
+def print_index_pins(sizes: dict[str, int], prefix: str = "") -> None:
+    """Print the split sizes and checksums to pin in src/ldt/eval/indices.py."""
+    from ldt.eval import indices as index_lists
+
+    print("\nPin these in src/ldt/eval/indices.py:", flush=True)
+    for split in ("test", "val"):
+        name = f"snowflake_{prefix}{split}"
+        spec = index_lists.SPECS.get(name)
+        if spec is None:
+            print(f"  (no index list named {name})", flush=True)
+            continue
+        unpinned = dataclasses.replace(spec, split_size=None, sha256=None)
+        digest = index_lists.digest(index_lists.generate(unpinned, sizes[split]))
+        print(f"  {name}: split_size={sizes[split]}, sha256=\"{digest}\"", flush=True)

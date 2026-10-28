@@ -1,0 +1,18 @@
+# Appendix F: carrying a latent between solve steps (TRM-style). Carry needs
+# a fixed frame, so every arm here, including the reference, runs without
+# per-step augmentation.
+exp_id: A8
+benchmark: sudoku
+config: configs/sudoku/ablation.yaml
+eval: ablation
+seeds: [0, 1, 2]
+set:
+  train.step.augment: false
+  solve.step.augment: false
+table:
+  reference: lattice_only
+entries:
+  - name: lattice_only
+    label: "Lattice only (no carry)"
+  - name: carry
+    sweep: {model.carry: [h, z, zero_z]}

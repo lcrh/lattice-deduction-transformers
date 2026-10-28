@@ -1,7 +1,7 @@
 """Unified dataset wrapper for maze.
 
-Picks between `MazeHardDataset` (HuggingFace 30×30 maze-hard) and
-`SyntheticMazeDataset` (on-the-fly generated mazes at any grid size)
+Picks between the HuggingFace 30×30 Maze-Hard puzzles (`ldt.data.maze_hard`)
+and `SyntheticMazeDataset` (on-the-fly generated mazes at any grid size)
 based on `MazeConfig.dataset`. Exposes:
 
   - `H, W` — spatial grid dims (30×30 for maze_hard; configurable for
@@ -22,28 +22,25 @@ import json
 import random
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import torch
 
 import numpy as np
 
-from lattice_diffusion.data.maze_hard import (
+from ldt.data.maze_hard import (
     CH_FREE, CH_GOAL, CH_PATH, CH_START, CH_WALL,
     GRID_H as MAZE_HARD_H,
     GRID_W as MAZE_HARD_W,
     N_CHANNELS,
-    MazeHardConfig,
-    MazeHardDataset,
     _download_and_cache as _maze_hard_download_and_cache,
 )
-from lattice_diffusion.data.maze_synthetic import (
+from ldt.data.maze_synthetic import (
     SyntheticMazeConfig,
     SyntheticMazeDataset,
-    _augment_d4_with_swap,
     generate_maze,
     hard_min_path_len,
 )
@@ -75,8 +72,8 @@ class MazeConfig:
     # Square grid side length. `None` defers to the dataset's natural size
     # (30 for maze_hard, 10 for synthetic). Setting an explicit `grid_size`
     # alongside `dataset='maze_hard'` errors — that dataset is fixed at
-    # 30x30 by the HF source. For now we only support square synthetic
-    # grids — `grid_size` is used for both h and w.
+    # 30x30 by the HF source. Synthetic grids are square: `grid_size` is
+    # used for both h and w.
     grid_size: int | None = None
     wall_frac_lo: float = 0.30
     wall_frac_hi: float = 0.50
@@ -143,10 +140,7 @@ def grid_dims(cfg: MazeConfig) -> tuple[int, int]:
 # fresh per-sample augmentation.
 
 def _pregen_cache_spec(cfg: MazeConfig) -> dict:
-    """Canonical config snapshot used for cache-key hashing. Only fields that
-    change the underlying canonical pool/solutions are included; augmentation
-    knobs (which are applied per-sample post-cache) are excluded.
-    """
+    """Config fields that determine the cached pool and solutions (not per-sample augmentation)."""
     spec: dict = {
         "version": PREGEN_VERSION,
         "dataset": cfg.dataset,
@@ -180,9 +174,7 @@ def _pregen_cache_key(cfg: MazeConfig) -> str:
 def _build_synthetic_canonical_pool(
     cfg: MazeConfig, H: int, W: int
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Generate `cfg.n_puzzles` canonical synthetic mazes (no augmentation).
-    Returns (x_np, y_np) of shapes [N, H*W, C]. Logs mazes/sec progress.
-    """
+    """`cfg.n_puzzles` synthetic mazes without augmentation, as (x, y) of shape [N, H*W, C]."""
     n = cfg.n_puzzles
     if n is None:
         raise ValueError("synthetic pregen requires n_puzzles to be set")
@@ -227,9 +219,7 @@ def _build_synthetic_canonical_pool(
 def _load_maze_hard_canonical_pool(
     cfg: MazeConfig,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Load canonical maze_hard puzzles from the HF cache. Applies
-    `n_puzzles` subset selection (seed-driven) to match `MazeHardDataset`.
-    """
+    """Maze-Hard puzzles from the HF cache, with a seeded subset of `n_puzzles`."""
     cache_path = _maze_hard_download_and_cache(cfg.cache_dir, cfg.split)
     data = torch.load(cache_path, map_location="cpu", weights_only=True)
     x_full = data["x"].numpy().astype(np.float32)  # [N_total, 900, 5]
@@ -250,9 +240,7 @@ def _build_k_solutions_with_metrics(
     pool_x: np.ndarray, pool_y: np.ndarray,
     K: int, H: int, W: int, sampler_seed: int,
 ) -> np.ndarray:
-    """Sample K solutions per puzzle. Returns [N, K, H*W, C] float32.
-    Logs progress (puzzles/sec) every 5% of the pool.
-    """
+    """[N, K, H*W, C] float32: K sampled shortest paths per puzzle."""
     n = pool_x.shape[0]
     rng = random.Random(sampler_seed)
     out = np.zeros((n, K, H * W, N_CHANNELS), dtype=np.float32)
@@ -276,9 +264,7 @@ def _build_k_solutions_with_metrics(
 
 
 def _load_pregen_manifest(cfg: MazeConfig) -> dict | None:
-    """If a parquet-shard manifest exists for this cache key, return its
-    parsed dict. Otherwise return None.
-    """
+    """The parquet-shard manifest for this cache key, or None."""
     cache_key = _pregen_cache_key(cfg)
     manifest_path = (Path(cfg.cache_dir) / PREGEN_CACHE_DIR
                      / f"{cache_key}.manifest.json")
@@ -292,14 +278,9 @@ def _load_pregen_manifest(cfg: MazeConfig) -> dict | None:
 def _build_or_load_pregen(
     cfg: MazeConfig, H: int, W: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Returns canonical (pool_x, pool_y, pool_solutions) — `pool_solutions`
-    has shape [N, K, H*W, C]. Loads from `{cache_dir}/maze_pregen/{key}.pt`
-    if present and valid; otherwise generates and saves.
+    """(pool_x, pool_y, pool_solutions [N, K, H*W, C]) from the single-file cache, built if missing.
 
-    Used for the single-file pregen format. For parquet-shard pregen
-    output, callers detect via `_load_pregen_manifest` first and use the
-    sharded streaming path in `MazeDataset._init_sharded_pool` instead,
-    which never loads the full pool into RAM.
+    Sharded pregen output is streamed by `MazeDataset._init_sharded_pool` instead.
     """
     K = max(1, int(cfg.k_solutions))
     cache_key = _pregen_cache_key(cfg)
@@ -314,13 +295,12 @@ def _build_or_load_pregen(
         pool_y = data["y"]
         pool_solutions = data["solutions"]
         n = pool_x.shape[0]
-        # Sanity: cache might be stale if K was bumped post-build. Validate
-        # K dim before handing off.
+        # Rebuild if the cache does not have K solutions per puzzle.
         if pool_solutions.shape[1] != K:
             print(f"  [pregen] cache K dim mismatch ({pool_solutions.shape[1]} "
                   f"!= {K}); rebuilding", flush=True)
         elif pool_x.shape[0] != pool_y.shape[0] or pool_y.shape[0] != n:
-            print(f"  [pregen] cache row-count mismatch; rebuilding", flush=True)
+            print("  [pregen] cache row-count mismatch; rebuilding", flush=True)
         else:
             print(f"    n={n}  K={K}  shape={tuple(pool_solutions.shape)}",
                   flush=True)
@@ -371,9 +351,7 @@ def _build_or_load_pregen(
 
 
 class MazeDataset:
-    """Dispatching wrapper. Yields `(x, solutions, is_sat)` per
-    `next_batch()` call where `solutions: [B, K, S, 5]` carries K candidate
-    ground-truth paths per puzzle.
+    """Maze batches `(x, solutions [B, K, S, 5], is_sat)` with K target paths per puzzle.
 
     Two modes:
       - Finite-pool (n_puzzles is set, OR dataset='maze_hard'): builds or
@@ -415,9 +393,7 @@ class MazeDataset:
 
     # ---- sharded-pool path (parquet streaming) -----------------------------
     def _init_sharded_pool(self):
-        """Stream from parquet shards: one shard at a time on a background
-        thread, shuffled within shard, no full-pool RAM hit.
-        """
+        """Stream parquet shards one at a time on a background thread, shuffled within a shard."""
         import pyarrow.parquet as pq  # local import: pyarrow only loaded on the sharded path
         self._pq = pq
 
@@ -465,9 +441,7 @@ class MazeDataset:
         return x_np, y_np, sols_np
 
     def _sharded_pool_loop(self):
-        """Background loop: load shards into a multi-shard buffer (so batch_size
-        > shard_size still works), shuffle, emit batches with augmentation.
-        """
+        """Fill a multi-shard buffer, shuffle, and emit augmented batches."""
         cfg = self.cfg
         H, W, K = self._H, self._W, self.K
         bs = cfg.batch_size
@@ -494,7 +468,9 @@ class MazeDataset:
                 except Exception as e:
                     print(f"  [shard load error] {self._shard_paths[shard_idx]}: {e}", flush=True)
                     continue
-                buf_x.append(sx); buf_y.append(sy); buf_sols.append(ss)
+                buf_x.append(sx)
+                buf_y.append(sy)
+                buf_sols.append(ss)
                 buf_n += sx.shape[0]
             if self._stop.is_set():
                 return
@@ -551,7 +527,10 @@ class MazeDataset:
                 buf_sols = [sols_all[leftover_idx]]
                 buf_n = len(leftover_idx)
             else:
-                buf_x = []; buf_y = []; buf_sols = []; buf_n = 0
+                buf_x = []
+                buf_y = []
+                buf_sols = []
+                buf_n = 0
             del x_all, y_all, sols_all  # free big concat tensor
 
     # ---- finite-pool path (with pregen cache) -------------------------------
@@ -709,8 +688,7 @@ class MazeDataset:
 
 
 def _bfs_connected_with_g(grid: np.ndarray, sr: int, sc: int, gr: int, gc: int) -> tuple[bool, int]:
-    """Return (g_reachable, n_cells_visited). Traverses cells where grid is True
-    (i.e. the path/S/G mask). 4-connected."""
+    """(goal reachable, cells visited) of a 4-connected walk over the True cells of `grid`."""
     H, W = grid.shape
     visited = np.zeros_like(grid, dtype=bool)
     visited[sr, sc] = True
@@ -797,88 +775,31 @@ def maze_classify(
     return valid_t, minimal_t, gt_exact_t
 
 
-def make_maze_label_fn(H: int, W: int):
-    """Build a `label_fn` for `solve()` that does BFS path-validation
-    per puzzle. Returns a closure with signature `(sol, gt) -> (is_correct, label)`:
-      - "CORRECT_GT"    : path matches GT cell-for-cell (exact argmax equality
-                          over the path/free mask). Counts as correct.
-      - "CORRECT_ALT"   : valid optimal-length S→G path, but different cells
-                          than GT (an alternate shortest path). Counts as
-                          correct.
-      - "WRONG_VALID"   : connected S→G path but longer than GT optimal.
-                          Does NOT count as correct.
-      - "WRONG_INVALID" : broken / disconnected / multiple S or G cells.
-                          Does NOT count as correct.
-    (TIMEOUT is emitted by solve() itself when a puzzle never self-accepts;
-    label_fn is only consulted on solved puzzles.)
+class MazeOutcome(NamedTuple):
+    """Per-puzzle path checks of a maze solve, each [P] bool."""
+
+    valid: torch.Tensor         # a connected start-to-goal path
+    minimal: torch.Tensor       # ... of shortest length
+    gt_exact: torch.Tensor      # ... equal to the reference path
+
+
+def shortest_path_check(H: int, W: int):
+    """`solve(is_correct=...)` for mazes: any valid shortest path is correct."""
+    def is_correct(solution: torch.Tensor, target: torch.Tensor) -> bool:
+        valid, minimal, _ = maze_classify(solution.unsqueeze(0), target.unsqueeze(0), H, W)
+        return bool((valid & minimal)[0].item())
+    return is_correct
+
+
+def rescore(res, targets: torch.Tensor, H: int, W: int) -> MazeOutcome:
+    """Re-score a maze SolveResult in place: any shortest path counts as correct.
+
+    Sets `res.correct = solved & valid & minimal` and `res.wrong = solved & ~correct`.
     """
-    def _fn(sol_state: torch.Tensor, gt_state: torch.Tensor) -> tuple[bool, str]:
-        # Both [S, C]; classify a single puzzle.
-        sol_b = sol_state.unsqueeze(0)
-        gt_b = gt_state.unsqueeze(0)
-        valid, minimal, gt_exact = maze_classify(sol_b, gt_b, H, W)
-        v = bool(valid[0].item())
-        m = bool(minimal[0].item())
-        e = bool(gt_exact[0].item())
-        if v and m and e:
-            return True, "CORRECT_GT"
-        if v and m:
-            return True, "CORRECT_ALT"
-        if v:
-            return False, "WRONG_VALID"
-        return False, "WRONG_INVALID"
-    return _fn
-
-
-def rescore(
-    res,                       # SolveResult from experiments.sudoku.solve.solve
-    targets: torch.Tensor,     # [P, S, C] GT one-hot
-    H: int,
-    W: int,
-):
-    """Relax `res.correct` / `res.wrong` to maze-aware semantics in-place
-    on the provided SolveResult. Returns
-    `(n_correct, n_correct_gt, n_correct_alt, n_wrong, n_wrong_valid, n_wrong_invalid, n_timeout)`:
-      - `n_correct = n_correct_gt + n_correct_alt` — umbrella "any correct"
-      - `n_correct_gt`     = solved & valid & minimal & gt_exact_match
-      - `n_correct_alt`    = solved & valid & minimal & ~gt_exact_match
-        (alternate optimal-length path with different cells than GT)
-      - `n_wrong = n_wrong_valid + n_wrong_invalid` — umbrella "solved but not correct"
-      - `n_wrong_valid`    = solved & valid & ~minimal (legal route but longer than
-        optimal — not counted as correct)
-      - `n_wrong_invalid`  = solved & ~valid (broken / disconnected / multi-S/G)
-      - `n_timeout`        = ~solved (model never self-accepted)
-
-    The 5-way partition CORRECT_GT / CORRECT_ALT / WRONG_VALID / WRONG_INVALID /
-    TIMEOUT covers every puzzle exactly once.
-
-    On the SolveResult: `res.correct` is set to umbrella correctness
-    (`solved & valid & minimal`), `res.wrong` is set to umbrella wrong
-    (`solved & ~correct`).
-    """
-    valid, minimal, gt_exact = maze_classify(res.solution, targets, H, W)
-    solved = res.solved
-    correct = solved & valid & minimal
-    correct_gt = correct & gt_exact
-    correct_alt = correct & ~gt_exact
-    wrong_valid = solved & valid & ~minimal
-    wrong_invalid = solved & ~valid
-    new_wrong = solved & ~correct  # = wrong_valid | wrong_invalid
-    res.correct = correct
-    res.wrong = new_wrong
-    n_correct = int(correct.sum().item())
-    n_correct_gt = int(correct_gt.sum().item())
-    n_correct_alt = int(correct_alt.sum().item())
-    n_wrong_valid = int(wrong_valid.sum().item())
-    n_wrong_invalid = int(wrong_invalid.sum().item())
-    n_wrong = int(new_wrong.sum().item())
-    n_timeout = int(res.timeouts.sum().item())
-    # Stash classify results so callers can format per-puzzle labels.
-    res._maze_valid = valid
-    res._maze_minimal = minimal
-    res._maze_gt_exact = gt_exact
-    return (n_correct, n_correct_gt, n_correct_alt,
-            n_wrong, n_wrong_valid, n_wrong_invalid, n_timeout)
+    outcome = MazeOutcome(*maze_classify(res.solution, targets, H, W))
+    res.correct = res.solved & outcome.valid & outcome.minimal
+    res.wrong = res.solved & ~res.correct
+    return outcome
 
 
 # -----------------------------------------------------------------------------
@@ -895,8 +816,7 @@ def rescore(
 
 
 def _bfs_distances(walls: np.ndarray, start: tuple[int, int]) -> np.ndarray:
-    """4-connected BFS. Returns int distance from `start` to each non-wall
-    cell; np.iinfo(np.int32).max for unreachable / wall cells."""
+    """4-connected BFS distance from `start` to every cell (int32 max where unreachable)."""
     H, W = walls.shape
     INF = np.iinfo(np.int32).max
     dist = np.full((H, W), INF, dtype=np.int32)
@@ -904,7 +824,8 @@ def _bfs_distances(walls: np.ndarray, start: tuple[int, int]) -> np.ndarray:
     queue: list[tuple[int, int]] = [start]
     head = 0
     while head < len(queue):
-        r, c = queue[head]; head += 1
+        r, c = queue[head]
+        head += 1
         d = dist[r, c]
         for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             nr, nc = r + dr, c + dc
@@ -945,12 +866,7 @@ def _count_paths_to_g(d_g: np.ndarray, on_dag: np.ndarray, g_pos: tuple[int, int
 
 
 def _bigint_uniform(rng: random.Random, total: int) -> int:
-    """Return a uniform random Python int in [0, total). Wraps
-    `random.Random.randrange`, which internally does getrandbits + rejection
-    over arbitrary-precision Python ints (unlike `np.random.Generator.integers`,
-    capped at int64). Faster than a hand-rolled rejection loop because the
-    inner getrandbits + comparison runs in C.
-    """
+    """Uniform random int in [0, total) for arbitrarily large Python ints (numpy caps at int64)."""
     return rng.randrange(total)
 
 
@@ -962,12 +878,10 @@ def _sample_one_path(
     g_pos: tuple[int, int],
     rng: random.Random,
 ) -> set[tuple[int, int]]:
-    """Walk from S to G; at each step pick next cell weighted by
-    `paths_to_g[n] / sum`. Yields a uniform random shortest path.
-    Returns the set of intermediate `path` cells (excluding S and G).
+    """Intermediate cells of a uniformly random shortest S-to-G path.
 
-    Uses arbitrary-precision Python ints throughout so dense DAGs (where
-    shortest-path counts can exceed int64) sample correctly.
+    Each step picks the next cell weighted by its count of shortest paths to G,
+    in Python ints, since the counts can exceed int64.
     """
     H, W = d_g.shape
     cur = s_pos

@@ -1,0 +1,45 @@
+# Appendix E: the deduction operator at inference, on the default
+# checkpoints (eval-only): loop count, deduction passes per round, the
+# elimination / conflict thresholds, and which iteration's logits the step reads.
+exp_id: A9
+benchmark: sudoku
+config: configs/sudoku/ablation.yaml
+eval: ablation
+seeds: [0, 1, 2]
+table:
+  reference: default
+  groups:
+    loops: "Model loops at inference (trained with 16)"
+    passes: "Deduction passes per round"
+    threshold: "Elimination threshold"
+    cls: "Conflict threshold"
+    readout: "Logits read by the step"
+entries:
+  - name: default
+    exp_id: A0
+    label: "Default operator"
+    eval: ablation_10k     # paired reference for the 10K conflict-threshold rows
+  - name: eval_loops
+    eval: ablation_10k     # 10,240 puzzles, to compare calls per solve
+    group: loops
+    eval_of: default
+    sweep: {solve.step.n_loops: [1, 2, 4, 8, 32]}
+  - name: passes
+    group: passes
+    eval_of: default
+    sweep: {solve.step.deduce_passes: [2, 4, fixpoint]}
+  - name: theta
+    group: threshold
+    eval_of: default
+    sweep: {solve.step.threshold: [0.05, 0.2, 0.3, 0.5]}
+  - name: cls
+    group: cls
+    eval_of: default
+    eval: ablation_10k     # 10,240 puzzles, to compare wrong-answer counts
+    sweep: {solve.step.cls_threshold: [0.5, 0.7, 0.8]}
+  - name: readout_mean
+    label: "Mean over iterations"
+    group: readout
+    eval_of: default
+    eval: ablation_10k     # paired with the 10,240-puzzle reference
+    set: {solve.step.readout: mean}

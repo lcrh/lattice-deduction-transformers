@@ -12,3 +12,7 @@ __pycache__/
 /checkpoints/
 /logs/
 /notes/
+
+# Reference outputs for the equivalence tests.
+!tests/equivalence/fixtures/*.pt
+.claude/
