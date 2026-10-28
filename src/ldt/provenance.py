@@ -126,17 +126,18 @@ def write_ledger(volume, record: LedgerRecord) -> str:
 
 
 def read_ledger(list_files: Callable[[str], Iterable[str]],
-                read_file: Callable[[str], bytes]) -> list[LedgerRecord]:
+                read_file: Callable[[str], bytes | None]) -> list[LedgerRecord]:
     """All ledger records, oldest first.
 
     Args:
         list_files: File names under a volume-relative directory.
-        read_file: Bytes of a volume-relative path.
+        read_file: Bytes of a volume-relative path, or None to skip a file that
+            cannot be read.
     """
     records = []
     for name in list_files(LEDGER_DIR):
-        if name.endswith(".json"):
-            records.append(LedgerRecord(**json.loads(read_file(f"{LEDGER_DIR}/{name}"))))
+        if name.endswith(".json") and (data := read_file(f"{LEDGER_DIR}/{name}")) is not None:
+            records.append(LedgerRecord(**json.loads(data)))
     return sorted(records, key=lambda r: r.ts)
 
 

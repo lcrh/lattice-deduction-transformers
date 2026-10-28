@@ -122,6 +122,33 @@ def lines(text):
     return text.split("\n")
 
 
+def snowflake_answer(text) -> dict[int, int]:
+    """{cell: digit} from the CELL:DIGIT lines of a Snowflake answer."""
+    got = {}
+    for line in lines(text):
+        if ":" in line:
+            c, v = line.strip().split(":", 1)
+            if c.isdigit() and v.strip().isdigit():
+                got[int(c)] = int(v)
+    return got
+
+
+def maze_bfs(q: str, ok) -> dict[int, int]:
+    """Distances from S over the 30 x 30 cells `ok` accepts."""
+    s = q.index("S")
+    dist, dq = {s: 0}, deque([s])
+    while dq:
+        u = dq.popleft()
+        r, c = divmod(u, 30)
+        for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            rr, cc = r + dr, c + dc
+            v = rr * 30 + cc
+            if 0 <= rr < 30 and 0 <= cc < 30 and v not in dist and ok(v):
+                dist[v] = dist[u] + 1
+                dq.append(v)
+    return dist
+
+
 def score(task, text):
     """True if the response is a correct solution (any shortest path for Maze)."""
     if text is None:
@@ -129,12 +156,7 @@ def score(task, text):
     if task["bench"] == "sudoku":
         return "".join(line.strip() for line in lines(text)) == task["answer"]
     if task["bench"] == "snowflake":
-        got = {}
-        for line in lines(text):
-            if ":" in line:
-                c, v = line.strip().split(":", 1)
-                if c.isdigit() and v.strip().isdigit():
-                    got[int(c)] = int(v)
+        got = snowflake_answer(text)
         return [got.get(c) for c in range(len(task["answer"]))] == list(task["answer"])
     q = task["question"]
     rows = [line.rstrip("\r") for line in lines(text)]
@@ -145,25 +167,10 @@ def score(task, text):
         return False
     if any(q[k] == " " and a[k] not in " o" for k in range(900)):
         return False
-    s, g = q.index("S"), q.index("G")
-
-    def bfs(ok):
-        dist = {s: 0}
-        dq = deque([s])
-        while dq:
-            u = dq.popleft()
-            r, c = divmod(u, 30)
-            for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                rr, cc = r + dr, c + dc
-                v = rr * 30 + cc
-                if 0 <= rr < 30 and 0 <= cc < 30 and v not in dist and ok(v):
-                    dist[v] = dist[u] + 1
-                    dq.append(v)
-        return dist.get(g)
-
-    best = bfs(lambda v: q[v] != "#")
+    g = q.index("G")
+    best = maze_bfs(q, lambda v: q[v] != "#")[g]
     path = {k for k in range(900) if a[k] == "o"}
-    return len(path) == best - 1 and bfs(lambda v: v in path or v == g) == best
+    return len(path) == best - 1 and maze_bfs(q, lambda v: v in path or v == g).get(g) == best
 
 
 def ask(model, task):

@@ -7,7 +7,6 @@ usage (from the repo root):
 import collections
 import importlib.util
 import json
-from collections import deque
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -24,12 +23,7 @@ def grid_cells(task, text):
     if task["bench"] == "sudoku":
         s = "".join(line.strip() for line in run.lines(text))
         return [int(c) for c in s] if len(s) == 81 and s.isdigit() else None
-    got = {}
-    for line in run.lines(text):
-        if ":" in line:
-            c, v = line.strip().split(":", 1)
-            if c.isdigit() and v.strip().isdigit():
-                got[int(c)] = int(v)
+    got = run.snowflake_answer(text)
     n = len(task["answer"])
     return [got[c] for c in range(n)] if set(got) == set(range(n)) else None
 
@@ -68,28 +62,14 @@ def failure(task, r):
     if len(rows) != 30 or any(len(x) != 30 for x in rows):
         return "malformed output"
     a = "".join(rows)
-    s, g = q.index("S"), q.index("G")
-
-    def bfs(ok):
-        dist, dq = {s: 0}, deque([s])
-        while dq:
-            u = dq.popleft()
-            r_, c_ = divmod(u, 30)
-            for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                rr, cc = r_ + dr, c_ + dc
-                v = rr * 30 + cc
-                if 0 <= rr < 30 and 0 <= cc < 30 and v not in dist and ok(v):
-                    dist[v] = dist[u] + 1
-                    dq.append(v)
-        return dist.get(g)
-
+    g = q.index("G")
     path = {k for k in range(900) if a[k] == "o"}
     if any(q[k] == "#" for k in path):
         return "path crosses a wall"
-    reach = bfs(lambda v: v in path or v == g)
+    reach = run.maze_bfs(q, lambda v: v in path or v == g).get(g)
     if reach is None:
         return "path does not connect S to G"
-    if reach > bfs(lambda v: q[v] != "#"):
+    if reach > run.maze_bfs(q, lambda v: q[v] != "#")[g]:
         return "path longer than shortest"
     return "altered walls or S/G (path itself shortest)"
 

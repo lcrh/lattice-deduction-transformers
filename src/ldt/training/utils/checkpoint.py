@@ -15,6 +15,14 @@ def _as_dict(cfg):
     return dataclasses.asdict(cfg) if dataclasses.is_dataclass(cfg) else cfg
 
 
+def atomic_save(obj, path: str | Path) -> None:
+    """torch.save via write-then-rename, so an interrupted save never leaves a truncated file."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    torch.save(obj, tmp)
+    os.replace(tmp, path)
+
+
 def save_checkpoint(
     path: str | Path,
     model: torch.nn.Module,
@@ -50,10 +58,7 @@ def save_checkpoint(
     if extra is not None:
         data.update(extra)
 
-    # Write-then-rename: an interrupted save never leaves a truncated checkpoint.
-    tmp = path.with_name(path.name + ".tmp")
-    torch.save(data, tmp)
-    os.replace(tmp, path)
+    atomic_save(data, path)
     return path
 
 

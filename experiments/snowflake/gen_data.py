@@ -38,6 +38,7 @@ src/ldt/eval/indices.py.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import random
@@ -492,6 +493,6 @@ def print_index_pins(sizes: dict[str, int], prefix: str = "") -> None:
         if spec is None:
             print(f"  (no index list named {name})", flush=True)
             continue
-        lst = index_lists.load(name, split_size=sizes[split]) if spec.split_size is None else None
-        digest = lst.digest if lst is not None else spec.sha256
+        unpinned = dataclasses.replace(spec, split_size=None, sha256=None)
+        digest = index_lists.digest(index_lists.generate(unpinned, sizes[split]))
         print(f"  {name}: split_size={sizes[split]}, sha256=\"{digest}\"", flush=True)

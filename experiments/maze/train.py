@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Callable
 import torch
 
 from ldt.models.looped_transformer import PowersetModel
-from ldt.training.utils.checkpoint import save_checkpoint
+from ldt.training.utils.checkpoint import atomic_save, save_checkpoint
 from ldt.training.utils.clock import TrainClock
 from ldt.training.utils.scheduler import make_cosine_scheduler
 
@@ -232,9 +232,9 @@ def train(exp: MazeExperiment, ckpt_path: str | Path,
                 "train_wallclock": clock.finish(),
                 **exp.checkpoint_meta(),        # so step snapshots can be evaluated directly
             }
-            torch.save(ckpt_payload, resume_path)
+            atomic_save(ckpt_payload, resume_path)
             if cfg.keep_step_snapshots:
-                torch.save(ckpt_payload, ckpt_path.with_suffix(f".step{step:07d}.pt"))
+                atomic_save(ckpt_payload, ckpt_path.with_suffix(f".step{step:07d}.pt"))
             commit()
             print(f"  [resume ckpt] saved at step {step} -> {resume_path}", flush=True)
 

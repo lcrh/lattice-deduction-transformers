@@ -9,6 +9,7 @@ from torch import nn
 from ldt import config as cfglib
 from ldt.eval.tasks import TaskBlock
 from ldt.models.looped_transformer import LoopedTransformerConfig, PowersetModel
+from ldt.models.transformer2d import _RoPEAttention
 from ldt.training.utils.checkpoint import load_checkpoint
 
 from experiments.sudoku.ema import swap_in_ema_if_present
@@ -50,6 +51,8 @@ def load_eval_model(checkpoint: str, dropout_p: float, device: torch.device,
                 m.p = dropout_p
             elif isinstance(m, nn.MultiheadAttention):
                 m.dropout = dropout_p
+            elif isinstance(m, _RoPEAttention):
+                m.attn_dropout_p = dropout_p
         model.train()
     if compile and device.type == "cuda":
         model = torch.compile(model, dynamic=False)
@@ -82,8 +85,8 @@ def result_rows(res: SolveResult, indices: np.ndarray, cfg: SolveConfig, solutio
             "status": status,
             "rounds": rounds[j],
             "calls": calls[j],
-            "forwards": round(((rounds[j] + 1) if correct[j] else cfg.max_rounds)
-                              * cfg.n_chains * passes),
+            "forwards": 1 if cfg.one_shot else round(
+                ((rounds[j] + 1) if correct[j] else cfg.max_rounds) * cfg.n_chains * passes),
             "n_resets": resets[j],
             "n_givens": int(n_givens[j]),
             "solution": solutions[j] if status != "timeout" else "",
