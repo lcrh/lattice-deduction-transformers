@@ -4,6 +4,11 @@ Reproduction code for **Lattice Deduction Transformers** —
 Liam Davis, Leopold Haller, Alberto Alfarano, Mark Santolucito.
 [arXiv:2605.08605](https://arxiv.org/abs/2605.08605).
 
+> **Paper version.** This repository corresponds to the NeurIPS 2026
+> camera-ready version of the paper. The arXiv v1 is out of date: its
+> results and experimental setup differ from this code. An updated arXiv v2
+> matching the camera-ready is forthcoming.
+
 This repo contains the training, inference and data-generation code for every
 experiment whose numbers appear in the paper, and the scripts that rebuild each
 table and figure from the collected results. The three benchmarks are
